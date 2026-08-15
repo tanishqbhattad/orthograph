@@ -1,0 +1,12 @@
+node_modules/
+test/out/
+*.log
+
+# Live work-loop scratch — regenerated constantly, not source of truth
+progress.html
+.critic/
+
+# The built artefact is regenerated from src/ after every merge during the
+# improvement loop; tracking it here makes every parallel worktree conflict on
+# it. It gets committed for release at the end.
+orthograph.html
