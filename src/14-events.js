@@ -125,7 +125,12 @@ function runInput(s) {
   if (p && CMD) { cmdPoint(p); return; }
   echo('Unknown: ' + s);
 }
-function tgl(k) { ST[k] = !ST[k]; syncToggles(); draw(); echo(k.toUpperCase() + ' ' + (ST[k] ? 'on' : 'off')); }
+function tgl(k) {
+  /* SELECTIONCYCLING is 0/1/2 — off, badge only, badge and list — not a flag */
+  if (k === 'selCycling') ST.selCycling = ST.selCycling ? 0 : 2;
+  else ST[k] = !ST[k];
+  syncToggles(); draw(); echo(k.toUpperCase() + ' ' + (ST[k] ? 'on' : 'off'));
+}
 function syncToggles() { document.querySelectorAll('.tg').forEach(b => b.classList.toggle('on', !!ST[b.dataset.tg])); }
 
 function syncCoord() {

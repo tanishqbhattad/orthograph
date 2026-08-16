@@ -273,7 +273,7 @@ function syncTools() {
     b.classList.toggle('on', b.dataset.tool === (CMD ? CMD.def.key : 'select')));
   /* the quick editor must never fight the dynamic-input box */
   if (CMD) hideQuickProps();
-  else if (!QP && typeof SEL !== 'undefined' && SEL.size === 1) showQuickProps(selEnts()[0]);
+  else if (!QP && typeof SEL !== 'undefined' && SEL.size) showQuickProps(selEnts());
   if (typeof syncTouch === 'function') syncTouch();
 }
 
@@ -381,6 +381,8 @@ function drawSettingsExtras(w) {
     v => { ST.crossLen = clamp(v, 1, 100); draw(); }, 1);
   addRow(w, 'Pick box px', ST.pickBox || 8,
     v => { ST.pickBox = clamp(Math.round(v), 2, 40); draw(); }, 1);
+  addRow(w, 'Grip size px', ST.gripSize || 5,
+    v => { ST.gripSize = clamp(Math.round(v), 2, 20); draw(); }, 1);
   btnRow(w, 'Wall poche', DOC.wallHatch === false ? 'off' : 'on', () => {
     begin(); DOC.wallHatch = DOC.wallHatch === false; commit('Wall poche');
     draw(); syncUI();
@@ -737,7 +739,7 @@ function buildProps() {
   selRow(w, 'Linetype', [['', 'ByLayer'], ['solid', 'solid'], ['dashed', 'dashed'], ['hidden', 'hidden'], ['center', 'center'], ['dashdot', 'dashdot']],
     e.lt || '', v => { begin(); es.forEach(x => { mut(x); x.lt = v || null; }); commit('Linetype'); draw(); });
 
-  if (one) showQuickProps(e); else hideQuickProps();
+  showQuickProps(one ? e : es);
 }
 function kindSummary(es) {
   const c = {}; for (const e of es) c[e.t] = (c[e.t] || 0) + 1;
@@ -784,40 +786,66 @@ function totals(w, es) {
 let QP = null, QPmuted = null;
 function hideQuickProps() { if (QP) { QP.remove(); QP = null; } }
 function quickFields(e) { return e && (QUICK[e.t] || QUICK._default); }
-function showQuickProps(e) {
+/** the fields two or more objects have in common. Anything type-specific is
+    dropped the moment the types disagree — showing Thickness over a mixed
+    bag of walls and doors would be a lie about what an edit will touch. */
+function quickCommon(w, es, upd) {
+  ro(w, 'Types', kindSummary(es));
+  let L = 0, A = 0;
+  for (const e of es) { L += entLength(e); A += entArea(e); }
+  if (L) ro(w, 'Total length', fmt(L));
+  else if (A) ro(w, 'Total area', fmtArea(A));
+  const lay = es.every(e => e.layer === es[0].layer) ? es[0].layer : '';
+  selRow(w, 'Layer', (lay ? [] : [['', '(varies)']]).concat(DOC.layers.map(l => [l.name, l.name])), lay,
+    v => { if (!v) return; begin(); es.forEach(x => { mut(x); x.layer = v; }); commit('Layer'); draw(); buildProps(); });
+}
+function showQuickProps(sel) {
   hideQuickProps();
-  if (!e || typeof CMD !== 'undefined' && CMD) return;       /* .dyn owns the cursor */
-  if (QPmuted === e.id) return;
+  const es = Array.isArray(sel) ? sel.filter(Boolean) : (sel ? [sel] : []);
+  if (!es.length || (typeof CMD !== 'undefined' && CMD)) return;   /* .dyn owns the cursor */
+  const one = es.length === 1, e = es[0];
+  const key = one ? e.id : es.map(x => x.id).sort().join(',');
+  if (QPmuted === key) return;
   const hud = $('#hud'); if (!hud) return;
-  const F = quickFields(e); if (!F) return;
+  const F = one ? quickFields(e) : null;
+  if (one && !F) return;
 
   const c = el('div', 'qp'); c._ent = e;
   const h = el('div', 'qph');
-  h.appendChild(el('b', '', esc(niceName(e))));
-  h.appendChild(el('i', '', '#' + e.id));
+  h.appendChild(el('b', '', esc(one ? niceName(e) : es.length + ' objects selected')));
+  h.appendChild(el('i', '', one ? '#' + e.id : String(es.length)));
   const x = el('button', '', svg('close', 20));
   x.title = 'Dismiss';
-  x.onclick = ev => { if (ev && ev.stopPropagation) ev.stopPropagation(); QPmuted = e.id; hideQuickProps(); };
+  x.onclick = ev => { if (ev && ev.stopPropagation) ev.stopPropagation(); QPmuted = key; hideQuickProps(); };
   h.appendChild(x); c.appendChild(h);
 
   const body = el('div', 'qpb'); c.appendChild(body);
   const upd = () => { draw(); buildProps(); };
   const set = fn => v => { begin(); mut(e); fn(v); commit(); upd(); };
-  try { F(body, e, set, upd); } catch (err) { console.error(err); }
+  try { if (one) F(body, e, set, upd); else quickCommon(body, es, upd); }
+  catch (err) { console.error(err); }
 
   if (c.addEventListener)
     ['pointerdown', 'pointerup', 'pointermove', 'click', 'dblclick', 'wheel'].forEach(t =>
       c.addEventListener(t, ev => { if (ev.stopPropagation) ev.stopPropagation(); }));
   hud.appendChild(c); QP = c;
-  placeQuickProps(e, c);
+  placeQuickProps(es, c);
   return c;
 }
-function placeQuickProps(e, c) {
-  if (!e || !c) return;
-  let b = null;
-  try { b = bboxAll([e]); } catch (err) { b = null; }
-  if (!b || !isFinite(b[0])) return;
-  const s = w2s([(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]);
+/** Beside the cursor, not the centre of the object — a card that opens half a
+    screen away from your hand is a card you have to go looking for. */
+function placeQuickProps(sel, c) {
+  const es = Array.isArray(sel) ? sel : [sel];
+  if (!es.length || !c) return;
+  let s = null;
+  if (ST && ST.cur) { const q = w2s(ST.cur); if (isFinite(q[0]) && isFinite(q[1])) s = q; }
+  if (!s) {
+    let b = null;
+    try { b = bboxAll(es); } catch (err) { b = null; }
+    if (!b || !isFinite(b[0])) return;
+    s = w2s([(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]);
+  }
+  if (!isFinite(s[0]) || !isFinite(s[1])) return;
   const vw = V.w || 1200, vh = V.h || 800, cw = 198, ch = 132;
   c.style.left = clamp(s[0] + 22, 8, Math.max(8, vw - cw - 8)) + 'px';
   c.style.top = clamp(s[1] + 18, 8, Math.max(8, vh - ch - 8)) + 'px';
@@ -1359,3 +1387,91 @@ function showSnapMenu(sx, sy) {
   showSnapMenuPos = [sx, sy];
 }
 let showSnapMenuPos = null;
+
+/* ============================================================
+   SELECTION CYCLING LIST
+   ------------------------------------------------------------
+   When several objects share the pick box, AutoCAD offers a small list at
+   the cursor: hovering a row pre-highlights that object in the drawing, and
+   clicking one takes it. The canvas badge (05-view) is the signal that the
+   list is available; this is the list itself.
+   ============================================================ */
+let CYCLEUI = null;
+function hideCycleList() { if (CYCLEUI) { CYCLEUI.remove(); CYCLEUI = null; } }
+function showCycleList(scr, cands, remove) {
+  hideCycleList();
+  if (!cands || cands.length < 2) return null;
+  const hud = $('#hud'); if (!hud) return null;
+  const c = el('div', 'cyclelist');
+  c.appendChild(el('div', 'clh', 'Selection cycling'));
+  for (const e of cands) {
+    const b = el('button', 'cli', `<span>${esc(niceName(e))}</span><i>#${e.id}</i>`);
+    b.dataset.id = String(e.id);
+    /* hovering a row is a preview, not a commitment */
+    const over = () => { ST.hot = e.id; draw(); };
+    b.onmouseenter = over;
+    b.addEventListener('pointerenter', over);
+    b.onclick = ev => {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      hideCycleList();
+      const n = selApply([e.id], !!remove);
+      ST.hot = null; ST.cycleList = null;
+      syncUI(); draw();
+      if (typeof CMD !== 'undefined' && CMD && CMD.phase === 'sel') echo(n + ' found, ' + SEL.size + ' total');
+    };
+    c.appendChild(b);
+  }
+  /* the canvas listens on pointerdown, so the list has to swallow its own
+     events or the click would land on the drawing and dismiss the list */
+  if (c.addEventListener)
+    ['pointerdown', 'pointerup', 'pointermove', 'dblclick', 'wheel'].forEach(t =>
+      c.addEventListener(t, ev => { if (ev.stopPropagation) ev.stopPropagation(); }));
+  hud.appendChild(c); CYCLEUI = c;
+  const vw = V.w || 1200, vh = V.h || 800;
+  const h = 22 + cands.length * 21;
+  c.style.left = clamp((scr ? scr[0] : 0) + 16, 6, Math.max(6, vw - 186)) + 'px';
+  c.style.top = clamp((scr ? scr[1] : 0) + 8, 6, Math.max(6, vh - h - 6)) + 'px';
+  return c;
+}
+
+/* ============================================================
+   MULTIFUNCTIONAL GRIP MENU
+   Hover a grip that has more than one job and its alternatives appear.
+   Ctrl steps them without the menu; clicking one arms it for the next drag.
+   ============================================================ */
+let GRIPMENU = null, GRIPMENUKEY = null;
+function hideGripMenu() { if (GRIPMENU) { GRIPMENU.remove(); GRIPMENU = null; GRIPMENUKEY = null; } }
+/** rebuild or reposition the menu to match ST.gripMenu */
+function syncGripMenu() {
+  const m = typeof ST !== 'undefined' ? ST.gripMenu : null;
+  if (!m || (typeof CMD !== 'undefined' && CMD && CMD.phase === 'run')) { hideGripMenu(); return null; }
+  const hud = $('#hud'); if (!hud) return null;
+  const key = m.id + '/' + m.k;
+  if (GRIPMENUKEY !== key) {
+    hideGripMenu();
+    const c = el('div', 'gripmenu');
+    m.items.forEach((it, i) => {
+      const b = el('button', 'gmi', esc(it.label));
+      b.dataset.act = it.id;
+      b.onclick = ev => {
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        m.idx = i;
+        const g = { id: m.id, k: m.k, p: m.p.slice() };
+        ST.gripMenu = m;
+        gripClick(g, false);
+      };
+      c.appendChild(b);
+    });
+    if (c.addEventListener)
+      ['pointerdown', 'pointerup', 'pointermove', 'wheel'].forEach(t =>
+        c.addEventListener(t, ev => { if (ev.stopPropagation) ev.stopPropagation(); }));
+    hud.appendChild(c); GRIPMENU = c; GRIPMENUKEY = key;
+  }
+  const rows = GRIPMENU.children;
+  for (let i = 0; i < rows.length; i++) rows[i].classList.toggle('on', i === m.idx);
+  const s = w2s(m.p);
+  const vw = V.w || 1200, vh = V.h || 800;
+  GRIPMENU.style.left = clamp(s[0] + 12, 6, Math.max(6, vw - 146)) + 'px';
+  GRIPMENU.style.top = clamp(s[1] + 12, 6, Math.max(6, vh - 24 - m.items.length * 21)) + 'px';
+  return GRIPMENU;
+}

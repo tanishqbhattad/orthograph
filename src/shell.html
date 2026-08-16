@@ -300,6 +300,26 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
 .snapmenu .smi:hover{background:var(--bg3)}
 .snapmenu .smx{width:11px;color:var(--amber);font-size:11px}
 .snapmenu .smsep{height:1px;background:var(--bd);margin:5px 4px}
+
+/* ---------------- selection cycling list + multifunctional grip menu ------ */
+.cyclelist{position:absolute;z-index:60;width:180px;pointer-events:auto;
+  background:var(--bg1);border:1px solid var(--bd2);border-radius:5px;padding:3px;
+  box-shadow:0 10px 26px #0009}
+.cyclelist .clh{font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--tx2);padding:3px 6px 4px}
+.cyclelist .cli{display:flex;align-items:center;gap:6px;width:100%;text-align:left;
+  padding:3px 6px;border-radius:3px;font-size:11px;color:var(--tx0)}
+.cyclelist .cli span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cyclelist .cli i{font-family:var(--mono);font-size:9px;color:var(--tx2);font-style:normal}
+.cyclelist .cli:hover{background:var(--bg3);color:var(--amber)}
+
+.gripmenu{position:absolute;z-index:60;width:140px;pointer-events:auto;
+  background:var(--bg1);border:1px solid var(--bd2);border-radius:5px;padding:3px;
+  box-shadow:0 10px 26px #0009}
+.gripmenu .gmi{display:block;width:100%;text-align:left;padding:3px 7px;
+  border-radius:3px;font-size:11px;color:var(--tx0)}
+.gripmenu .gmi:hover{background:var(--bg3);color:var(--amber)}
+.gripmenu .gmi.on{background:var(--bg3);color:var(--amber)}
 #toast{position:fixed;bottom:74px;left:50%;transform:translateX(-50%) translateY(8px);
   background:#000;border:1px solid var(--bd2);border-radius:6px;padding:8px 14px;
   font-size:12px;opacity:0;pointer-events:none;transition:.18s;z-index:250}
@@ -407,6 +427,7 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
         <button class="tg" data-tg="ortho">ORTHO</button>
         <button class="tg" data-tg="polar">POLAR</button>
         <button class="tg" data-tg="dyn">DYN</button>
+        <button class="tg" data-tg="selCycling" title="Selection cycling — offer a list when objects overlap under the pick box">CYCLE</button>
       </div>
       <div class="grow"></div>
       <div id="dset"></div>
