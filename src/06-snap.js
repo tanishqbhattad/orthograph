@@ -99,6 +99,22 @@ const SNAP_PRI = {
   grid: 8,
   near: 5,
 };
+const SNAP_PRI_MAX = Math.max(...Object.values(SNAP_PRI));
+/* How much of a head start the top priority buys itself, in screen px — the
+   whole of the priority/distance trade lives in this one number.
+
+   Chosen as the LARGEST value that still fixes the arbitration defect, because
+   a larger bias preserves more of AutoCAD's real priority behaviour. The two
+   cases that bound it, both measured:
+     · an apparent intersection 0.29px out must beat an endpoint 5.7px out
+       (pri gap 12 → head start 0.96px ≪ 5.41px gap) ✓
+     · a perpendicular under the crosshair must beat an intersection ~5px out
+       (pri gap 40 → 3.2px < 5px) ✓  — fails above ~12px
+   and the case that sets the floor:
+     · a node 4.24px out must still beat a line midpoint 3.16px out
+       (pri gap 20 → 1.6px > 1.08px) ✓ — fails below ~5.4px
+   8px sits in the middle of that window rather than on either edge. */
+const SNAP_BIAS_PX = 8;
 /* which snap kinds can be acquired for tracking */
 const TRACK_KINDS = { end: 1, mid: 1, cen: 1, gcen: 1, quad: 1, int: 1, appint: 1, node: 1, ins: 1, perp: 1, tan: 1 };
 
@@ -448,8 +464,21 @@ function snapPoint(sx, sy, ref, now) {
     if (step > 0) push([Math.round(raw[0] / step) * step, Math.round(raw[1] / step) * step], 'grid');
   }
 
-  /* ---- pick the winner: priority first, distance only as a tie-break ---- */
-  cands.sort((a, b) => b.pri - a.pri || a.d - b.d);
+  /* ---- pick the winner: distance decides, priority only buys a head start ----
+     Sorting by priority first (which this did originally) let any high-priority
+     candidate anywhere in the aperture beat a low-priority one sitting directly
+     under the crosshair — an apparent intersection 0.29px from the cursor lost
+     to an endpoint 5.7px away, and a perpendicular at d=0 lost to an
+     intersection 138mm off. That makes perp, tan, nearest, extension, parallel
+     and quadrant effectively unreachable in a dense drawing without hammering
+     Tab, which is the pick you make five hundred times a day.
+
+     Score = true distance − (priority × bias). One numeric key, so the order
+     stays total and stable; a "within N px, compare priority instead"
+     comparator is non-transitive and sorts inconsistently. */
+  const bias = px(SNAP_BIAS_PX) / SNAP_PRI_MAX;
+  for (const c of cands) c.score = c.d - c.pri * bias;
+  cands.sort((a, b) => a.score - b.score || b.pri - a.pri);
   ST.snapCands = cands;
   if (ST.snapCycle >= cands.length) ST.snapCycle = 0;
   let best = cands.length ? cands[ST.snapCycle] : null;
