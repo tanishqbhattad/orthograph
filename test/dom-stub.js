@@ -54,7 +54,9 @@ class El {
   querySelectorAll() { return []; }
   closest() { return null; }
   focus() { } select() { } blur() { } click() { }
-  getContext() { this._ctx = this._ctx || makeCtx(); return this._ctx; }
+  /* a real context knows its canvas, and the renderer derives its device
+     scale from that pair — so the stub has to link them the same way */
+  getContext() { if (!this._ctx) { this._ctx = makeCtx(); this._ctx.canvas = this; } return this._ctx; }
   toBlob(cb) { cb({}); }
   contains() { return false; }
 }

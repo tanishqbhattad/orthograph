@@ -320,10 +320,11 @@ function lwSnap(mm) {
   for (const v of LW_LADDER) { const d = Math.abs(v - mm); if (d < bd) { bd = d; best = v; } }
   return best;
 }
-let LW_ON = true;
 function lwPx(mm) {
-  if (!LW_ON) return HAIR;
+  if (ST.lwt === false) return HAIR;
   const w = (mm > 0 ? mm : 0) * PX_PER_MM;
+  /* AutoCAD floors the display at one pixel, so the thinnest pens all land
+     on the same hairline rather than fading into nothing */
   return w > HAIR ? w : HAIR;
 }
 
@@ -1011,9 +1012,10 @@ function drawBand() {
 const UCS_ARM = 34, UCS_PAD = 26;
 function drawUcsIcon() {
   if (!VS.ucsIcon) return;
+  /* screen direction of world +X and +Y. Canvas y points down, so +Y comes
+     out negative — get this wrong and the icon points into the floor. */
   const cr = Math.cos(-V.rot), sr = Math.sin(-V.rot);
-  /* screen direction of world +X and +Y (canvas y points down) */
-  const xd = [cr, -sr], yd = [sr, cr];
+  const xd = [cr, sr], yd = [sr, -cr];
   let o = null;
   if (VS.ucsOrigin) {
     const s = w2s([0, 0]);
@@ -1096,7 +1098,6 @@ function paint() {
   shapeCacheSync();
   HALO = null;
   deviceMetrics();
-  LW_ON = ST.lwt !== false;
   dashSync();
   clipSync();
   ctx.setTransform(V.kx, 0, 0, V.ky, 0, 0);

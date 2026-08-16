@@ -16,6 +16,8 @@ const ST = {
   tool: 'select', cur: null, raw: null, snap: null, hot: null, hotGrip: null,
   band: null, preview: null, tracks: null, drawing: false,
   osnap: true, grid: true, snapgrid: false, ortho: false, polar: true, dyn: true,
+  lwt: true,              /* LWDISPLAY — draw lineweights at their true plotted width */
+  inView: true,           /* the pointer is over the drawing area, so draw the crosshair */
   polarInc: 45, lastPt: null, dragGrip: null, panning: false, shift: false,
   osnapOn: { end: 1, mid: 1, cen: 1, quad: 1, int: 1, perp: 1, tan: 1, node: 1, ext: 1, near: 1,
     wcen: 1, wface: 1 },
