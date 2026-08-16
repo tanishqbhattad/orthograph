@@ -251,7 +251,19 @@ function gripsOf(e) {
   if (g && g.grips) return g.grips(e) || [];
   switch (e.t) {
     case 'line': return [{ p: e.a, k: 'a' }, { p: mid(e.a, e.b), k: 'm' }, { p: e.b, k: 'b' }];
-    case 'pline': case 'spline': return e.pts.map((p, i) => ({ p, k: 'p' + i }));
+    case 'pline': case 'spline': {
+      /* AutoCAD gives a polyline a grip per vertex AND one per segment
+         midpoint — the midpoint grip is what carries "add vertex" and drags a
+         whole segment sideways. Splines keep vertex grips only: their control
+         points already sit between the fit points. */
+      const g = e.pts.map((p, i) => ({ p, k: 'p' + i }));
+      if (e.t === 'pline') {
+        const n = e.pts.length;
+        const last = e.closed ? n : n - 1;
+        for (let i = 0; i < last; i++) g.push({ p: mid(e.pts[i], e.pts[(i + 1) % n]), k: 's' + i });
+      }
+      return g;
+    }
     case 'circle': return [{ p: e.c, k: 'c' }, { p: [e.c[0] + e.r, e.c[1]], k: 'r' },
       { p: [e.c[0], e.c[1] + e.r], k: 'r' }, { p: [e.c[0] - e.r, e.c[1]], k: 'r' }, { p: [e.c[0], e.c[1] - e.r], k: 'r' }];
     case 'arc': return [{ p: e.c, k: 'c' }, { p: arcPt(e, 0), k: 's' }, { p: arcPt(e, 1), k: 'e' }, { p: arcPt(e, .5), k: 'r' }];
@@ -263,8 +275,17 @@ function gripsOf(e) {
     default: return [];
   }
 }
-function applyGrip(e, k, p) {
-  mut(e);
+/** move one grip of a LIVE entity. Journals first — undo loses the edit
+    otherwise. Use gripSet on a clone, where mut() would poison the index. */
+function applyGrip(e, k, p, orig) { mut(e); gripSet(e, k, p, orig); }
+/**
+ * @param orig the entity as it was when the drag started. Arc grips need it:
+ *   refitting through three points is only stable if the two points you are
+ *   NOT dragging are read from the original arc. Without it the arc swims
+ *   away under the cursor, because the refitted arc's own midpoint is not
+ *   where the old one was.
+ */
+function gripSet(e, k, p, orig) {
   const g = GEOM[e.t];
   if (g && g.grip) { g.grip(e, k, p); return; }
   if (e.t === 'line') {
@@ -272,12 +293,27 @@ function applyGrip(e, k, p) {
     else if (k === 'm') { const d = sub(p, mid(e.a, e.b)); e.a = add(e.a, d); e.b = add(e.b, d); }
   }
   else if ((e.t === 'pline' || e.t === 'spline') && k[0] === 'p') e.pts[+k.slice(1)] = p;
+  else if (e.t === 'pline' && k[0] === 's') {
+    /* a segment midpoint drags the whole segment; the neighbours stretch */
+    const i = +k.slice(1), n = e.pts.length, j = (i + 1) % n;
+    const d = sub(p, mid(e.pts[i], e.pts[j]));
+    e.pts[i] = add(e.pts[i], d); e.pts[j] = add(e.pts[j], d);
+  }
   else if (e.t === 'circle') { if (k === 'c') e.c = p; else e.r = Math.max(dist(e.c, p), 1e-6); }
   else if (e.t === 'arc') {
     if (k === 'c') e.c = p;
-    else if (k === 's') e.a0 = ang(e.c, p);
-    else if (k === 'e') e.a1 = ang(e.c, p);
-    else e.r = Math.max(dist(e.c, p), 1e-6);
+    else if (k === 'r0') e.r = Math.max(dist(e.c, p), 1e-6);   /* Radius option  */
+    else if (k === 'sL') e.a0 = ang(e.c, p);                   /* Lengthen: sweep only */
+    else if (k === 'eL') e.a1 = ang(e.c, p);
+    else {
+      const O = (orig && orig.t === 'arc') ? orig : e;
+      const S = arcPt(O, 0), M = arcPt(O, .5), E = arcPt(O, 1);
+      const n = arc3(k === 's' ? p : S, k === 'r' ? p : M, k === 'e' ? p : E);
+      if (n) { e.c = n.c; e.r = n.r; e.a0 = n.a0; e.a1 = n.a1; }
+      else if (k === 's') e.a0 = ang(e.c, p);                  /* went collinear */
+      else if (k === 'e') e.a1 = ang(e.c, p);
+      else e.r = Math.max(dist(e.c, p), 1e-6);
+    }
   }
   else if (e.t === 'ellipse') {
     if (k === 'c') e.c = p;

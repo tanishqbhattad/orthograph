@@ -745,3 +745,231 @@ defc('qselect', {
     endCmd();
   },
 });
+
+/* ============================================================
+   SELECT — the standalone selection prompt
+   Every keyword AutoCAD answers at "Select objects:" is handled by
+   selOption() in 06-snap, so the command itself is only a shell that
+   holds the prompt open until Enter.
+   ============================================================ */
+defc('select', {
+  group: 'modify', alwaysSel: true,
+  selHint: 'Select objects · <em>W</em> window · <em>C</em> crossing · <em>WP CP</em> polygon · ' +
+    '<em>F</em> fence · <em>ALL P L</em> · <em>R</em> remove · <em>A</em> add · <em>U</em> undo · <em>Enter</em> done',
+  init() { echo(SEL.size + ' found'); endCmd(); },
+});
+
+/* ============================================================
+   GRIP EDITING
+   ------------------------------------------------------------
+   One command covers all five grip modes. Enter or Space steps
+   STRETCH -> MOVE -> ROTATE -> SCALE -> MIRROR and round again, each with
+   its own prompt and its own Base point / Copy / Undo / eXit options, which
+   is the loop AutoCAD runs once a grip goes hot.
+
+   STRETCH edits the live objects inside an open journal rather than drawing
+   a ghost. That is what AutoCAD shows, and it is the only way a wall can
+   preview honestly: a cloned wall would re-mitre against its real neighbours
+   and drag their openings with it. Esc rolls the journal back.
+   The other four modes are whole-object transforms, so they ghost from
+   clones the way MOVE and ROTATE already do.
+   ============================================================ */
+const GRIP_MODES = ['stretch', 'move', 'rotate', 'scale', 'mirror'];
+const GRIP_TITLE = { stretch: 'STRETCH', move: 'MOVE', rotate: 'ROTATE', scale: 'SCALE', mirror: 'MIRROR' };
+const GRIP_ASK = {
+  stretch: 'Stretch point', move: 'Move point', rotate: 'Rotation angle',
+  scale: 'Scale factor', mirror: 'Second point',
+};
+function gripPrompt(c) {
+  const ref = (c.mode === 'rotate' || c.mode === 'scale') ? ' · <em>R</em> reference' : '';
+  return '<b>** ' + GRIP_TITLE[c.mode] + ' **</b> ' + GRIP_ASK[c.mode] +
+    ' · <em>B</em> base point · <em>C</em> copy' + (c.copy ? ' (on)' : '') + ref +
+    ' · <em>U</em> undo · <em>X</em> exit';
+}
+function gripEnts(c) { return c.ids.map(id => DOC.ents.get(id)).filter(Boolean); }
+/** open the journal the live stretch edits inside */
+function gripLiveBegin(c) { if (!c.live) { begin(); c.live = true; } }
+/** put every stretched object back where it started */
+function gripLiveAbort(c) { if (c.live) { rollback(); c.live = false; } }
+
+defc('gripedit', {
+  group: 'modify',
+  init(c) {
+    gripSyncHot();
+    c.mode = 'stretch';
+    c.copy = false;
+    c.live = false;
+    c.refA = null; c.refL = null; c.d0 = null; c.wantBase = false; c.copies = 0;
+    c.action = ST.gripAction || 'stretch';
+    c.ids = [...SEL];
+    c.hot = ST.gripHot.map(g => ({ id: g.id, k: g.k, p: g.p.slice() }));
+    c.base = (ST.gripBase && ST.gripBase.slice()) || (c.hot[0] ? c.hot[0].p.slice() : null);
+    c.orig = new Map();
+    for (const id of new Set(c.hot.map(g => g.id))) {
+      const e = DOC.ents.get(id); if (e) c.orig.set(id, clone(e));
+    }
+    /* a structural menu action (add / remove vertex) happens once, up front,
+       and hands back the grip the drag should carry on with */
+    if (c.action !== 'stretch' && c.hot.length === 1) {
+      const g = c.hot[0], e = DOC.ents.get(g.id);
+      const nk = gripDo(e, g.k, c.action);
+      if (nk === null) {                    /* Remove Vertex: nothing left to drag */
+        begin(); commit('Remove vertex'); gripClearHot(); c.done = true; endCmd(); return;
+      }
+      if (nk !== g.k) {
+        begin(); c.live = true;             /* Add Vertex belongs to this edit */
+        g.k = nk;
+        const gs = gripsOf(e).find(x => x.k === nk);
+        if (gs) { g.p = gs.p.slice(); c.base = gs.p.slice(); }
+        c.orig.set(g.id, clone(e));
+        c.action = 'stretch';
+      }
+    }
+    if (!c.base) { c.done = true; endCmd(); return; }
+    hint(gripPrompt(c));
+  },
+  enter(c) {                                 /* Enter / Space steps the mode */
+    gripLiveAbort(c);
+    c.mode = GRIP_MODES[(GRIP_MODES.indexOf(c.mode) + 1) % GRIP_MODES.length];
+    c.refA = null; c.refL = null; c.d0 = null; c.wantBase = false; c.refMode = false;
+    ST.preview = null;
+    echo('** ' + GRIP_TITLE[c.mode] + ' **');
+    hint(gripPrompt(c));
+    draw();
+  },
+  text(c, s) {
+    if (/^x$/i.test(s)) { endCmd(); return true; }
+    if (/^b$/i.test(s)) { c.wantBase = true; hint('Base point'); return true; }
+    if (/^c$/i.test(s)) { c.copy = !c.copy; echo('Copy ' + (c.copy ? 'on' : 'off')); hint(gripPrompt(c)); return true; }
+    if (/^u$/i.test(s)) { gripUndo(c); return true; }
+    if ((c.mode === 'rotate' || c.mode === 'scale') && /^r$/i.test(s)) {
+      c.refMode = true; hint(c.mode === 'rotate' ? 'Reference angle' : 'Reference length'); return true;
+    }
+    if (c.mode === 'rotate') {
+      const v = parseFloat(s);
+      if (isNaN(v)) return false;
+      if (c.refMode && c.refA === null) { c.refA = rad(v); hint('New angle'); return true; }
+      gripCommitXf(c, T.rot(c.base, rad(v) - (c.refA || 0)), 'Rotate'); return true;
+    }
+    if (c.mode === 'scale') {
+      const v = c.refMode ? parseLen(s) : parseFloat(s);
+      if (isNaN(v) || v <= 0) return false;
+      if (c.refMode && c.refL === null) { c.refL = v; hint('New length'); return true; }
+      gripCommitXf(c, T.scale(c.base, c.refL ? v / c.refL : v), 'Scale'); return true;
+    }
+    return false;
+  },
+  point(c, p) {
+    if (c.wantBase) { c.base = p.slice(); c.wantBase = false; hint(gripPrompt(c)); return; }
+    if (c.mode === 'stretch') { gripStretchCommit(c, p); return; }
+    if (c.mode === 'rotate' && c.refMode && c.refA === null) { c.refA = ang(c.base, p); hint('New angle'); return; }
+    if (c.mode === 'scale' && c.refMode && c.refL === null) { c.refL = Math.max(dist(c.base, p), 1e-9); hint('New length'); return; }
+    const fn = gripXform(c, p);
+    if (fn) gripCommitXf(c, fn, GRIP_TITLE[c.mode].charAt(0) + GRIP_TITLE[c.mode].slice(1).toLowerCase());
+  },
+  preview(c, p) {
+    if (c.wantBase || !c.base) return null;
+    if (c.mode === 'stretch') { gripStretchApply(c, p); return null; }
+    const fn = gripXform(c, p);
+    if (!fn) return null;
+    if (c.mode === 'rotate' || c.mode === 'mirror') ST.tracks = [[c.base, p]];
+    return gripEnts(c).map(e => xf(clone(e), fn));
+  },
+  done(c) {
+    gripLiveAbort(c);
+    gripClearHot();
+    ST.gripBase = null; ST.gripAction = null;
+  },
+});
+
+/** the transform the current mode describes for a cursor at p */
+function gripXform(c, p) {
+  const d = sub(p, c.base);
+  if (c.mode === 'move') return T.move(d);
+  if (c.mode === 'rotate') return T.rot(c.base, ang(c.base, p) - (c.refA || 0));
+  if (c.mode === 'scale') {
+    if (c.refMode && c.refL) return T.scale(c.base, Math.max(dist(c.base, p) / c.refL, 1e-9));
+    if (!c.d0) c.d0 = Math.max(dist(c.base, p), 1e-9);
+    return T.scale(c.base, Math.max(dist(c.base, p) / c.d0, 1e-9));
+  }
+  if (c.mode === 'mirror') return dist(c.base, p) < 1e-9 ? null : T.mirror(c.base, p);
+  return null;
+}
+/** live stretch: every hot grip moves by the same delta, always measured from
+    where it started, so re-applying it on each mouse move cannot accumulate */
+function gripStretchApply(c, p) {
+  if (!c.hot.length) return;
+  gripLiveBegin(c);
+  const d = sub(p, c.base);
+  for (const g of c.hot) {
+    const e = DOC.ents.get(g.id); if (!e) continue;
+    const o = c.orig.get(g.id);
+    const target = gripConstrain(e, g.k, c.action, [g.p[0] + d[0], g.p[1] + d[1]], o);
+    try { applyGrip(e, gripEditKey(e, g.k, c.action), target, o); }
+    catch (err) { /* a type that refuses this grip simply does not move */ }
+  }
+}
+function gripStretchCommit(c, p) {
+  gripStretchApply(c, p);
+  if (c.copy) {
+    /* the stretched shape becomes the copy; the originals go back */
+    const made = gripEnts(c).map(e => clone(e));
+    gripLiveAbort(c);
+    begin();
+    const idmap = {};
+    for (const n of made) { const old = n.id; delete n.id; addEnt(n); idmap[old] = n.id; }
+    for (const n of made) if ((n.t === 'door' || n.t === 'window') && idmap[n.host]) n.host = idmap[n.host];
+    commit('Copy'); c.copies++;
+    draw(); syncUI(); return;
+  }
+  c.live = false; commit('Stretch');
+  gripSyncHot(); syncUI(); endCmd();
+}
+function gripCommitXf(c, fn, label) {
+  const ents = gripEnts(c);
+  begin();
+  if (c.copy) {
+    const idmap = {};
+    const made = ents.map(e => { const n = clone(e); const old = n.id; delete n.id; addEnt(xf(n, fn)); idmap[old] = n.id; return n; });
+    for (const n of made) if ((n.t === 'door' || n.t === 'window') && idmap[n.host]) n.host = idmap[n.host];
+    commit(label + ' copy'); c.copies++;
+    c.refA = null; c.refL = null; c.d0 = null; c.refMode = false;
+    ST.preview = null; draw(); syncUI(); return;
+  }
+  ents.forEach(e => xf(e, fn));
+  commit(label);
+  gripSyncHot(); syncUI(); endCmd();
+}
+/** U inside a grip edit: take back the last copy, or the in-flight stretch */
+function gripUndo(c) {
+  if (c.copies > 0) { undo(); c.copies--; echo('Undo'); draw(); return; }
+  gripLiveAbort(c);
+  c.refA = null; c.refL = null; c.d0 = null; c.refMode = false;
+  ST.preview = null; echo('Nothing to undo'); draw();
+}
+/** Ctrl inside a grip edit toggles Copy, exactly where AutoCAD puts it.
+    With no edit running it steps the multifunctional menu instead. */
+function gripCtrl() {
+  if (CMD && CMD.def.key === 'gripedit') {
+    CMD.copy = !CMD.copy;
+    echo('Copy ' + (CMD.copy ? 'on' : 'off'));
+    hint(gripPrompt(CMD));
+    return true;
+  }
+  const it = gripMenuCycle(1);
+  if (it) { echo(it.label); draw(); return true; }
+  return false;
+}
+/** start a grip edit from a click on a grip. Shift only toggles hotness, so
+    several grips can go hot and stretch together. */
+function gripClick(g, additive) {
+  if (!g) return false;
+  if (additive) { gripSetHot(g, true); syncUI(); draw(); return false; }
+  gripSetHot(g, false);
+  ST.gripBase = g.p.slice();
+  const m = ST.gripMenu && ST.gripMenu.id === g.id && ST.gripMenu.k === g.k ? ST.gripMenu : null;
+  ST.gripAction = m ? m.items[m.idx].id : 'stretch';
+  gripMenuClose();
+  startCmd('gripedit');
+  return true;
+}

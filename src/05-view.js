@@ -10,7 +10,14 @@ const CO = {
   bg: '#0e1116', gridm: '#181e26', gridM: '#222b36',
   axisX: '#e0526366', axisY: '#5fbf7f66',
   sel: '#ffd166', hot: '#ffe6a3', snap: '#4ee6a8', prev: '#6ba8ff',
-  grip: '#6ba8ff', gripHot: '#ffd166', tx: '#8d9aab',
+  /* grips follow AutoCAD's GRIPCOLOR / GRIPHOVER / GRIPHOT defaults:
+     blue when the object is merely selected, warm when the cursor is on one,
+     red once it is hot and driving an edit. */
+  grip: '#6ba8ff', gripHover: '#ff9d9d', gripHot: '#e03b3b', tx: '#8d9aab',
+  /* WINDOWAREACOLOR / CROSSINGAREACOLOR: window is blue and solid-edged,
+     crossing is green and dashed. This is pure muscle memory — get the two
+     the wrong way round and every draughtsman notices inside a second. */
+  selWin: '#4a90e2', selCross: '#3ddc84',
 };
 function w2s(p) {
   if (!V.rot) return [p[0] * V.z + V.px, -p[1] * V.z + V.py];
@@ -481,20 +488,56 @@ function drawHatch(e, col, mode) {
   strokeAs(col, S ? 1 + S.core : 1, DASH.solid);
 }
 
-/* ---- grips ---- */
+/* ---- grips ----
+   GRIPS turns them off, GRIPOBJLIMIT stops a thousand-object selection from
+   burying the drawing under boxes, and GRIPSIZE sets the square. */
 function drawGrips() {
-  if (SEL.size > 80) return;
+  if (typeof ST.gripsOn !== 'undefined' && !ST.gripsOn) return;
+  if (SEL.size > (+ST.gripObjLimit || 100)) return;
   ctx.setLineDash(DASH.solid);
+  const s = clamp(+ST.gripSize || 5, 2, 20);
+  const hov = ST.gripHover;
   for (const id of SEL) {
     const e = DOC.ents.get(id); if (!e) continue;
-    for (const g of gripsOf(e)) {
-      const s = w2s(g.p);
-      const hot = ST.hotGrip && ST.hotGrip.id === id && dist2(ST.hotGrip.p, g.p) < 1e-12;
-      ctx.fillStyle = hot ? CO.gripHot : CO.grip;
-      ctx.fillRect(s[0] - 3.5, s[1] - 3.5, 7, 7);
-      ctx.strokeStyle = CO.bg; ctx.lineWidth = 1; ctx.strokeRect(s[0] - 3.5, s[1] - 3.5, 7, 7);
+    let gs; try { gs = gripsOf(e); } catch (err) { continue; }
+    for (const g of gs) {
+      const q = w2s(g.p);
+      if (!isFinite(q[0]) || !isFinite(q[1])) continue;
+      const isHot = typeof gripIsHot === 'function' && gripIsHot(id, g.k);
+      const isHov = !!hov && hov.id === id && hov.k === g.k;
+      const r = Math.round((isHot || isHov ? s + 2 : s) / 2);
+      const x = Math.round(q[0]), y = Math.round(q[1]);
+      ctx.fillStyle = isHot ? CO.gripHot : isHov ? CO.gripHover : CO.grip;
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      ctx.strokeStyle = CO.bg; ctx.lineWidth = 1;
+      ctx.strokeRect(x - r, y - r, r * 2, r * 2);
+      /* the hover ring is what tells you the grip is live before you press */
+      if (isHov && !isHot) {
+        ctx.strokeStyle = CO.gripHover;
+        ctx.strokeRect(x - r - 2.5, y - r - 2.5, r * 2 + 5, r * 2 + 5);
+      }
     }
   }
+}
+/* ---- selection cycling badge ----
+   Two overlapping squares beside the crosshair: AutoCAD's signal that more
+   than one object is under the pick box and any of them is reachable. */
+function drawCycleBadge() {
+  if (!ST.selCycling || !ST.cycleList || ST.cycleList.length < 2) return;
+  if (!ST.cur || (typeof CMD !== 'undefined' && CMD && CMD.phase === 'run')) return;
+  const p = w2s(ST.cur);
+  if (!isFinite(p[0]) || !isFinite(p[1])) return;
+  const x = Math.round(p[0]) + 13, y = Math.round(p[1]) - 20;
+  ctx.setLineDash(DASH.solid); ctx.lineWidth = 1;
+  ctx.fillStyle = CO.bg + 'e0';
+  ctx.fillRect(x - 1, y - 1, 24, 15);
+  ctx.strokeStyle = CO.sel; ctx.strokeRect(x - 1, y - 1, 24, 15);
+  ctx.strokeStyle = CO.sel;
+  ctx.strokeRect(x + 2, y + 2, 6, 6);
+  ctx.strokeRect(x + 5, y + 5, 6, 6);
+  ctx.fillStyle = CO.sel; ctx.font = "500 8.5px 'JetBrains Mono',monospace";
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(String(ST.cycleList.length), x + 14, y + 3);
 }
 /* ---- snap marker ---- */
 const SNAP_GLYPH = {
@@ -559,16 +602,47 @@ function drawCursor() {
   ctx.strokeStyle = '#ffffff70';
   ctx.strokeRect(x - b / 2, y - b / 2, b, b);
 }
+/** the gesture outline in screen px — a rectangle's four corners, or the
+    lasso / polygon / fence path with the live cursor on the end */
+function bandScrPts(b) {
+  b = b || ST.band; if (!b) return [];
+  if (b.kind === 'rect') {
+    const x0 = Math.min(b.a[0], b.cur[0]), x1 = Math.max(b.a[0], b.cur[0]);
+    const y0 = Math.min(b.a[1], b.cur[1]), y1 = Math.max(b.a[1], b.cur[1]);
+    return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  }
+  const P = b.path.map(q => [q[0], q[1]]);
+  if (b.cur) P.push([b.cur[0], b.cur[1]]);
+  return P;
+}
+function bandAlpha() {
+  const a = clamp(Math.round((+ST.selAreaOpacity || 25) * 2.55), 8, 255);
+  return (a < 16 ? '0' : '') + a.toString(16);
+}
 function drawBand() {
   const b = ST.band; if (!b) return;
-  const a = w2s(b.a), c = w2s(b.b);
-  const x = Math.min(a[0], c[0]), y = Math.min(a[1], c[1]);
-  const w = Math.abs(c[0] - a[0]), h = Math.abs(c[1] - a[1]);
-  const crossing = b.b[0] < b.a[0];
-  ctx.setLineDash(crossing ? [5, 4] : DASH.solid);
-  ctx.strokeStyle = crossing ? '#4ee6a8' : '#6ba8ff';
-  ctx.fillStyle = (crossing ? '#4ee6a8' : '#6ba8ff') + '14';
-  ctx.lineWidth = 1; ctx.fillRect(x, y, w, h); ctx.strokeRect(x, y, w, h);
+  const cross = typeof bandCrossing === 'function' ? bandCrossing(b) : b.sense === 'crossing';
+  const fence = b.kind === 'fence';
+  const col = (cross || fence) ? CO.selCross : CO.selWin;
+  const P = bandScrPts(b);
+  ctx.lineWidth = 1;
+  ctx.setLineDash(cross || fence ? [6, 4] : DASH.solid);
+  ctx.strokeStyle = col;
+  if (fence) {
+    if (P.length >= 2) {
+      ctx.beginPath(); ctx.moveTo(P[0][0], P[0][1]);
+      for (let i = 1; i < P.length; i++) ctx.lineTo(P[i][0], P[i][1]);
+      ctx.stroke();
+    }
+    ctx.setLineDash(DASH.solid); return;
+  }
+  if (P.length < 3) { ctx.setLineDash(DASH.solid); return; }
+  ctx.beginPath(); ctx.moveTo(P[0][0], P[0][1]);
+  for (let i = 1; i < P.length; i++) ctx.lineTo(P[i][0], P[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = col + bandAlpha();
+  ctx.fill();
+  ctx.stroke();
   ctx.setLineDash(DASH.solid);
 }
 
@@ -598,6 +672,13 @@ function paint() {
   }
   for (let i = 0; i < BACK.length; i++) drawEnt(BACK[i]);
   for (let i = 0; i < FRONT.length; i++) drawEnt(FRONT[i]);
+  /* what the in-flight window would take, highlighted while it is still in
+     flight — the box teaches you what it is about to do */
+  if (ST.bandPreview && ST.bandPreview.size && ST.bandPreview.size <= HALO_MAX)
+    for (const id of ST.bandPreview) {
+      if (SEL.has(id)) continue;
+      const e = DOC.ents.get(id); if (e && fvis(e)) drawEntHL(e, 'hot');
+    }
   if (ST.hot && !SEL.has(ST.hot)) { const e = DOC.ents.get(ST.hot); if (e && fvis(e)) drawEntHL(e, 'hot'); }
   if (SEL.size) for (const id of SEL) { const e = DOC.ents.get(id); if (e && fvis(e)) drawEntHL(e, 'sel'); }
   if (ST.preview) for (const e of ST.preview) drawEnt(e, 'prev');
@@ -606,6 +687,7 @@ function paint() {
   drawBand();
   drawSnap();
   drawCursor();
+  drawCycleBadge();
   ctx.setLineDash(DASH.solid);
   BACK.length = 0; FRONT.length = 0;
 }

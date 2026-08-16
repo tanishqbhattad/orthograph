@@ -138,6 +138,9 @@ function syncCoord() {
 /* ---------- pointer + keyboard ---------- */
 const stage = $('#stage');
 let ptrs = new Map(), pinch = null, downPt = null, downScr = null, moved = false;
+/* what the button went down on, resolved on release: a press that turns into
+   a drag becomes a lasso, a press that does not becomes a pick */
+let pend = null;
 
 /** Lift the settings off an existing object onto the tool in hand. Returns
     true when the click was consumed. */
@@ -164,28 +167,29 @@ function takeStyleFrom(p) {
   buildProps(); draw();
   return true;
 }
-/** every point of the entity lies inside the (possibly rotated) window */
-function inQuad(e, quad) {
-  const pts = poly(e, 32);
-  if (!pts.length) return false;
-  for (const p of pts) if (!pointInPoly(p, quad)) return false;
-  return true;
-}
-/** the entity touches the window at all */
-function crossQuad(e, quad) {
-  const pts = poly(e, 32);
-  if (!pts.length) return false;
-  for (const p of pts) if (pointInPoly(p, quad)) return true;
-  for (let i = 1; i < pts.length; i++)
-    for (let j = 0; j < 4; j++)
-      if (segInt(pts[i - 1], pts[i], quad[j], quad[(j + 1) % 4])) return true;
-  return pointInPoly(quad[0], pts.length > 2 ? pts : [[0, 0]]);
-}
 function localXY(ev) { const r = cv.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; }
 function refPoint() {
   if (CMD && CMD.phase === 'run' && CMD.pts && CMD.pts.length) return CMD.pts[CMD.pts.length - 1];
+  /* a grip edit measures from its base point, so ortho, polar and the dynamic
+     length/angle box all bind the drag exactly as they do while drawing */
+  if (CMD && CMD.def.key === 'gripedit' && CMD.base) return CMD.base;
   if (ST.dragGrip) return ST.dragGrip.p;
   return null;
+}
+/** true when a click on the canvas is a selection click rather than input
+    for a running command */
+function selPhase() { return !CMD || CMD.phase === 'sel'; }
+/** report a pick the way the selection prompt does */
+function afterPick(n) {
+  syncUI(); draw();
+  if (CMD && CMD.phase === 'sel') echo((n || 0) + ' found, ' + SEL.size + ' total');
+}
+/** open a region gesture. Starting one on empty ground clears the set first,
+    which is what "click empty space to deselect" actually means. */
+function startBandGesture(scr, kind, sense, keep) {
+  if (!keep && ST.selMode !== 'remove') selClearAll();
+  bandBegin(scr, kind, sense);
+  return ST.band;
 }
 stage.addEventListener('pointerdown', ev => {
   if (ev.target.closest('.dyn')) return;
@@ -194,23 +198,41 @@ stage.addEventListener('pointerdown', ev => {
   if (cmdIn) cmdIn.blur();
   if (ptrs.size === 2) {
     const [a, b] = [...ptrs.values()];
-    pinch = { d: dist(a, b), c: mid(a, b), z: V.z }; ST.band = null; ST.panning = false; return;
+    pinch = { d: dist(a, b), c: mid(a, b), z: V.z }; bandCancel(); ST.panning = false; return;
   }
   const scr = localXY(ev);
-  downScr = scr; moved = false;
+  downScr = scr; moved = false; pend = null;
   if (ev.button === 1 || (ev.button === 0 && ev.altKey) || ev.button === 2) {
     ST.panning = { x: scr[0], y: scr[1], px: V.px, py: V.py }; return;
   }
   const p = snapPoint(scr[0], scr[1], refPoint());
   ST.cur = p; downPt = p;
   ST.shift = ev.shiftKey;
+  hideCycleList();
   /* the style eyedropper takes the click before the command can treat it as a
      point, so the settings can be lifted mid-command */
   if (ST.styleTarget && takeStyleFrom(p)) { downPt = null; downScr = null; return; }
   if (CMD && CMD.phase === 'run') { const eff = dynApply(p); dynRelease(); cmdPoint(eff); syncCoord(); return; }
-  const g = pickGrip(p);
-  if (g) { ST.dragGrip = g; begin(); return; }
-  ST.band = null;
+  if (!selPhase()) return;
+
+  /* a polygon or fence is collecting vertices */
+  if (ST.band && !ST.band.live && ST.band.kind !== 'rect') { bandPush(scr); draw(); return; }
+  /* implied windowing, second corner */
+  if (ST.band && !ST.band.live && ST.band.kind === 'rect') {
+    bandMove(scr);
+    afterPick(bandCommit(ev.shiftKey ? true : undefined));
+    downPt = null; downScr = null; return;
+  }
+  /* W / C / WP / CP / F was typed and is waiting for its first point */
+  if (ST.pendOption) {
+    const o = ST.pendOption; ST.pendOption = null;
+    startBandGesture(scr, o.kind, o.sense, true);
+    draw(); return;
+  }
+  /* a grip goes hot the instant it is pressed */
+  const g = gripAt(p);
+  if (g) { gripClick(g, ev.shiftKey); downPt = null; return; }
+  pend = { scr, p, shift: ev.shiftKey };
 }, { passive: false });
 
 stage.addEventListener('pointermove', ev => {
@@ -231,53 +253,66 @@ stage.addEventListener('pointermove', ev => {
   }
   const p = snapPoint(scr[0], scr[1], refPoint());
   ST.cur = p;
-  if (downScr && dist(downScr, scr) > 4) moved = true;
-  if (ST.dragGrip) {
-    const e = DOC.ents.get(ST.dragGrip.id);
-    if (e) applyGrip(e, ST.dragGrip.k, p);
-  } else if (CMD && CMD.phase === 'run') cmdPreview(dynApply(p));
-  else if (downPt && moved) ST.band = { a: downPt, b: p, aScr: downScr, bScr: scr };
-  else if (!CMD || CMD.phase === 'sel') { const h = pickAt(p, 8); ST.hot = h ? h.id : null; }
+  if (downScr && hyp(scr[0] - downScr[0], scr[1] - downScr[1]) > 4) moved = true;
+  if (CMD && CMD.phase === 'run') cmdPreview(dynApply(p));
+  else if (ST.band) bandMove(scr);
+  else if (pend && moved) {
+    /* press-drag-release is a lasso — AutoCAD's PICKAUTO lasso bit. With it
+       off the same gesture rubber-bands a rectangle. */
+    startBandGesture(pend.scr, ST.lassoOn ? 'lasso' : 'rect', null, pend.shift);
+    ST.band.live = true;
+    bandMove(scr);
+  } else if (selPhase()) {
+    const g = gripAt(p);
+    gripHoverUpdate(g);
+    if (g) { ST.hot = null; ST.cycleList = null; }
+    else pickHover(p, 8);
+  }
   syncCoord(); syncDyn(); draw();
 }, { passive: false });
 
 stage.addEventListener('pointerup', ev => {
   ptrs.delete(ev.pointerId);
   if (ptrs.size < 2) pinch = null;
-  if (ST.panning) { ST.panning = null; downPt = null; downScr = null; return; }
+  if (ST.panning) { ST.panning = null; downPt = null; downScr = null; pend = null; return; }
   const scr = localXY(ev);
   const p = ST.cur || s2w(scr[0], scr[1]);
-  if (ST.dragGrip) { ST.dragGrip = null; commit('Edit'); draw(); downPt = null; return; }
-  if (ST.band) {
-    const b = ST.band;
-    /* The gesture is a screen gesture. Judging it in world coordinates made
-       left-to-right mean the wrong thing the moment the view was rotated, and
-       selected things that were visibly outside the box. */
-    const a0 = b.aScr || w2s(b.a), b0 = b.bScr || w2s(b.b);
-    const crossing = b0[0] < a0[0];
-    const x0 = Math.min(a0[0], b0[0]), x1 = Math.max(a0[0], b0[0]);
-    const y0 = Math.min(a0[1], b0[1]), y1 = Math.max(a0[1], b0[1]);
-    const quad = [s2w(x0, y0), s2w(x1, y0), s2w(x1, y1), s2w(x0, y1)];
-    const qx = quad.map(q => q[0]), qy = quad.map(q => q[1]);
-    const qb = [Math.min(...qx), Math.min(...qy), Math.max(...qx), Math.max(...qy)];
-    ST.lastBand = qb;
-    if (!ev.shiftKey) SEL.clear();
-    for (const e of query(qb[0], qb[1], qb[2], qb[3])) {
-      if (!pickable(e)) continue;
-      if (crossing ? crossQuad(e, quad) : inQuad(e, quad)) SEL.add(e.id);
-    }
-    ST.band = null; syncUI(); draw(); downPt = null; downScr = null;
-    if (CMD && CMD.phase === 'sel') echo(SEL.size + ' selected — press Enter');
+  /* a grip dragged rather than clicked finishes where the button came up */
+  if (CMD && CMD.def.key === 'gripedit' && moved) {
+    cmdPoint(dynApply(p)); syncCoord();
+    downPt = null; downScr = null; pend = null; return;
+  }
+  if (ST.band && ST.band.live) {
+    bandMove(scr);
+    afterPick(bandCommit(ev.shiftKey ? true : undefined));
+    downPt = null; downScr = null; pend = null; return;
+  }
+  if (pend && !moved && selPhase()) resolveClick(pend, ev);
+  downPt = null; downScr = null; pend = null;
+});
+/**
+ * A click that did not turn into a drag.
+ *   nothing under it  → clear the set and arm implied windowing, so the next
+ *                       click completes a window (left→right) or a crossing.
+ *   one object        → add it (PICKADD); Shift takes it back out.
+ *   several           → hand them to the cycling list so any is reachable.
+ */
+function resolveClick(q, ev) {
+  const p = q.p;
+  const cands = pickCandidates(p, 9);
+  const remove = ev.shiftKey || ST.selMode === 'remove';
+  if (!cands.length) {
+    if (!ev.shiftKey && ST.selMode !== 'remove') selClearAll();
+    startBandGesture(q.scr, 'rect', null, true);
+    syncUI(); draw(); return;
+  }
+  if (cands.length > 1 && ST.selCycling >= 2 && !ev.shiftKey) {
+    showCycleList(q.scr, cands, remove);
     return;
   }
-  if (!moved && (!CMD || CMD.phase === 'sel')) {
-    const e = pickAt(p, 9);
-    if (e) { if (ev.shiftKey) { SEL.has(e.id) ? SEL.delete(e.id) : SEL.add(e.id); } else { SEL.clear(); SEL.add(e.id); } }
-    else if (!ev.shiftKey) SEL.clear();
-    syncUI(); draw();
-  }
-  downPt = null; downScr = null;
-});
+  const e = cands[Math.min(ST.cycleIdx || 0, cands.length - 1)];
+  afterPick(selApply([e.id], remove));
+}
 stage.addEventListener('pointercancel', ev => { ptrs.delete(ev.pointerId); pinch = null; ST.panning = null; });
 stage.addEventListener('contextmenu', ev => {
   ev.preventDefault();
@@ -443,12 +478,16 @@ window.addEventListener('keydown', ev => {
   const inField = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
   if (ev.key === 'Escape') {
     if (SNAPMENU) { hideSnapMenu(); return; }
+    if (CYCLEUI) { hideCycleList(); draw(); return; }
     if (ST.styleTarget) { ST.styleTarget = null; echo('Cancelled'); buildProps(); return; }
     if ($('#modal').classList.contains('show')) return closeModal();
     if (dynLocked()) { dynRelease(); draw(); return; }
+    /* an in-flight window goes first: the selection you already have survives
+       abandoning the box, exactly as it does in AutoCAD */
+    if (ST.band) { bandCancel(); ST.pendOption = null; draw(); return; }
     dynKill();
-    if (CMD) endCmd(); else { SEL.clear(); syncUI(); }
-    ST.band = null; hint(''); draw(); return;
+    if (CMD) endCmd(); else { selClearAll(); syncUI(); }
+    gripMenuClose(); hint(''); draw(); return;
   }
   if (inField) {
     if (ev.key === 'Enter' && $('#modal').classList.contains('show') && tag !== 'TEXTAREA') {

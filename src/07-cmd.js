@@ -42,8 +42,15 @@ function startCmd(key, arg) {
   CMD = c;
   ST.lastCmd = key;                                /* Space repeats this */
   ST.tool = key; ST.drawing = true; ST.preview = null;
-  if (def.needSel && !SEL.size) { c.phase = 'sel'; hint(def.selHint || 'Select objects, then press <em>Enter</em>'); }
-  else { c.phase = 'run'; if (def.init) def.init(c); if (def.hint && !c.done) hint(def.hint); }
+  if (def.alwaysSel || (def.needSel && !SEL.size)) {
+    c.phase = 'sel';
+    if (typeof selPromptReset === 'function') selPromptReset();
+    hint(def.selHint || 'Select objects, then press <em>Enter</em>');
+  } else {
+    c.phase = 'run';
+    if (def.needSel && typeof selRemember === 'function') selRemember();
+    if (def.init) def.init(c); if (def.hint && !c.done) hint(def.hint);
+  }
   syncTools();
   /* the panel shows what is about to be drawn, so it has to follow the tool */
   if (typeof buildProps === 'function') buildProps();
@@ -72,6 +79,9 @@ function cmdText(s) {
   const c = CMD; if (!c) return false;
   if (c.phase === 'sel') {
     if (!s) { c.phase = 'run'; if (c.def.init) c.def.init(c); if (c.def.hint) hint(c.def.hint); return true; }
+    /* W C WP CP F ALL P L R A U — the selection grammar answers first, so a
+       typed W means Window here and not the WALL command */
+    if (typeof selOption === 'function' && selOption(s)) { if (typeof syncUI === 'function') syncUI(); return true; }
     return false;
   }
   /* an option the command understood may have changed what is about to be
@@ -88,7 +98,18 @@ function cmdText(s) {
 function cmdEnter() {
   const c = CMD; if (!c) return;
   if (c.phase === 'sel') {
+    /* a polygon or fence gesture is still open: Enter closes IT, not the
+       selection prompt — the same two-stage Enter AutoCAD uses */
+    if (typeof ST !== 'undefined' && ST.band && ST.band.kind !== 'rect') {
+      const n = bandCommit();
+      echo(n + ' found, ' + SEL.size + ' total');
+      hint(c.def.selHint || 'Select objects, then press <em>Enter</em>');
+      if (typeof syncUI === 'function') syncUI();
+      draw(); return;
+    }
     c.phase = 'run';
+    if (typeof selRemember === 'function') selRemember();
+    if (typeof selPromptReset === 'function') selPromptReset();
     if (c.def.init) c.def.init(c);
     if (c.def.hint) hint(c.def.hint);
     if (typeof buildProps === 'function') buildProps();

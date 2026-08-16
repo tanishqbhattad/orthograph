@@ -27,6 +27,25 @@ const ST = {
   snapScr: null,          /* screen point the cycle was anchored at */
   lastCmd: null,          /* for Space = repeat */
   trackPts: [],           /* acquired points for snap tracking: {p,k} */
+
+  /* ---- selection & grips: the AutoCAD system variables this app honours ----
+     Names deliberately echo the real sysvars so the behaviour is checkable
+     against AutoCAD one setting at a time. */
+  gripSize: 5,            /* GRIPSIZE   — grip box, screen px                  */
+  gripsOn: 1,             /* GRIPS      — 0 hides grips entirely               */
+  gripObjLimit: 100,      /* GRIPOBJLIMIT — grips suppressed past this many    */
+  selCycling: 2,          /* SELECTIONCYCLING — 0 off, 1 badge, 2 badge+list   */
+  lassoOn: 1,             /* PICKAUTO bit 4 — press-drag makes a lasso         */
+  pickAdd: 2,             /* PICKADD    — 2 = picks accumulate, Shift removes  */
+  selAreaOpacity: 25,     /* SELECTIONAREAOPACITY, per cent                    */
+  /* live interaction state */
+  bandPreview: null,      /* Set of ids the in-flight window would take        */
+  cycleList: null,        /* ids under the pickbox when they overlap           */
+  cycleIdx: 0,
+  gripHot: [],            /* the red grips: [{id,k,p}]                         */
+  gripHover: null,        /* the grip under the cursor: {id,k,p}               */
+  gripMenu: null,         /* multifunctional grip menu: {id,k,p,items,idx}     */
+  selMode: 'add',         /* the A / R switch inside a Select objects prompt   */
 };
 /** the pick box only shows when no command is running (AutoCAD behaviour) */
 function showPickBox() { return !CMD || CMD.phase === 'sel'; }
@@ -648,28 +667,518 @@ function trackSnaps(raw, r, push, tracks) {
 }
 
 /* ---------------- picking ---------------- */
-/* pick topmost entity near a world point */
-function pickAt(p, radius, filter) {
+/** every pickable entity under the pick box, nearest first.
+    Ties go to the newest object, which is the one drawn on top. */
+function pickCandidates(p, radius, filter) {
   /* The drawn pick box has to be the aperture that actually picks, otherwise
      the setting is decoration. Explicit radii still matter (a wall wants more
      reach than a line), so they scale with the box rather than ignoring it. */
   const r = px((radius || 8) * ((+ST.pickBox || 8) / 8));
-  const cands = query(p[0] - r, p[1] - r, p[0] + r, p[1] + r).filter(pickable);
-  let best = null, bd = r;
-  for (const e of cands) {
+  const out = [];
+  for (const e of query(p[0] - r, p[1] - r, p[0] + r, p[1] + r)) {
+    if (!pickable(e)) continue;
     if (filter && !filter(e)) continue;
-    const d = entDist(p, e);
-    if (d <= bd) { bd = d; best = e; }
+    let d; try { d = entDist(p, e); } catch (err) { continue; }
+    if (d <= r) out.push({ e, d });
+  }
+  out.sort((a, b) => a.d - b.d || b.e.id - a.e.id);
+  return out.map(x => x.e);
+}
+/* pick topmost entity near a world point */
+function pickAt(p, radius, filter) {
+  return pickCandidates(p, radius, filter)[0] || null;
+}
+/** the grip under the cursor. The aperture follows GRIPSIZE, so a bigger grip
+    really is easier to grab rather than just looking bigger. */
+function gripAt(p) {
+  if (!ST.gripsOn) return null;
+  const r = px(Math.max(3, (+ST.gripSize || 5)) * 1.4);
+  let best = null, bd = r;
+  for (const id of SEL) {
+    const e = DOC.ents.get(id); if (!e) continue;
+    let gs; try { gs = gripsOf(e); } catch (err) { continue; }
+    for (const g of gs) {
+      const d = dist(p, g.p);
+      if (d < bd) { bd = d; best = { id, k: g.k, p: g.p.slice() }; }
+    }
   }
   return best;
 }
-function pickGrip(p) {
-  const r = px(7 * ((+ST.pickBox || 8) / 8));
-  for (const id of SEL) {
-    const e = DOC.ents.get(id); if (!e) continue;
-    for (const g of gripsOf(e)) if (dist(p, g.p) < r) return { id, k: g.k, p: g.p.slice() };
+function pickGrip(p) { return gripAt(p); }
+
+/* ============================================================
+   SELECTION
+   ------------------------------------------------------------
+   One grammar covers every way AutoCAD lets you build a selection set:
+   a region (rectangle, lasso or typed polygon) judged either as a window
+   (everything fully enclosed) or as a crossing (everything touched), a
+   fence polyline, and the keyword options typed at "Select objects:".
+
+   Two rules are load-bearing and easy to get wrong:
+
+   * the window/crossing sense is a SCREEN gesture. Judging it in world
+     coordinates makes left-to-right mean the wrong thing the moment the
+     view is rotated.
+   * picks ACCUMULATE (PICKADD 2). Clicking a second object adds it;
+     Shift+click removes; a click on empty space clears. Replacing the set
+     on every click is the single most common way a CAD clone feels wrong.
+   ============================================================ */
+
+/** the point list a region test should use. Text is judged by its box —
+    its poly() is one insertion point, which would enclose a whole
+    paragraph the moment its corner crept inside the window. */
+function selPts(e) {
+  if (e.t === 'text') {
+    let b; try { b = bbox(e); } catch (err) { return []; }
+    return [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]];
   }
+  try { return poly(e, 40) || []; } catch (err) { return []; }
+}
+/** every point of the entity lies inside the (possibly rotated) region */
+function entInPoly(e, P) {
+  const pts = selPts(e);
+  if (!pts.length) return false;
+  for (const p of pts) if (!pointInPoly(p, P)) return false;
+  return true;
+}
+/** the entity touches the region at all */
+function entCrossPoly(e, P) {
+  const pts = selPts(e);
+  if (!pts.length) return false;
+  for (const p of pts) if (pointInPoly(p, P)) return true;
+  const n = P.length;
+  for (let i = 1; i < pts.length; i++)
+    for (let j = 0; j < n; j++)
+      if (segInt(pts[i - 1], pts[i], P[j], P[(j + 1) % n])) return true;
+  /* a region drawn wholly inside a closed object still catches it */
+  return pts.length > 2 && pointInPoly(P[0], pts);
+}
+/** the entity crosses an OPEN fence polyline */
+function entFenceHit(e, F) {
+  const pts = selPts(e);
+  if (pts.length < 2 || F.length < 2) return false;
+  for (let i = 1; i < pts.length; i++)
+    for (let j = 1; j < F.length; j++)
+      if (segInt(pts[i - 1], pts[i], F[j - 1], F[j])) return true;
+  return false;
+}
+/* the old names, kept because they read well at the call site */
+function inQuad(e, quad) { return entInPoly(e, quad); }
+function crossQuad(e, quad) { return entCrossPoly(e, quad); }
+
+function ptsBox(P) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of P) {
+    if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+    if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+  }
+  return [x0, y0, x1, y1];
+}
+/** ids inside (or touched by) a world-space region */
+function selectRegion(P, crossing, filter) {
+  if (!P || P.length < 3) return [];
+  const b = ptsBox(P);
+  const out = [];
+  for (const e of query(b[0], b[1], b[2], b[3])) {
+    if (!pickable(e)) continue;
+    if (filter && !filter(e)) continue;
+    if (crossing ? entCrossPoly(e, P) : entInPoly(e, P)) out.push(e.id);
+  }
+  return out;
+}
+/** ids crossed by a world-space fence polyline */
+function selectFence(F, filter) {
+  if (!F || F.length < 2) return [];
+  const b = ptsBox(F);
+  const out = [];
+  for (const e of query(b[0], b[1], b[2], b[3])) {
+    if (!pickable(e)) continue;
+    if (filter && !filter(e)) continue;
+    if (entFenceHit(e, F)) out.push(e.id);
+  }
+  return out;
+}
+
+/* ---------------- the selection set ---------------- */
+const SELHIST = [];              /* one entry per pick step — the U option    */
+let SELPREV = [];                /* the P option: the set a command last used */
+
+/** add or remove ids, recording the step so U can take it back */
+function selApply(ids, remove) {
+  const ch = [];
+  for (const id of ids) {
+    if (remove) { if (SEL.delete(id)) ch.push(id); }
+    else if (!SEL.has(id) && DOC.ents.has(id)) { SEL.add(id); ch.push(id); }
+  }
+  if (ch.length) SELHIST.push({ ids: ch, removed: !!remove });
+  return ch.length;
+}
+/** U at the Select objects prompt: undo the most recent pick step */
+function selUndoPick() {
+  const step = SELHIST.pop();
+  if (!step) return false;
+  for (const id of step.ids) { if (step.removed) SEL.add(id); else SEL.delete(id); }
+  return true;
+}
+/** remember the set a modify command is about to consume, for P */
+function selRemember() { if (SEL.size) SELPREV = [...SEL]; }
+function selClearAll() { selRemember(); SEL.clear(); SELHIST.length = 0; gripClearHot(); }
+/** L: the newest object still in the drawing */
+function selLastEnt() {
+  let best = null;
+  for (const e of DOC.ents.values()) if (pickable(e) && (!best || e.id > best.id)) best = e;
+  return best;
+}
+function selAllIds() {
+  const out = [];
+  for (const e of DOC.ents.values()) if (pickable(e)) out.push(e.id);
+  return out;
+}
+
+/* ---------------- the in-flight region gesture ----------------
+   ST.band carries the whole gesture in SCREEN coordinates:
+     kind   'rect' | 'lasso' | 'wpoly' | 'cpoly' | 'fence'
+     sense  'window' | 'crossing'          (fence has neither)
+     live   true while the button is held (a drag, so a lasso)
+     path   lasso trail / polygon vertices, screen px
+     a,cur  rectangle corners, screen px                                  */
+function bandBegin(scr, kind, sense) {
+  ST.band = {
+    kind: kind || 'rect', sense: sense || 'window',
+    locked: !!sense, live: false,
+    a: [scr[0], scr[1]], cur: [scr[0], scr[1]], path: [[scr[0], scr[1]]],
+  };
+  ST.bandPreview = null;
+  return ST.band;
+}
+/** the polygon the gesture currently describes, in world coordinates */
+function bandPoly(b) {
+  b = b || ST.band; if (!b) return null;
+  if (b.kind === 'rect') {
+    const x0 = Math.min(b.a[0], b.cur[0]), x1 = Math.max(b.a[0], b.cur[0]);
+    const y0 = Math.min(b.a[1], b.cur[1]), y1 = Math.max(b.a[1], b.cur[1]);
+    return [s2w(x0, y0), s2w(x1, y0), s2w(x1, y1), s2w(x0, y1)];
+  }
+  const P = b.path.map(q => s2w(q[0], q[1]));
+  if (b.kind !== 'fence' && b.cur && (b.live || b.path.length)) P.push(s2w(b.cur[0], b.cur[1]));
+  else if (b.kind === 'fence' && b.cur) P.push(s2w(b.cur[0], b.cur[1]));
+  return P;
+}
+/** true when the gesture selects by touching rather than by enclosing */
+function bandCrossing(b) {
+  b = b || ST.band; if (!b) return false;
+  if (b.kind === 'cpoly') return true;
+  if (b.kind === 'wpoly') return false;
+  return b.sense === 'crossing';
+}
+const BAND_LASSO_MIN = 3;        /* px between recorded lasso points */
+function bandMove(scr) {
+  const b = ST.band; if (!b) return;
+  b.cur = [scr[0], scr[1]];
+  /* the sense of a rubber-band rectangle flips live as the cursor crosses the
+     anchor; a lasso keeps whichever way the hand set off, so the fill does not
+     strobe while the loop wanders back and forth */
+  if (!b.locked) {
+    if (b.kind === 'rect') b.sense = scr[0] < b.a[0] ? 'crossing' : 'window';
+    else if (b.kind === 'lasso' && hyp(scr[0] - b.a[0], scr[1] - b.a[1]) > 4) {
+      b.sense = scr[0] < b.a[0] ? 'crossing' : 'window'; b.locked = true;
+    }
+  }
+  if (b.kind === 'lasso' && b.live) {
+    const last = b.path[b.path.length - 1];
+    if (hyp(scr[0] - last[0], scr[1] - last[1]) >= BAND_LASSO_MIN) b.path.push([scr[0], scr[1]]);
+  }
+  bandRefreshPreview();
+}
+/** a click adds a vertex to a polygon or fence gesture */
+function bandPush(scr) {
+  const b = ST.band; if (!b) return;
+  b.path.push([scr[0], scr[1]]);
+  b.cur = [scr[0], scr[1]];
+  bandRefreshPreview();
+}
+/** objects the gesture WOULD take, refreshed live so the box teaches itself */
+function bandRefreshPreview() {
+  const b = ST.band;
+  if (!b) { ST.bandPreview = null; return null; }
+  let ids;
+  if (b.kind === 'fence') ids = selectFence(bandPoly(b));
+  else {
+    const P = bandPoly(b);
+    ids = P && P.length >= 3 ? selectRegion(P, bandCrossing(b)) : [];
+  }
+  ST.bandPreview = new Set(ids);
+  return ST.bandPreview;
+}
+/** apply the gesture to the selection set and put the band away */
+function bandCommit(remove) {
+  const b = ST.band; if (!b) return 0;
+  let ids;
+  if (b.kind === 'fence') ids = selectFence(bandPoly(b));
+  else {
+    const P = bandPoly(b);
+    ids = P && P.length >= 3 ? selectRegion(P, bandCrossing(b)) : [];
+    if (P && P.length >= 3) {
+      const q = ptsBox(P);
+      ST.lastBand = q;                        /* STRETCH reuses the last box */
+    }
+  }
+  const n = selApply(ids, remove == null ? ST.selMode === 'remove' : remove);
+  ST.band = null; ST.bandPreview = null;
+  return n;
+}
+function bandCancel() { ST.band = null; ST.bandPreview = null; }
+
+/* ---------------- keyword options at "Select objects:" ----------------
+   W C WP CP F ALL P L R A U — the set AutoCAD answers at every selection
+   prompt. Anything that needs points arms a gesture and waits for clicks. */
+const SEL_OPTION = {
+  w: 'window', win: 'window', window: 'window',
+  c: 'crossing', cr: 'crossing', crossing: 'crossing',
+  wp: 'wpoly', wpolygon: 'wpoly',
+  cp: 'cpoly', cpolygon: 'cpoly',
+  f: 'fence', fence: 'fence',
+  l: 'last', last: 'last',
+  p: 'previous', prev: 'previous', previous: 'previous',
+  all: 'all',
+  r: 'remove', remove: 'remove',
+  a: 'add', add: 'add',
+  u: 'undo', undo: 'undo',
+  box: 'box', au: 'auto', auto: 'auto', si: 'single', single: 'single',
+};
+function selOptionName(s) {
+  return SEL_OPTION[String(s || '').trim().toLowerCase()] || null;
+}
+const SEL_PROMPT = {
+  window: 'Specify first corner',
+  crossing: 'Specify first corner',
+  wpoly: 'First polygon point · <em>Enter</em> to close',
+  cpoly: 'First polygon point · <em>Enter</em> to close',
+  fence: 'First fence point · <em>Enter</em> to finish',
+};
+/** run one typed selection keyword. Returns true when it was understood. */
+function selOption(s) {
+  const k = selOptionName(s);
+  if (!k) return false;
+  const say = t => { if (typeof echo === 'function') echo(t); };
+  const tell = h => { if (typeof hint === 'function') hint(h); };
+  switch (k) {
+    case 'window': case 'crossing':
+      ST.band = null;
+      ST.pendOption = { kind: 'rect', sense: k };
+      tell(SEL_PROMPT[k]); say(k === 'window' ? 'Window' : 'Crossing');
+      return true;
+    case 'wpoly': case 'cpoly': case 'fence':
+      ST.band = null;
+      ST.pendOption = { kind: k };
+      tell(SEL_PROMPT[k]); say(k.toUpperCase());
+      return true;
+    case 'box': case 'auto':
+      ST.pendOption = null; say(k.toUpperCase());
+      return true;
+    case 'all': {
+      const n = selApply(selAllIds(), ST.selMode === 'remove');
+      say(n + ' found');
+      return true;
+    }
+    case 'previous': {
+      const live = SELPREV.filter(id => DOC.ents.has(id) && pickable(DOC.ents.get(id)));
+      if (!live.length) { say('No previous selection set'); return true; }
+      say(selApply(live, ST.selMode === 'remove') + ' found');
+      return true;
+    }
+    case 'last': {
+      const e = selLastEnt();
+      if (!e) { say('Nothing to select'); return true; }
+      say(selApply([e.id], ST.selMode === 'remove') + ' found');
+      return true;
+    }
+    case 'remove': ST.selMode = 'remove'; tell('Remove objects'); say('Remove'); return true;
+    case 'add': ST.selMode = 'add'; tell('Select objects'); say('Add'); return true;
+    case 'undo':
+      say(selUndoPick() ? 'Pick undone — ' + SEL.size + ' selected' : 'Nothing to undo');
+      return true;
+    case 'single': ST.selSingle = true; say('Single'); return true;
+  }
+  return false;
+}
+/** reset the per-prompt switches when a selection prompt opens or closes */
+function selPromptReset() {
+  ST.selMode = 'add'; ST.selSingle = false; ST.pendOption = null;
+  SELHIST.length = 0;
+  bandCancel();
+}
+
+/* ---------------- rollover highlight and selection cycling ----------------
+   Hovering pre-highlights what a click would take. When several objects share
+   the pick box AutoCAD shows a cycling badge; the list, or Shift+Space, then
+   reaches any of them. */
+function sameIds(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+function pickHover(p, radius) {
+  const list = pickCandidates(p, radius || 8);
+  const ids = list.map(e => e.id);
+  if (!sameIds(ids, ST.cycleList)) ST.cycleIdx = 0;      /* a new stack starts at the top */
+  ST.cycleList = ids.length > 1 ? ids : null;
+  if (ST.cycleIdx >= ids.length) ST.cycleIdx = 0;
+  ST.hot = ids.length ? ids[ST.cycleIdx] : null;
+  return list;
+}
+/** Shift+Space: step the rollover through the objects sharing the pick box */
+function cyclePick(dir) {
+  const ids = ST.cycleList;
+  if (!ids || ids.length < 2) return null;
+  const n = ids.length;
+  ST.cycleIdx = (((ST.cycleIdx + (dir || 1)) % n) + n) % n;
+  ST.hot = ids[ST.cycleIdx];
+  return ST.hot;
+}
+
+/* ---------------- grips ----------------
+   Unselected grips are blue, the one under the cursor takes the hover colour,
+   and a grip you click is HOT and red — GRIPCOLOR / GRIPHOVER / GRIPHOT. */
+function gripKey(g) { return g.id + '/' + g.k; }
+function gripIsHot(id, k) {
+  for (const g of ST.gripHot) if (g.id === id && g.k === k) return true;
+  return false;
+}
+function gripClearHot() { ST.gripHot.length = 0; ST.gripMenu = null; }
+/** make a grip hot. Shift keeps the ones already hot, so several vertices
+    stretch together — the classic way to drag a whole wall junction. */
+function gripSetHot(g, additive) {
+  if (!g) return null;
+  if (!additive) {
+    if (!gripIsHot(g.id, g.k)) ST.gripHot = [{ id: g.id, k: g.k, p: g.p.slice() }];
+  } else if (gripIsHot(g.id, g.k)) {
+    ST.gripHot = ST.gripHot.filter(x => !(x.id === g.id && x.k === g.k));
+    return null;
+  } else ST.gripHot.push({ id: g.id, k: g.k, p: g.p.slice() });
+  return g;
+}
+/** refresh the stored positions — a grip moves when the object does */
+function gripSyncHot() {
+  const out = [];
+  for (const g of ST.gripHot) {
+    const e = DOC.ents.get(g.id); if (!e) continue;
+    let gs; try { gs = gripsOf(e); } catch (err) { continue; }
+    const m = gs.find(x => x.k === g.k);
+    if (m) out.push({ id: g.id, k: g.k, p: m.p.slice() });
+  }
+  ST.gripHot = out;
+  return out;
+}
+
+/* ---------------- multifunctional grips ----------------
+   Modern AutoCAD gives a grip more than one job: hover it and a small menu
+   offers the alternatives, and Ctrl cycles them without the menu. A polyline
+   vertex can add or remove itself; an arc grip can drive radius or length. */
+function gripMenuItems(e, k) {
+  if (!e) return null;
+  if (e.t === 'pline' || e.t === 'spline') {
+    if (k[0] === 'p') {
+      const items = [{ id: 'stretch', label: 'Stretch Vertex' }, { id: 'addv', label: 'Add Vertex' }];
+      if (e.pts.length > 2) items.push({ id: 'delv', label: 'Remove Vertex' });
+      return items;
+    }
+    if (k[0] === 's') return [{ id: 'stretch', label: 'Stretch' }, { id: 'addv', label: 'Add Vertex' }];
+    return null;
+  }
+  if (e.t === 'line') {
+    if (k === 'a' || k === 'b') return [{ id: 'stretch', label: 'Stretch' }, { id: 'lengthen', label: 'Lengthen' }];
+    return null;
+  }
+  if (e.t === 'arc') {
+    if (k === 's' || k === 'e') return [{ id: 'stretch', label: 'Stretch' }, { id: 'lengthen', label: 'Lengthen' }];
+    if (k === 'r') return [{ id: 'stretch', label: 'Stretch' }, { id: 'radius', label: 'Radius' }];
+    return null;
+  }
+  if (e.t === 'wall' && (k === 'a' || k === 'b'))
+    return [{ id: 'stretch', label: 'Stretch' }, { id: 'lengthen', label: 'Lengthen' }];
   return null;
+}
+/** open the hover menu for a grip; returns it, or null when it has one job */
+function gripMenuOpen(g) {
+  if (!g) { ST.gripMenu = null; return null; }
+  const e = DOC.ents.get(g.id);
+  const items = gripMenuItems(e, g.k);
+  if (!items || items.length < 2) { ST.gripMenu = null; return null; }
+  if (ST.gripMenu && ST.gripMenu.id === g.id && ST.gripMenu.k === g.k) return ST.gripMenu;
+  ST.gripMenu = { id: g.id, k: g.k, p: g.p.slice(), items, idx: 0 };
+  return ST.gripMenu;
+}
+/** Ctrl steps the menu even when it is not on screen */
+function gripMenuCycle(dir) {
+  const m = ST.gripMenu || gripMenuOpen(ST.gripHover);
+  if (!m) return null;
+  const n = m.items.length;
+  m.idx = (((m.idx + (dir || 1)) % n) + n) % n;
+  return m.items[m.idx];
+}
+function gripMenuClose() { ST.gripMenu = null; }
+
+/** structural menu actions happen once, on a LIVE entity inside a journal.
+    Returns the grip key the drag should carry on with, or null when the
+    action finished on its own (Remove Vertex has nothing left to drag). */
+function gripDo(e, k, action) {
+  if (!e || !action || action === 'stretch') return k;
+  if ((e.t === 'pline' || e.t === 'spline') && (action === 'addv' || action === 'delv')) {
+    const n = e.pts.length;
+    const i = +k.slice(1);
+    if (!(i >= 0 && i < n)) return k;
+    mut(e);
+    if (action === 'delv') {
+      if (k[0] !== 'p' || n <= 2) return k;
+      e.pts.splice(i, 1);
+      return null;
+    }
+    /* on the last vertex of an open polyline there is no "next" to halve, so
+       carry the run of the previous segment past the end instead */
+    let q;
+    if (k[0] === 'p' && !e.closed && i === n - 1) {
+      const d = sub(e.pts[i], e.pts[i - 1] || e.pts[i]);
+      q = [e.pts[i][0] + d[0] * .5, e.pts[i][1] + d[1] * .5];
+    } else q = mid(e.pts[i], e.pts[(i + 1) % n]);
+    e.pts.splice(i + 1, 0, q);
+    return 'p' + (i + 1);
+  }
+  return k;
+}
+/** modal menu actions change how the drag is read, not the object */
+function gripEditKey(e, k, action) {
+  if (e && e.t === 'arc') {
+    if (action === 'lengthen') return k === 's' ? 'sL' : k === 'e' ? 'eL' : k;
+    if (action === 'radius') return 'r0';
+  }
+  return k;
+}
+/** Lengthen slides the end along its own direction instead of anywhere */
+function gripConstrain(e, k, action, p, orig) {
+  if (action !== 'lengthen' || !e) return p;
+  const O = orig && orig.t === e.t ? orig : e;
+  if (e.t === 'line' || e.t === 'wall') {
+    const anchor = k === 'a' ? O.b : O.a, moving = k === 'a' ? O.a : O.b;
+    const u = norm(sub(moving, anchor));
+    if (!u[0] && !u[1]) return p;
+    const t = dot(sub(p, anchor), u);
+    return [anchor[0] + u[0] * t, anchor[1] + u[1] * t];
+  }
+  return p;
+}
+
+/* the grip hover dwell — the menu must not flash under a travelling cursor */
+const GRIP_MENU_DWELL = 380;
+let _gripDwellKey = null, _gripDwellT0 = 0;
+function gripHoverUpdate(g, now) {
+  now = now == null ? Date.now() : now;
+  ST.gripHover = g;
+  if (!g) { _gripDwellKey = null; if (ST.gripMenu && !ST.gripMenuPinned) ST.gripMenu = null; return null; }
+  const key = gripKey(g);
+  if (key !== _gripDwellKey) { _gripDwellKey = key; _gripDwellT0 = now; ST.gripMenu = null; return null; }
+  if (now - _gripDwellT0 < GRIP_MENU_DWELL) return null;
+  return gripMenuOpen(g);
 }
 
 /* ---------------- lifecycle hooks ----------------
