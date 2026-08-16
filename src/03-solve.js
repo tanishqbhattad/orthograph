@@ -330,12 +330,15 @@ function dirFrom(P, L, click) {
 function dimStyle() {
   const h = DOC.textH || 2.5;
   const d = DOC.dimStyle || (DOC.dimStyle = {});
+  /* DIMSCALE multiplies every size on a dimension and nothing else, exactly as
+     it does in AutoCAD — the measurement itself is untouched. */
+  const k = DOC.dimScale == null ? 1 : DOC.dimScale;
   return {
-    txt: d.txt || h,
-    arrow: d.arrow || h * 0.8,
-    extOff: d.extOff != null ? d.extOff : h * 0.25,   /* gap from the measured point */
-    extBey: d.extBey != null ? d.extBey : h * 0.7,    /* run past the dimension line */
-    gap: d.gap != null ? d.gap : h * 0.25,
+    txt: (d.txt || h) * k,
+    arrow: (d.arrow || h * 0.8) * k,
+    extOff: (d.extOff != null ? d.extOff : h * 0.25) * k,  /* gap from the measured point */
+    extBey: (d.extBey != null ? d.extBey : h * 0.7) * k,   /* run past the dimension line */
+    gap: (d.gap != null ? d.gap : h * 0.25) * k,
     prec: d.prec != null ? d.prec : null,
   };
 }

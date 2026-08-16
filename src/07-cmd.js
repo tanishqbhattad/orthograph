@@ -9,7 +9,9 @@
    ============================================================ */
 let CMD = null;
 const CMDS = {};
-/** menu grouping: 'draw' | 'modify' | 'annotate' | 'inquiry' | 'arch' */
+/** commands that act at once and have no prompts of their own — see defm() */
+const META = {};
+/** menu grouping: 'draw' | 'modify' | 'annotate' | 'inquiry' | 'arch' | 'view' */
 function defc(key, o) { CMDS[key] = Object.assign({ key, group: 'draw' }, o); }
 
 /* ============================================================
@@ -240,6 +242,10 @@ const CMDNAME = {
      Revit name for the same object. */
   grid: 'COLUMNGRID', wallrect: 'WALLRECT', wallflip: 'WALLFLIP',
   walljoin: 'WALLJOIN', wallsplit: 'WALLSPLIT',
+  /* the settings commands need keys that do not collide with the drawing
+     commands of the same name, so the public name is spelled out here */
+  gridcmd: 'GRID', snapcmd: 'SNAP', orthocmd: 'ORTHO', osnapcmd: 'OSNAP',
+  unitscmd: 'UNITS', layercmd: 'LAYER', undocmd: 'UNDO', aliascmd: 'ALIAS',
 };
 /** public names that drive an existing command with an option already chosen */
 const CMDVARIANT = {
@@ -349,7 +355,7 @@ function kwKey(word) {
 }
 /** put `key` into `label` as the capitalised run AutoCAD would show */
 function kwWord(label, key) {
-  const l = String(label).replace(/<[^>]+>/g, '').trim();
+  const l = String(label).replace(/<\/?[a-zA-Z][^>]*>/g, '').trim();
   if (!l) return String(key).toUpperCase();
   const i = l.toLowerCase().indexOf(String(key).toLowerCase());
   const w = i < 0 ? l : l.slice(0, i) + l.slice(i, i + key.length).toUpperCase() + l.slice(i + key.length);
@@ -369,12 +375,12 @@ function parsePrompt(s) {
   }
   /* legacy: "Next point · <em>C</em> close · <em>Enter</em> end" */
   const parts = raw.split('·');
-  const base = parts.shift().replace(/<[^>]+>/g, '').trim();
+  const base = parts.shift().replace(/<\/?[a-zA-Z][^>]*>/g, '').trim();
   const keys = [], extra = [];
   for (const p of parts) {
     const em = p.match(/<em>([^<]+)<\/em>/);
-    const label = p.replace(/<em>[^<]*<\/em>/, '').replace(/<[^>]+>/g, '').trim();
-    if (!em) { extra.push(p.replace(/<[^>]+>/g, '').trim()); continue; }
+    const label = p.replace(/<em>[^<]*<\/em>/, '').replace(/<\/?[a-zA-Z][^>]*>/g, '').trim();
+    if (!em) { extra.push(p.replace(/<\/?[a-zA-Z][^>]*>/g, '').trim()); continue; }
     const k = em[1].trim();
     /* Enter/Esc/Shift are not keywords, they are keys */
     if (/^(enter|esc|escape|shift|tab|ctrl|del|delete)$/i.test(k)) { extra.push((k + ' ' + label).trim()); continue; }
@@ -503,11 +509,18 @@ function startCmd(key, arg, quiet) {
   if (!quiet && CLI.echo) cliPrint('Command: _' + cmdName(key).toLowerCase());
   const c = { def, pts: [], step: 0, data: {}, arg };
   CMD = c;
-  ST.lastCmd = key;                                /* Space repeats this */
+  ST.lastCmd = key; ST.lastArg = arg;              /* Space repeats this */
   ST.tool = key; ST.drawing = true; ST.preview = null; ST.angOverride = null;
   cliRemember(cmdName(key));
   if (def.needSel && !SEL.size) { c.phase = 'sel'; hint(def.selHint || 'Select objects: · <em>Enter</em> when done'); }
-  else { c.phase = 'run'; if (def.init) def.init(c); if (def.hint && !c.done) hint(def.hint); }
+  else {
+    c.phase = 'run';
+    const before = PROMPT.raw;
+    if (def.init) def.init(c);
+    /* init may have issued its own prompt (SETVAR names the variable) or ended
+       the command outright (EXPLODE); neither should be stamped over */
+    if (def.hint && CMD === c && PROMPT.raw === before) hint(def.hint);
+  }
   syncTools();
   /* the panel shows what is about to be drawn, so it has to follow the tool */
   if (typeof buildProps === 'function') buildProps();
@@ -1121,3 +1134,668 @@ defc('dimcont', {
   },
   preview(c, p) { return c.base ? [pv({ t: 'dim', k: c.base.k, p1: c.base.p2, p2: p, off: c.base.off })] : null; },
 });
+
+/* ============================================================
+   Undo: steps, groups and marks
+   ------------------------------------------------------------
+   `commit()` stamps every patch with a sequence number and, if a
+   group is open, the group it belongs to. That is all UNDO needs
+   to offer AutoCAD's Mark/Back and BEgin/End: a mark is a
+   sequence number, and a group undoes as one operation because
+   its patches all carry the same tag.
+   ============================================================ */
+function undoStep() {
+  if (!HIST.past.length) { cliPrint('Nothing to undo'); return false; }
+  const g = HIST.past[HIST.past.length - 1].grp;
+  undo();
+  if (g) while (HIST.past.length && HIST.past[HIST.past.length - 1].grp === g) undo();
+  return true;
+}
+function redoStep() {
+  if (!HIST.future.length) { cliPrint('Nothing to redo'); return false; }
+  const g = HIST.future[HIST.future.length - 1].grp;
+  redo();
+  if (g) while (HIST.future.length && HIST.future[HIST.future.length - 1].grp === g) redo();
+  return true;
+}
+function undoN(n) {
+  let done = 0;
+  for (let i = 0; i < n; i++) { if (!undoStep()) break; done++; }
+  return done;
+}
+function undoMark() { HIST.marks.push(HIST.seq); cliPrint('Mark placed'); }
+function undoBack() {
+  if (!HIST.marks.length) { cliPrint('No mark has been placed. Use UNDO Mark first.', 'warn'); return 0; }
+  const m = HIST.marks.pop();
+  let n = 0;
+  while (HIST.past.length && HIST.past[HIST.past.length - 1].seq > m) { undo(); n++; }
+  cliPrint(n + ' operation' + (n === 1 ? '' : 's') + ' undone back to the mark');
+  return n;
+}
+function undoGroupBegin() { HIST.group = ++HIST.groupSeq; cliPrint('Group begun'); }
+function undoGroupEnd() { HIST.group = 0; cliPrint('Group ended'); }
+
+/* ============================================================
+   View commands — ZOOM and PAN, both transparent
+   ============================================================ */
+const VHIST = [];                                 /* ZOOM Previous stack */
+function viewPush() {
+  VHIST.push({ z: V.z, px: V.px, py: V.py, rot: V.rot });
+  if (VHIST.length > 20) VHIST.shift();
+}
+function viewPop() {
+  const v = VHIST.pop();
+  if (!v) { cliPrint('No previous view.', 'warn'); return false; }
+  V.z = v.z; V.px = v.px; V.py = v.py; V.rot = v.rot;
+  draw(); if (typeof syncNav === 'function') syncNav();
+  return true;
+}
+function docLimits() { return DOC.limits || [[0, 0], [420000, 297000]]; }
+/** ZOOM All: the limits, or the extents when the drawing spills past them */
+function zoomAll() {
+  const L = docLimits();
+  const b = bboxAll([...DOC.ents.values()].filter(visible));
+  const box = b
+    ? [Math.min(L[0][0], b[0]), Math.min(L[0][1], b[1]), Math.max(L[1][0], b[2]), Math.max(L[1][1], b[3])]
+    : [L[0][0], L[0][1], L[1][0], L[1][1]];
+  fit([{ t: 'line', a: [box[0], box[1]], b: [box[2], box[3]], layer: DOC.cur }]);
+}
+function zoomCenter(p, h) {
+  if (h > 0) V.z = clamp(V.h / h, 1e-6, 20000);
+  const s = w2s(p);
+  V.px += V.w / 2 - s[0]; V.py += V.h / 2 - s[1];
+  draw();
+}
+function zoomWindow(a, b) {
+  const cx = (a[0] + b[0]) / 2, cy = (a[1] + b[1]) / 2;
+  const cr = Math.cos(V.rot), sr = Math.sin(V.rot);
+  const cs = [a, [b[0], a[1]], b, [a[0], b[1]]].map(p => [p[0] * cr - p[1] * sr, p[0] * sr + p[1] * cr]);
+  const xs = cs.map(p => p[0]), ys = cs.map(p => p[1]);
+  const w = Math.max(Math.max(...xs) - Math.min(...xs), 1e-6);
+  const h = Math.max(Math.max(...ys) - Math.min(...ys), 1e-6);
+  V.z = clamp(Math.min(V.w / w, V.h / h), 1e-6, 20000);
+  zoomCenter([cx, cy], 0);
+}
+const ZOOM_PROMPT = 'Specify corner of window, enter a scale factor (nX or nXP), or [All/Center/Dynamic/Extents/Previous/Scale/Window/Object]:';
+defc('zoom', {
+  group: 'view', hint: ZOOM_PROMPT,
+  init(c) {
+    c.pts = []; c.mode = 'win';
+    if (c.arg && c.arg.opt) { if (this.text(c, c.arg.opt)) return; }
+  },
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (k === 'a') { viewPush(); zoomAll(); endCmd(); return true; }
+    if (k === 'e') { viewPush(); fit(); endCmd(); return true; }
+    if (k === 'p') { viewPop(); endCmd(); return true; }
+    if (k === 'o') {
+      if (!SEL.size) { cliPrint('Select objects first, then ZOOM Object.', 'warn'); endCmd(); return true; }
+      viewPush(); fit(selEnts()); endCmd(); return true;
+    }
+    if (k === 'd') { cliPrint('Dynamic zoom is not available; use Window or Extents.', 'warn'); return true; }
+    if (k === 'c') { c.mode = 'cen'; c.pts = []; hint('Specify center point:'); return true; }
+    if (k === 'w') { c.mode = 'win'; c.pts = []; hint('Specify first corner:'); return true; }
+    if (k === 's') { hint('Enter a scale factor (nX or nXP):'); return true; }
+    /* 2x / 0.5x relative to the current view, plain n relative to the limits */
+    const m = k.match(/^(-?[\d.]+)(xp?)?$/);
+    if (m) {
+      const n = parseFloat(m[1]);
+      if (!isFinite(n) || n <= 0) return true;
+      viewPush();
+      if (m[2]) zoomAt(V.w / 2, V.h / 2, n);
+      else {
+        const L = docLimits();
+        const h = Math.max(L[1][1] - L[0][1], 1e-6);
+        zoomCenter(s2w(V.w / 2, V.h / 2), h / n);
+      }
+      endCmd(); return true;
+    }
+    if (c.mode === 'cen' && c.pts.length === 1) {
+      const h = parseLen(s);
+      if (!isNaN(h) && h > 0) { viewPush(); zoomCenter(c.pts[0], h); endCmd(); return true; }
+    }
+    return false;
+  },
+  point(c, p) {
+    c.pts.push(p);
+    if (c.mode === 'cen') {
+      if (c.pts.length === 1) { hint('Enter magnification or height:'); return; }
+      return;
+    }
+    if (c.pts.length === 1) { hint('Specify opposite corner:'); return; }
+    viewPush(); zoomWindow(c.pts[0], p); endCmd();
+  },
+  preview(c, p) {
+    if (c.mode !== 'win' || c.pts.length !== 1) return null;
+    const a = c.pts[0];
+    return [pv({ t: 'pline', pts: [a, [p[0], a[1]], p, [a[0], p[1]]], closed: true, lt: 'dashed' })];
+  },
+  enter() { endCmd(); },
+});
+defc('pan', {
+  group: 'view',
+  hint: 'Press Esc or Enter to exit · drag to pan',
+  init(c) { ST.panMode = true; },
+  done() { ST.panMode = false; },
+  point() { },
+  enter() { endCmd(); },
+});
+
+/* ============================================================
+   Settings commands — the command-line half of the status bar
+   ============================================================ */
+defc('gridcmd', {
+  group: 'view',
+  hint: 'Specify grid spacing(X) or [ON/OFF/Snap]:',
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (k === 'on' || k === 'off') { ST.grid = k === 'on'; syncToggles(); draw(); endCmd(); return true; }
+    if (k === 's') { DOC.gridStep = DOC.snapStep; if (typeof buildDrawSettings === 'function') buildDrawSettings(); draw(); endCmd(); return true; }
+    const v = parseLen(s);
+    if (!isNaN(v) && v > 0) {
+      DOC.gridStep = v; ST.grid = true; syncToggles();
+      if (typeof buildDrawSettings === 'function') buildDrawSettings();
+      draw(); endCmd(); return true;
+    }
+    return false;
+  },
+  point() { },
+  enter() { endCmd(); },
+});
+defc('snapcmd', {
+  group: 'view',
+  hint: 'Specify snap spacing or [ON/OFF]:',
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (k === 'on' || k === 'off') { ST.snapgrid = k === 'on'; syncToggles(); draw(); endCmd(); return true; }
+    const v = parseLen(s);
+    if (!isNaN(v) && v > 0) {
+      DOC.snapStep = v; ST.snapgrid = true; syncToggles();
+      if (typeof buildDrawSettings === 'function') buildDrawSettings();
+      draw(); endCmd(); return true;
+    }
+    return false;
+  },
+  point() { },
+  enter() { endCmd(); },
+});
+defc('orthocmd', {
+  group: 'view',
+  hint: 'Enter mode [ON/OFF]:',
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (k !== 'on' && k !== 'off') return false;
+    ST.ortho = k === 'on'; syncToggles(); draw(); endCmd(); return true;
+  },
+  point() { },
+  enter() { endCmd(); },
+});
+/* -OSNAP takes the same comma list AutoCAD takes: END,MID,CEN or NONE */
+const OSNAP_WORD = {
+  end: 'end', endp: 'end', endpoint: 'end', mid: 'mid', midpoint: 'mid',
+  cen: 'cen', center: 'cen', centre: 'cen', nod: 'node', node: 'node',
+  qua: 'quad', quad: 'quad', quadrant: 'quad', int: 'int', intersection: 'int',
+  per: 'perp', perp: 'perp', perpendicular: 'perp', tan: 'tan', tangent: 'tan',
+  nea: 'near', near: 'near', nearest: 'near', ext: 'ext', extension: 'ext',
+  wcen: 'wcen', wface: 'wface',
+};
+defc('osnapcmd', {
+  group: 'view',
+  hint: 'Enter list of object snap modes:',
+  text(c, s) {
+    const words = String(s).toLowerCase().split(/[,\s]+/).filter(Boolean);
+    if (!words.length) return false;
+    if (words[0] === 'none' || words[0] === 'off') {
+      for (const k of Object.keys(ST.osnapOn)) ST.osnapOn[k] = 0;
+      cliPrint('Running object snaps cleared'); draw(); endCmd(); return true;
+    }
+    const on = [];
+    for (const w of words) { const k = OSNAP_WORD[w]; if (k) on.push(k); }
+    if (!on.length) { cliPrint('Invalid object snap mode.', 'err'); return true; }
+    for (const k of Object.keys(ST.osnapOn)) ST.osnapOn[k] = 0;
+    for (const k of on) ST.osnapOn[k] = 1;
+    ST.osnap = true; syncToggles();
+    cliPrint('Object snap: ' + on.map(k => snapKindLabel(k)).join(', '));
+    draw(); endCmd(); return true;
+  },
+  point() { },
+  enter() { endCmd(); },
+});
+defc('unitscmd', {
+  group: 'view',
+  hint: 'Enter drawing unit [Millimetres/Centimetres/Metres/Inches/Feet]:',
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    const map = { mm: 'mm', m: 'm', c: 'cm', cm: 'cm', me: 'm', i: 'in', in: 'in', f: 'ft', ft: 'ft' };
+    const u = map[k];
+    if (!u) return false;
+    setvar('INSUNITS', { in: 1, ft: 2, mm: 4, cm: 5, m: 6 }[u]);
+    cliPrint('Units: ' + u);
+    endCmd(); return true;
+  },
+  point() { },
+  enter() { endCmd(); },
+});
+defc('limits', {
+  group: 'view',
+  hint: 'Specify lower left corner or [ON/OFF]:',
+  init(c) { c.pts = []; },
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (k === 'on' || k === 'off') { DOC.limCheck = k === 'on'; endCmd(); return true; }
+    return false;
+  },
+  point(c, p) {
+    c.pts.push(p);
+    if (c.pts.length === 1) { hint('Specify upper right corner:'); return; }
+    const [a, b] = c.pts;
+    DOC.limits = [[Math.min(a[0], b[0]), Math.min(a[1], b[1])], [Math.max(a[0], b[0]), Math.max(a[1], b[1])]];
+    cliPrint('Limits ' + fmt(DOC.limits[0][0]) + ',' + fmt(DOC.limits[0][1]) +
+      ' to ' + fmt(DOC.limits[1][0]) + ',' + fmt(DOC.limits[1][1]));
+    endCmd();
+  },
+  preview(c, p) {
+    if (c.pts.length !== 1) return null;
+    const a = c.pts[0];
+    return [pv({ t: 'pline', pts: [a, [p[0], a[1]], p, [a[0], p[1]]], closed: true, lt: 'dashed' })];
+  },
+});
+defc('linetype', {
+  group: 'view',
+  hint: 'Enter linetype name or [?] <BYLAYER>:',
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (k === '?') { cliPrint('Linetypes: BYLAYER, ' + Object.keys(DASH).join(', ')); return true; }
+    if (k === 'bylayer' || DASH[k]) {
+      setvar('CELTYPE', k);
+      cliPrint('Current linetype: ' + getvar('CELTYPE'));
+      endCmd(); return true;
+    }
+    cliPrint('Cannot find linetype "' + s + '".', 'err');
+    return true;
+  },
+  point() { },
+  enter() { endCmd(); },
+});
+defc('lweight', {
+  group: 'view',
+  hint: 'Enter default lineweight in mm or [BYLAYER]:',
+  text(c, s) {
+    if (/^b/i.test(s)) { setvar('CELWEIGHT', -1); cliPrint('Current lineweight: BYLAYER'); endCmd(); return true; }
+    const v = parseFloat(s);
+    if (!isFinite(v)) return false;
+    setvar('CELWEIGHT', v);
+    cliPrint('Current lineweight: ' + getvar('CELWEIGHT'));
+    endCmd(); return true;
+  },
+  point() { },
+  enter() { endCmd(); },
+});
+defc('layercmd', {
+  group: 'view',
+  hint: 'Enter an option [?/Make/Set/New/ON/OFF/Lock/Unlock]:',
+  init(c) { c.op = null; },
+  text(c, s) {
+    const k = String(s).trim();
+    if (!c.op) {
+      const lo = k.toLowerCase();
+      if (lo === '?') { layerReport(); endCmd(); return true; }
+      const ops = { m: 'make', s: 'set', n: 'new', on: 'on', off: 'off', l: 'lock', u: 'unlock' };
+      if (ops[lo]) { c.op = ops[lo]; hint('Enter layer name:'); return true; }
+      return false;
+    }
+    layerOp(c.op, k);
+    endCmd(); return true;
+  },
+  point() { },
+  enter() { endCmd(); },
+});
+function layerReport() {
+  cliPrint('Layers:');
+  for (const l of DOC.layers) {
+    cliPrint('  ' + (l.name === DOC.cur ? '*' : ' ') + ' ' + l.name.padEnd(16) +
+      (l.on ? ' On ' : ' Off') + (l.lock ? ' Locked' : '      ') + '  ' + l.color);
+  }
+}
+function layerOp(op, name) {
+  if (!name) { cliPrint('Enter a layer name.', 'err'); return; }
+  if (op === 'make' || op === 'new') {
+    if (!hasLayer(name)) {
+      begin(); touchLayers(); DOC.layers.push(newLayer(name, '#ffd166'));
+      if (op === 'make') DOC.cur = name;
+      commit('Layer added');
+    } else if (op === 'make') { setvar('CLAYER', name); }
+    if (typeof buildLayers === 'function') buildLayers();
+    cliPrint('Layer "' + name + '"' + (op === 'make' ? ' is current' : ' created'));
+    return;
+  }
+  if (!hasLayer(name)) { cliPrint('Cannot find layer "' + name + '".', 'err'); return; }
+  if (op === 'set') { setvar('CLAYER', name); cliPrint('Current layer: ' + name); return; }
+  const l = layer(name);
+  begin(); touchLayers();
+  if (op === 'on') l.on = true;
+  else if (op === 'off') l.on = false;
+  else if (op === 'lock') l.lock = true;
+  else if (op === 'unlock') l.lock = false;
+  commit('Layer ' + op);
+  if (typeof buildLayers === 'function') buildLayers();
+  draw();
+  cliPrint('Layer "' + name + '" ' + op);
+}
+
+/* ============================================================
+   SETVAR, ALIAS and MULTIPLE
+   ============================================================ */
+defc('setvar', {
+  group: 'inquiry',
+  hint: 'Enter variable name or [?]:',
+  init(c) {
+    c.v = null;
+    if (c.arg && c.arg.name && SYSVAR[c.arg.name]) { c.v = SYSVAR[c.arg.name]; askVar(c); }
+  },
+  text(c, s) {
+    const k = String(s).trim();
+    if (!c.v) {
+      if (k === '?' || k === '*') { varReport('*'); endCmd(); return true; }
+      const v = SYSVAR[k.toUpperCase()];
+      if (!v) {
+        if (/[*?]/.test(k)) { varReport(k); endCmd(); return true; }
+        cliPrint('Unknown variable name "' + k + '".  Type ? for a list.', 'err');
+        return true;
+      }
+      c.v = v; askVar(c); return true;
+    }
+    if (c.v.ro) { cliPrint(c.v.name + ' is read only.', 'warn'); endCmd(); return true; }
+    const val = varParse(c.v, k);
+    if (val === undefined) { cliPrint('Requires a ' + c.v.type + ' value.', 'err'); return true; }
+    c.v.set(val);
+    cliPrint(c.v.name + ' = ' + varStr(c.v));
+    endCmd(); return true;
+  },
+  point() { },
+  enter(c) {
+    if (c.v && !c.v.ro) cliPrint(c.v.name + ' = ' + varStr(c.v) + ' (unchanged)');
+    endCmd();
+  },
+});
+function askVar(c) {
+  const v = c.v;
+  if (v.ro) { cliPrint(v.name + ' = ' + varStr(v) + '  (read only)'); endCmd(); return; }
+  hint('Enter new value for ' + v.name + ' <' + varStr(v) + '>:');
+}
+/** SETVAR ? — the variable table, filtered by a `*` pattern */
+function varReport(pattern) {
+  const rx = new RegExp('^' + String(pattern || '*').replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
+  const names = varNames().filter(n => rx.test(n));
+  if (!names.length) { cliPrint('No variable matches "' + pattern + '".', 'warn'); return; }
+  for (const n of names) {
+    const v = SYSVAR[n];
+    cliPrint('  ' + n.padEnd(18) + varStr(v).padEnd(14) + (v.ro ? '(read only) ' : '') + (v.desc || ''));
+  }
+}
+defc('aliascmd', {
+  group: 'inquiry',
+  hint: 'Enter alias or [?/Delete]:',
+  init(c) { c.a = null; c.del = false; },
+  text(c, s) {
+    const k = String(s).trim();
+    if (!c.a && !c.del) {
+      if (k === '?') { aliasReport(); endCmd(); return true; }
+      if (/^d$/i.test(k)) { c.del = true; hint('Enter alias to delete:'); return true; }
+      if (!/^[A-Za-z0-9]{1,10}$/.test(k)) { cliPrint('An alias is 1–10 letters or digits.', 'err'); return true; }
+      c.a = k.toLowerCase();
+      hint('Enter command name for "' + k.toUpperCase() + '":');
+      return true;
+    }
+    if (c.del) {
+      const a = k.toLowerCase();
+      if (USERALIAS[a]) { delete USERALIAS[a]; cliPrint('Alias ' + k.toUpperCase() + ' deleted'); }
+      else cliPrint('No user alias "' + k.toUpperCase() + '".', 'warn');
+      endCmd(); return true;
+    }
+    const r = resolveWord(k);
+    if (!r || r.kind === 'var') { cliPrint('Unknown command "' + k.toUpperCase() + '".', 'err'); return true; }
+    USERALIAS[c.a] = r.name;
+    cliPrint(c.a.toUpperCase() + ' = ' + r.name);
+    endCmd(); return true;
+  },
+  point() { },
+  enter() { endCmd(); },
+});
+function aliasReport() {
+  const u = Object.keys(USERALIAS).sort();
+  cliPrint('User aliases: ' + (u.length ? u.map(a => a.toUpperCase() + '=' + USERALIAS[a]).join('  ') : '(none)'));
+  const std = Object.keys(ALIAS).sort();
+  cliPrint('Standard aliases (' + std.length + '): ' + std.map(a => a.toUpperCase() + '=' + ALIAS[a]).join('  '));
+}
+defc('multiple', {
+  group: 'view',
+  hint: 'Enter command name to repeat:',
+  text(c, s) {
+    const r = resolveWord(s);
+    if (!r || r.kind !== 'cmd') { cliPrint('Unknown command "' + String(s).toUpperCase() + '".', 'err'); endCmd(); return true; }
+    CLI.multiple = r.key;
+    startCmd(r.key, r.opt, true);
+    if (CLI.echo) cliPrint('Command: ' + r.name);
+    return true;
+  },
+  point() { },
+  enter() { endCmd(); },
+});
+defc('undocmd', {
+  group: 'view',
+  hint: 'Enter the number of operations to undo or [Auto/Control/BEgin/End/Mark/Back] <1>:',
+  init(c) { c.ctl = false; },
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (c.ctl) {
+      if (k === 'a') { HIST.depth = 200; cliPrint('Undo: all'); }
+      else if (k === 'n') { HIST.depth = 0; HIST.past.length = 0; cliPrint('Undo: none'); }
+      else if (k === 'o') { HIST.depth = 1; cliPrint('Undo: one'); }
+      else { cliPrint('Invalid option keyword.', 'err'); return true; }
+      endCmd(); return true;
+    }
+    if (k === 'm') { undoMark(); endCmd(); return true; }
+    if (k === 'b') { undoBack(); endCmd(); return true; }
+    if (k === 'be') { undoGroupBegin(); endCmd(); return true; }
+    if (k === 'e') { undoGroupEnd(); endCmd(); return true; }
+    if (k === 'a') { cliPrint('Undo Auto is always on: one command is one undo step.'); endCmd(); return true; }
+    if (k === 'c') { c.ctl = true; hint('Enter an UNDO control option [All/None/One] <All>:'); return true; }
+    const n = parseInt(k, 10);
+    if (isFinite(n) && n > 0) { cliPrint(undoN(n) + ' operation(s) undone'); endCmd(); return true; }
+    return false;
+  },
+  point() { },
+  enter() { undoStep(); endCmd(); },
+});
+
+/* ============================================================
+   META — commands that act at once and have no prompts
+   ============================================================ */
+function defm(name, fn, o) {
+  META[name.toLowerCase()] = Object.assign({ name: name.toUpperCase(), fn, group: 'view' }, o || {});
+}
+function selectAll() {
+  SEL.clear();
+  for (const e of DOC.ents.values()) if (pickable(e)) SEL.add(e.id);
+  if (typeof syncUI === 'function') syncUI();
+  draw();
+}
+defm('U', () => undoStep());
+defm('REDO', () => redoStep());
+defm('MREDO', () => redoStep());
+defm('REGEN', () => { idxInvalidate(); draw(); cliPrint('Regenerating model.'); });
+defm('REGENALL', () => { idxInvalidate(); draw(); cliPrint('Regenerating model.'); });
+defm('REDRAW', () => draw());
+defm('REDRAWALL', () => draw());
+defm('QSAVE', () => doSave());
+defm('SAVE', () => doSave());
+defm('SAVEAS', () => doExport());
+defm('EXPORT', () => doExport());
+defm('OPEN', () => { const f = $('#fileIn'); if (f) f.click(); });
+defm('NEW', () => doNew());
+defm('HELP', () => showHelp());
+defm('?', () => showHelp());
+defm('OPTIONS', () => toggleDrawPop());
+defm('DSETTINGS', () => toggleDrawPop());
+defm('DIMSTYLE', () => openDimStyle());
+defm('PROPERTIES', () => { const p = $('#panel'); if (p && p.classList) p.classList.add('open'); if (typeof buildProps === 'function') buildProps(); });
+defm('AUDIT', () => runAudit());
+defm('DRAFTING', () => setMode('drafting'));
+defm('ARCHITECTURE', () => setMode('arch'));
+defm('WALLTYPES', () => openTypeManager());
+defm('DWGOUT', () => doSaveDWG());
+defm('POLAR', () => tgl('polar'));
+defm('DYN', () => tgl('dyn'));
+defm('ALL', () => selectAll());
+defm('PURGE', () => {
+  begin(); touchLayers();
+  DOC.layers = DOC.layers.filter(l => l.name === '0' || [...DOC.ents.values()].some(e => e.layer === l.name));
+  if (!DOC.layers.some(l => l.name === DOC.cur)) DOC.cur = '0';
+  commit('Purged unused layers');
+  if (typeof syncUI === 'function') syncUI();
+});
+
+/* Commands that may be run inside another command with a leading apostrophe.
+   AutoCAD's rule: anything that does not change the drawing database. */
+const TRANSPARENT = {
+  zoom: 1, pan: 1, gridcmd: 1, snapcmd: 1, orthocmd: 1, osnapcmd: 1,
+  setvar: 1, layercmd: 1, limits: 1, linetype: 1, lweight: 1, unitscmd: 1,
+};
+
+/* ============================================================
+   The dispatcher — one entry point for everything typed
+   ------------------------------------------------------------
+   Order of interpretation follows AutoCAD: a running command
+   gets first refusal on its own prompt (keyword, then number,
+   then coordinate), and only when nothing is running does a word
+   get to name a command, an alias or a system variable. Typing
+   CIRCLE at "Specify next point:" is an error there too — that
+   is what the leading apostrophe is for.
+   ============================================================ */
+function repeatLast() {
+  if (ST.lastCmd && CMDS[ST.lastCmd]) {
+    if (CLI.echo) cliPrint('Command: ' + cmdName(ST.lastCmd));
+    startCmd(ST.lastCmd, ST.lastArg, true);
+    return true;
+  }
+  if (CLI.history.length) return runInput(CLI.history[CLI.history.length - 1]);
+  return false;
+}
+function runInput(line) {
+  const s = String(line == null ? '' : line).trim();
+  if (!s) {
+    if (CMD) { cliAnswer(''); cmdEnter(); return true; }
+    return repeatLast();
+  }
+  cliAnswer(s);
+  if (s[0] === "'") return runTransparentInput(s.slice(1));
+  return dispatch(s);
+}
+function runTransparentInput(rest) {
+  const words = String(rest).trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return false;
+  const r = resolveWord(words[0]);
+  if (!r) { cliPrint('Unknown command "' + words[0].toUpperCase() + '".  Press F1 for help.', 'err'); return false; }
+  if (r.kind === 'var') return setVarFromWords(r, words);
+  if (r.kind === 'meta') { META[r.key].fn(); return true; }
+  if (!TRANSPARENT[r.key]) {
+    cliPrint('** ' + r.name + ' may not be invoked transparently **', 'err');
+    return false;
+  }
+  startTransparent(r.key, r.opt);
+  for (let i = 1; i < words.length && CMD; i++) runInput(words[i]);
+  return true;
+}
+function setVarFromWords(r, words) {
+  const v = SYSVAR[r.name];
+  if (words.length < 2) {
+    if (CMD) { cliPrint(v.name + ' = ' + varStr(v)); return true; }
+    startCmd('setvar', { name: r.name }, true);
+    return true;
+  }
+  if (v.ro) { cliPrint(v.name + ' = ' + varStr(v) + '  (read only)'); return true; }
+  const val = varParse(v, words.slice(1).join(' '));
+  if (val === undefined) { cliPrint('Requires a ' + v.type + ' value.', 'err'); return false; }
+  v.set(val);
+  cliPrint(v.name + ' = ' + varStr(v));
+  return true;
+}
+function dispatch(s) {
+  const words = s.split(/\s+/).filter(Boolean);
+  const first = words[0];
+  if (CMD) {
+    if (CMD.phase === 'sel') {
+      if (/^all$/i.test(first)) { selectAll(); cliPrint(SEL.size + ' found'); return true; }
+      cliPrint('Invalid selection.', 'err');
+      return false;
+    }
+    if (cmdText(s)) {
+      cmdPreview(ST.cur || [0, 0]);
+      if (typeof syncDyn === 'function') syncDyn();
+      draw(); return true;
+    }
+    cliPrint('Point or option keyword required.', 'err');
+    if (typeof renderPrompt === 'function') renderPrompt();
+    return false;
+  }
+  const r = resolveWord(first);
+  if (!r) { cliPrint('Unknown command "' + first.toUpperCase() + '".  Press F1 for help.', 'err'); return false; }
+  if (r.kind === 'var') return setVarFromWords(r, words);
+  if (r.kind === 'meta') {
+    cliRemember(r.name);
+    try { META[r.key].fn(); } catch (e) { console.error(e); cliPrint('That did not work.', 'err'); }
+    return true;
+  }
+  if (CMDS[r.key].group === 'arch' && typeof MODE !== 'undefined' && MODE !== 'arch') setMode('arch');
+  startCmd(r.key, r.opt, true);
+  /* the rest of the line is fed in as if each word had been Entered, which is
+     how AutoCAD scripts work: LINE 0,0 1000,0 draws a line */
+  for (let i = 1; i < words.length && CMD; i++) runInput(words[i]);
+  return true;
+}
+
+/* ============================================================
+   AutoComplete
+   ------------------------------------------------------------
+   Prefix matches first, then mid-string, and inside each band
+   the commands used most recently come first. Aliases are listed
+   next to the command they expand to, the way AutoCAD's list
+   shows them.
+   ============================================================ */
+function cmdCatalog() {
+  const idx = nameIndex(), out = [];
+  for (const name of Object.keys(idx)) out.push({ name, kind: idx[name].kind, key: idx[name].key });
+  if (CLI.autoComplete & 8) for (const n of varNames()) out.push({ name: n, kind: 'var', key: n });
+  return out;
+}
+/** the alias that expands to `name`, shortest first, for the list hint */
+function aliasFor(name) {
+  let best = null;
+  for (const src of [USERALIAS, ALIAS])
+    for (const a of Object.keys(src))
+      if (src[a] === name && (!best || a.length < best.length)) best = a;
+  return best ? best.toUpperCase() : null;
+}
+function acSuggest(text, limit) {
+  const q = String(text || '').trim().replace(/^[_'-]+/, '').toLowerCase();
+  if (!q) return [];
+  const mid = !!(CLI.autoComplete & 16);
+  const seen = new Set(), out = [];
+  for (const c of cmdCatalog()) {
+    const lo = c.name.toLowerCase();
+    let rank = -1;
+    if (lo.startsWith(q)) rank = 0;
+    else if (mid && lo.indexOf(q) > 0) rank = 2;
+    /* an alias typed in full offers its command straight away */
+    const al = (USERALIAS[q] || ALIAS[q] || '').toUpperCase();
+    if (al && al === c.name) rank = Math.min(rank < 0 ? 9 : rank, 1);
+    if (rank < 0 || seen.has(c.name)) continue;
+    seen.add(c.name);
+    const m = CLI.mru.indexOf(c.name);
+    out.push({ name: c.name, kind: c.kind, key: c.key, alias: aliasFor(c.name), rank, mru: m < 0 ? 999 : m });
+  }
+  out.sort((a, b) => a.rank - b.rank || a.mru - b.mru || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return out.slice(0, limit || 12);
+}

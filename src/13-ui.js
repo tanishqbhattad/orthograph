@@ -118,61 +118,61 @@ const RAILS = {
   drafting: [
     ['Select', [
       ['select', 'Select', 'Esc'], ['qselect', 'Quick select', ''],
-      ['matchprop', 'Match properties', ''],
+      ['matchprop', 'Match properties', 'MA'],
     ]],
     ['Draw', [
-      ['line', 'Line', 'L'], ['pline', 'Polyline', 'P'], ['spline', 'Spline', ''],
-      ['rect', 'Rectangle', 'R'], ['circle', 'Circle', 'C'], ['arc', 'Arc', 'A'],
-      ['ellipse', 'Ellipse', 'E'], ['polygon', 'Polygon', 'G'], ['donut', 'Donut', ''],
-      ['point', 'Point', ''], ['xline', 'Construction line', ''], ['ray', 'Ray', ''],
+      ['line', 'Line', 'L'], ['pline', 'Polyline', 'PL'], ['spline', 'Spline', 'SPL'],
+      ['rect', 'Rectangle', 'REC'], ['circle', 'Circle', 'C'], ['arc', 'Arc', 'A'],
+      ['ellipse', 'Ellipse', 'EL'], ['polygon', 'Polygon', 'POL'], ['donut', 'Donut', 'DO'],
+      ['point', 'Point', 'PO'], ['xline', 'Construction line', 'XL'], ['ray', 'Ray', ''],
       ['revcloud', 'Revision cloud', ''], ['hatch', 'Hatch', 'H'],
     ]],
     ['Annotate', [
-      ['text', 'Single-line text', 'T'], ['mtext', 'Paragraph text', ''],
-      ['leader', 'Leader note', ''], ['dim', 'Dimension', 'D'],
-      ['dimcont', 'Continue dimension', ''],
+      ['text', 'Single-line text', 'DT'], ['mtext', 'Paragraph text', 'MT'],
+      ['leader', 'Leader note', 'LE'], ['dim', 'Dimension', 'DLI'],
+      ['dimcont', 'Continue dimension', 'DCO'],
     ]],
     ['Transform', [
-      ['move', 'Move', 'M'], ['copy', 'Copy', 'K'], ['rotate', 'Rotate', 'O'],
-      ['scale', 'Scale', 'S'], ['mirror', 'Mirror', 'I'], ['offset', 'Offset', 'F'],
-      ['array', 'Array', ''], ['stretch', 'Stretch', ''], ['align', 'Align', ''],
+      ['move', 'Move', 'M'], ['copy', 'Copy', 'CO'], ['rotate', 'Rotate', 'RO'],
+      ['scale', 'Scale', 'SC'], ['mirror', 'Mirror', 'MI'], ['offset', 'Offset', 'O'],
+      ['array', 'Array', 'AR'], ['stretch', 'Stretch', 'S'], ['align', 'Align', 'AL'],
     ]],
     ['Modify', [
-      ['trim', 'Trim', 'X'], ['extend', 'Extend', ''], ['lengthen', 'Lengthen', ''],
-      ['fillet', 'Fillet', 'V'], ['chamfer', 'Chamfer', ''], ['break', 'Break', ''],
-      ['join', 'Join', ''], ['pedit', 'Edit polyline', ''], ['explode', 'Explode', ''],
-      ['divide', 'Divide', ''], ['measure', 'Measure along', ''], ['erase', 'Erase', 'Del'],
+      ['trim', 'Trim', 'TR'], ['extend', 'Extend', 'EX'], ['lengthen', 'Lengthen', 'LEN'],
+      ['fillet', 'Fillet', 'F'], ['chamfer', 'Chamfer', 'CHA'], ['break', 'Break', 'BR'],
+      ['join', 'Join', 'J'], ['pedit', 'Edit polyline', 'PE'], ['explode', 'Explode', 'X'],
+      ['divide', 'Divide', 'DIV'], ['measure', 'Measure along', 'ME'], ['erase', 'Erase', 'E'],
     ]],
     ['Blocks', [
-      ['block', 'Make block', ''], ['insert', 'Insert block', ''],
+      ['block', 'Make block', 'B'], ['insert', 'Insert block', 'I'],
     ]],
     ['Inquiry', [
-      ['dist', 'Distance', ''], ['area', 'Area', ''],
-      ['id', 'Point coordinates', ''], ['list', 'List properties', ''],
+      ['dist', 'Distance', 'DI'], ['area', 'Area', 'AA'],
+      ['id', 'Point coordinates', ''], ['list', 'List properties', 'LI'],
     ]],
   ],
   arch: [
     ['Select', [['select', 'Select', 'Esc']]],
     ['Build', [
-      ['wall', 'Wall', 'W'], ['wallrect', 'Room of walls', ''],
-      ['column', 'Column', ''], ['stair', 'Stair', ''],
+      ['wall', 'Wall', 'W'], ['wallrect', 'Room of walls', 'WR'],
+      ['column', 'Column', 'COL'], ['stair', 'Stair', 'STR'],
     ]],
     ['Openings', [
-      ['door', 'Door', 'D'], ['window', 'Window', 'N'], ['wallflip', 'Flip opening', ''],
+      ['door', 'Door', 'DR'], ['window', 'Window', 'WI'], ['wallflip', 'Flip opening', 'WF'],
     ]],
     ['Wall tools', [
-      ['walljoin', 'Clean up corners', ''], ['wallsplit', 'Split wall', ''],
+      ['walljoin', 'Clean up corners', 'WJ'], ['wallsplit', 'Split wall', 'WS'],
     ]],
     ['Space', [
-      ['room', 'Room / area tag', ''], ['grid', 'Structural grid', ''],
+      ['room', 'Room / area tag', 'RM'], ['grid', 'Structural grid', 'CG'],
     ]],
     ['Transform', [
-      ['move', 'Move', 'M'], ['copy', 'Copy', 'K'], ['rotate', 'Rotate', 'O'],
-      ['mirror', 'Mirror', 'I'], ['array', 'Array', ''], ['erase', 'Erase', 'Del'],
+      ['move', 'Move', 'M'], ['copy', 'Copy', 'CO'], ['rotate', 'Rotate', 'RO'],
+      ['mirror', 'Mirror', 'MI'], ['array', 'Array', 'AR'], ['erase', 'Erase', 'E'],
     ]],
     ['Annotate', [
-      ['dim', 'Dimension', ''], ['text', 'Text', 'T'],
-      ['dist', 'Distance', ''], ['area', 'Area', ''],
+      ['dim', 'Dimension', 'DLI'], ['text', 'Text', 'DT'],
+      ['dist', 'Distance', 'DI'], ['area', 'Area', 'AA'],
     ]],
   ],
 };

@@ -2,7 +2,29 @@
    ORTHOGRAPH — 14 events, command line, files, boot
    ============================================================ */
 function echo(s) { const n = $('#echo'); if (n) n.textContent = s || ''; }
-function hint(h) { const n = $('#hint'); if (!n) return; n.innerHTML = h || ''; n.style.display = h ? '' : 'none'; }
+/** Every command states its prompt through hint(). The engine parses that one
+    string, and the HUD, the keyword list and the command line all render from
+    the parsed form — so a command never has to say the same thing twice. */
+function hint(h) { promptSet(h); }
+/** a keyword with its typed letters marked, the way AutoCAD capitalises them */
+function kwHtml(k) {
+  const w = k.word, i = w.toLowerCase().indexOf(k.key.toLowerCase());
+  if (i < 0) return '<em>' + esc(w) + '</em>';
+  return esc(w.slice(0, i)) + '<em>' + esc(w.slice(i, i + k.key.length)) + '</em>' + esc(w.slice(i + k.key.length));
+}
+function renderPrompt() {
+  const n = $('#hint'); if (!n) return;
+  const p = PROMPT;
+  let h = '';
+  if (p.base || p.keys.length) {
+    h = esc(p.base.replace(/:\s*$/, ''));
+    if (p.keys.length) h += (p.base ? ' or ' : '') + '[' + p.keys.map(kwHtml).join('/') + ']';
+    if (!/[.?!:]$/.test(h)) h += ':';
+    if (p.extra) h += ' · ' + esc(p.extra);
+  }
+  n.innerHTML = h;
+  n.style.display = h ? '' : 'none';
+}
 let _tt;
 function toast(s) {
   const t = $('#toast'); if (!t) return;
@@ -16,46 +38,8 @@ function syncUI() {
   if (r) r.disabled = !HIST.future.length;
 }
 
-/* ---------- command line ---------- */
-const ALIAS = {
-  l: 'line', li: 'line', pl: 'pline', p: 'pline', spl: 'spline', sp: 'spline',
-  rec: 'rect', r: 'rect', rectang: 'rect', rectangle: 'rect',
-  c: 'circle', ci: 'circle', a: 'arc', el: 'ellipse', g: 'polygon', pol: 'polygon', po: 'point',
-  do: 'donut', xl: 'xline', revcloud: 'revcloud', rev: 'revcloud', h: 'hatch', bh: 'hatch',
-  t: 'text', dt: 'text', mt: 'mtext', le: 'leader', lead: 'leader',
-  d: 'dim', di: 'dim', dimlinear: 'dim', dimaligned: 'dim', dli: 'dim', dco: 'dimcont',
-  m: 'move', mv: 'move', k: 'copy', co: 'copy', cp: 'copy', o: 'rotate', ro: 'rotate',
-  s: 'scale', sc: 'scale', i: 'mirror', mi: 'mirror', f: 'offset', off: 'offset',
-  x: 'trim', tr: 'trim', ex: 'extend', len: 'lengthen', v: 'fillet', fil: 'fillet', cha: 'chamfer',
-  ar: 'array', br: 'break', j: 'join', pe: 'pedit', xp: 'explode', exp: 'explode',
-  e: 'erase', del: 'erase', er: 'erase', st: 'stretch', al: 'align',
-  div: 'divide', me: 'measure', ma: 'matchprop', mat: 'matchprop',
-  b: 'block', ins: 'insert', qs: 'qselect', ls: 'list', li2: 'list',
-  di2: 'dist', dis: 'dist', aa: 'area',
-  w: 'wall', wa: 'wall', wr: 'wallrect', dr: 'door', win: 'window', wi: 'window',
-  col: 'column', str: 'stair', rm: 'room', gr: 'grid',
-  wf: 'wallflip', wj: 'walljoin', ws: 'wallsplit',
-};
-const META = {
-  u: undo, undo, redo, z: () => fit(), zoom: () => fit(), ze: () => fit(), zoomextents: () => fit(),
-  all: () => { SEL.clear(); [...DOC.ents.values()].filter(pickable).forEach(e => SEL.add(e.id)); syncUI(); draw(); },
-  qsave: () => doSave(), save: () => doSave(), saveas: () => doExport(), open: () => $('#fileIn').click(),
-  new: () => doNew(), help: showHelp, '?': showHelp,
-  ortho: () => tgl('ortho'), osnap: () => tgl('osnap'), grid: () => tgl('grid'),
-  polar: () => tgl('polar'), snap: () => tgl('snapgrid'), dyn: () => tgl('dyn'),
-  drafting: () => setMode('drafting'), arch: () => setMode('arch'), architecture: () => setMode('arch'),
-  types: openTypeManager, wt: openTypeManager,
-  units: () => toast('Use the unit menu, top right'),
-  dimstyle: openDimStyle, ds: openDimStyle,
-  purge: () => {
-    begin(); touchLayers();
-    DOC.layers = DOC.layers.filter(l => l.name === '0' || [...DOC.ents.values()].some(e => e.layer === l.name));
-    if (!DOC.layers.some(l => l.name === DOC.cur)) DOC.cur = '0';
-    commit('Purged unused layers'); syncUI();
-  },
-  audit: runAudit,
-  dwg: () => doSaveDWG(),
-};
+/* The alias table, the META registry and the dispatcher all live in 07-cmd.js
+   now — one source of truth, so ALIAS agrees with what AutoComplete offers. */
 function openDimStyle() {
   const S = dimStyle();
   modal(`<h3>Dimension style</h3>
@@ -99,31 +83,22 @@ function runAudit() {
   });
 }
 const cmdIn = $('#cmd');
-const HISTC = []; let hi = -1;
+let hi = -1;                                       /* index into CLI.history */
 function focusCmd() { if (cmdIn) cmdIn.focus(); }
-if (cmdIn) cmdIn.addEventListener('keydown', ev => {
-  if (ev.key === 'ArrowUp') { if (hi < HISTC.length - 1) { hi++; cmdIn.value = HISTC[HISTC.length - 1 - hi]; } ev.preventDefault(); }
-  else if (ev.key === 'ArrowDown') { if (hi > 0) { hi--; cmdIn.value = HISTC[HISTC.length - 1 - hi]; } else { hi = -1; cmdIn.value = ''; } ev.preventDefault(); }
-  else if (ev.key === 'Escape') { cmdIn.value = ''; endCmd(); cv.focus(); }
-  else if (ev.key === 'Enter') {
+if (cmdIn && cmdIn.addEventListener) cmdIn.addEventListener('keydown', ev => {
+  const H = CLI.history;
+  if (ev.key === 'ArrowUp') { if (hi < H.length - 1) { hi++; cmdIn.value = H[H.length - 1 - hi]; } ev.preventDefault(); }
+  else if (ev.key === 'ArrowDown') { if (hi > 0) { hi--; cmdIn.value = H[H.length - 1 - hi]; } else { hi = -1; cmdIn.value = ''; } ev.preventDefault(); }
+  else if (ev.key === 'Escape') { cmdIn.value = ''; cancelCmd(); if (cv.focus) cv.focus(); }
+  else if (ev.key === 'Enter' || (ev.key === ' ' && !cmdTakesSpace())) {
     const s = cmdIn.value.trim(); cmdIn.value = '';
-    if (s) { HISTC.push(s); hi = -1; }
+    if (s) { H.push(s); hi = -1; if (H.length > 200) H.shift(); }
     runInput(s); ev.preventDefault();
   }
 });
-function runInput(s) {
-  if (!s) { if (CMD) return cmdEnter(); if (HISTC.length) return runInput(HISTC[HISTC.length - 1]); return; }
-  if (CMD && cmdText(s)) { cmdPreview(ST.cur || [0, 0]); draw(); return; }
-  const k = s.toLowerCase().split(/\s+/)[0];
-  if (META[k]) { META[k](); echo(k.toUpperCase()); return; }
-  const key = ALIAS[k] || k;
-  if (CMDS[key]) {
-    if (CMDS[key].group === 'arch' && MODE !== 'arch') setMode('arch');
-    startCmd(key); echo(CMDS[key].key.toUpperCase()); return;
-  }
-  const p = parseCoord(s, ST.lastPt, ST.cur);
-  if (p && CMD) { cmdPoint(p); return; }
-  echo('Unknown: ' + s);
+/** TEXT and friends read a literal line, so Space must not act as Enter there */
+function cmdTakesSpace() {
+  return !!(CMD && CMD.phase === 'run' && (CMD.def.key === 'text' || CMD.def.key === 'mtext' || CMD.def.key === 'leader'));
 }
 function tgl(k) { ST[k] = !ST[k]; syncToggles(); draw(); echo(k.toUpperCase() + ' ' + (ST[k] ? 'on' : 'off')); }
 function syncToggles() { document.querySelectorAll('.tg').forEach(b => b.classList.toggle('on', !!ST[b.dataset.tg])); }
@@ -334,6 +309,18 @@ function dynRelease() {
 }
 function dynKill() { if (dynEl) { dynEl.remove(); dynEl = null; } dynMode = null; dynRelease(); }
 function dynLocked() { return dynLock.f1 || dynLock.f2; }
+/** the `<45` angle override: lock the angle field so the mouse only sets length */
+function dynLockAngle(degVal) {
+  syncDyn();
+  const f2 = $('#dF2');
+  if (!f2 || dynMode !== 'polar') return false;
+  f2.value = String(deg(rad(degVal)).toFixed(1));
+  dynLock.f2 = true;
+  if (f2.classList) f2.classList.add('act');
+  cmdPreview(dynApply(ST.cur));
+  draw();
+  return true;
+}
 
 /** the point the command should actually use, after any locked field */
 function dynApply(p) {
@@ -430,14 +417,6 @@ function focusDyn() {
   return true;
 }
 
-const KEYS_DRAFT = {
-  l: 'line', p: 'pline', r: 'rect', c: 'circle', a: 'arc', e: 'ellipse', g: 'polygon',
-  t: 'text', d: 'dim', h: 'hatch', m: 'move', k: 'copy', o: 'rotate', s: 'scale',
-  i: 'mirror', f: 'offset', x: 'trim', v: 'fillet',
-};
-const KEYS_ARCH = {
-  w: 'wall', d: 'door', n: 'window', t: 'text', m: 'move', k: 'copy', o: 'rotate', i: 'mirror',
-};
 window.addEventListener('keydown', ev => {
   const tag = document.activeElement && document.activeElement.tagName;
   const inField = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
@@ -446,9 +425,11 @@ window.addEventListener('keydown', ev => {
     if (ST.styleTarget) { ST.styleTarget = null; echo('Cancelled'); buildProps(); return; }
     if ($('#modal').classList.contains('show')) return closeModal();
     if (dynLocked()) { dynRelease(); draw(); return; }
-    dynKill();
-    if (CMD) endCmd(); else { SEL.clear(); syncUI(); }
-    ST.band = null; hint(''); draw(); return;
+    /* One Esc cancels whatever is running — command, transparent command,
+       grip drag, band — and rolls the journal back. A second clears the
+       selection, exactly as AutoCAD does. */
+    if (!cancelCmd()) { SEL.clear(); syncUI(); }
+    ST.band = null; draw(); return;
   }
   if (inField) {
     if (ev.key === 'Enter' && $('#modal').classList.contains('show') && tag !== 'TEXTAREA') {
@@ -458,9 +439,9 @@ window.addEventListener('keydown', ev => {
   }
   const K = ev.key.toLowerCase();
   if (ev.ctrlKey || ev.metaKey) {
-    if (K === 'z') { ev.preventDefault(); ev.shiftKey ? redo() : undo(); }
-    else if (K === 'y') { ev.preventDefault(); redo(); }
-    else if (K === 'a') { ev.preventDefault(); META.all(); }
+    if (K === 'z') { ev.preventDefault(); ev.shiftKey ? redoStep() : undoStep(); }
+    else if (K === 'y') { ev.preventDefault(); redoStep(); }
+    else if (K === 'a') { ev.preventDefault(); selectAll(); }
     else if (K === 's') { ev.preventDefault(); doSave(); }
     else if (K === 'o') { ev.preventDefault(); $('#fileIn').click(); }
     else if (K === 'c') { ev.preventDefault(); doClipCopy(); }
@@ -468,17 +449,16 @@ window.addEventListener('keydown', ev => {
     else if (K === 'd') { ev.preventDefault(); setMode(MODE === 'arch' ? 'drafting' : 'arch'); }
     return;
   }
-  if (ev.key === 'Enter') { ev.preventDefault(); if (CMD) cmdEnter(); else focusCmd(); return; }
+  /* Enter and Space both mean "again" at the Command prompt, and "done" inside
+     a command — the two keys a draughtsman's left hand never leaves. */
+  if (ev.key === 'Enter' || ev.key === ' ') {
+    ev.preventDefault();
+    if (CMD) return cmdEnter();
+    repeatLast(); return;
+  }
   if (ev.key === 'Delete' || ev.key === 'Backspace') {
     ev.preventDefault();
     if (SEL.size) { begin(); selEnts().forEach(e => eraseEnt(e.id)); commit('Erase'); draw(); syncUI(); }
-    return;
-  }
-  if (ev.key === ' ') {
-    ev.preventDefault();
-    if (CMD) return cmdEnter();
-    if (ST.lastCmd && CMDS[ST.lastCmd]) { startCmd(ST.lastCmd); echo(ST.lastCmd.toUpperCase()); return; }
-    if (HISTC.length) runInput(HISTC[HISTC.length - 1]);
     return;
   }
   if (ev.key === 'F8') { ev.preventDefault(); return tgl('ortho'); }
@@ -486,24 +466,19 @@ window.addEventListener('keydown', ev => {
   if (ev.key === 'F3') { ev.preventDefault(); return tgl('osnap'); }
   if (ev.key === 'F7') { ev.preventDefault(); return tgl('grid'); }
   if (ev.key === 'F10') { ev.preventDefault(); return tgl('polar'); }
-  if (/^[0-9.@\-]$/.test(ev.key) && CMD) { if (!focusDyn()) focusCmd(); return; }
-  /* A letter typed while a command is running belongs to that command — the
-     on-screen prompt says "C to close", so C must close, not start CIRCLE.
-     Only if the running command has no use for the key does it fall through
-     to starting a tool. */
-  if (CMD && CMD.phase === 'run' && /^[a-z]$/.test(K) && !ev.repeat) {
-    let taken = false;
-    try { taken = !!cmdText(K); } catch (e) { taken = false; }
-    if (taken) {
-      ev.preventDefault();
-      cmdPreview(ST.cur || [0, 0]);
-      syncDyn(); draw();
-      return;
-    }
+  if (ev.key === 'F12') { ev.preventDefault(); return tgl('dyn'); }
+  /* Numbers and coordinate punctuation go to the dynamic input at the cursor;
+     everything else goes to the command line. There are no instant one-key
+     tools, because there are none in AutoCAD: you type L and press Enter. */
+  if (/^[0-9.@#\-]$/.test(ev.key) && CMD && ST.dyn && focusDyn()) return;
+  if (ev.key.length === 1 && !ev.altKey) {
+    /* the character is appended here rather than left to the browser: focus
+       moves during this keydown, and the keypress that follows would otherwise
+       still be delivered to the canvas */
+    ev.preventDefault();
+    if (cmdIn) { cmdIn.value += ev.key; focusCmd(); }
+    return;
   }
-  const map = MODE === 'arch' ? KEYS_ARCH : KEYS_DRAFT;
-  if (map[K] && !ev.repeat) { ev.preventDefault(); startCmd(map[K]); return; }
-  if (K === 'q') { ev.preventDefault(); fit(); }
 });
 window.addEventListener('keyup', ev => { if (ev.key === 'Shift') ST.shift = false; });
 window.addEventListener('keydown', ev => { if (ev.key === 'Shift') ST.shift = true; });
@@ -675,7 +650,9 @@ function boot() {
   }).observe(stage);
   resize(); fit(); syncUI(); syncToggles(); syncCoord();
   if (window.innerWidth <= 860) $('#mPanel').style.display = '';
-  hint('Press <em>?</em> for the shortcut list · <em>Ctrl+D</em> swaps Drafting and Architecture');
+  /* plain text on purpose: hint() parses bracketed and <em> markup as command
+     keywords, and the welcome banner is not a prompt */
+  hint('Type ? for the shortcut list. Ctrl+D swaps Drafting and Architecture.');
   setTimeout(() => hint(''), 7000);
   echo('Ready');
 }

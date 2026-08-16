@@ -79,7 +79,19 @@ function fit(list) {
 const DASH = {
   solid: [], dashed: [12, 7], hidden: [7, 5], center: [22, 6, 6, 6], dashdot: [16, 5, 2, 5],
 };
-function dashFor(lt) { return DASH[lt] || DASH.solid; }
+/* LTSCALE stretches every pattern. The scaled arrays are memoised per scale so
+   the hot loop still hands out one shared array per linetype. */
+const _dashLt = new Map();
+let _dashLtScale = 1;
+function dashFor(lt) {
+  const base = DASH[lt] || DASH.solid;
+  const s = DOC.ltScale == null ? 1 : DOC.ltScale;
+  if (s === 1 || !base.length) return base;
+  if (s !== _dashLtScale) { _dashLt.clear(); _dashLtScale = s; }
+  let out = _dashLt.get(lt);
+  if (!out) { out = base.map(v => v * s); _dashLt.set(lt, out); }
+  return out;
+}
 
 /* ---- per-frame layer resolution ----
    layer() is a linear find over DOC.layers and the renderer asks for colour,
