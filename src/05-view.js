@@ -496,39 +496,189 @@ function drawGrips() {
     }
   }
 }
-/* ---- snap marker ---- */
+/* ============================================================
+   AutoSnap markers
+   ------------------------------------------------------------
+   Every osnap mode gets its own glyph, drawn the way AutoCAD draws it:
+   screen-aligned (so it stays square however the view is rotated), hollow
+   (so it never hides the point it is marking) and pixel-snapped, so it is
+   the same crisp shape at any zoom and any devicePixelRatio instead of a
+   grey smear that shimmers as the cursor moves.
+
+   Each function is handed a centre already aligned to the device pixel grid
+   and a radius that is a whole number of device pixels.
+   ============================================================ */
 const SNAP_GLYPH = {
-  end: (x, y, r) => ctx.strokeRect(x - r, y - r, r * 2, r * 2),
+  /* square */
+  end: (x, y, r) => { ctx.beginPath(); ctx.rect(x - r, y - r, r * 2, r * 2); ctx.stroke(); },
+  /* triangle */
   mid: (x, y, r) => { ctx.beginPath(); ctx.moveTo(x - r, y + r); ctx.lineTo(x, y - r); ctx.lineTo(x + r, y + r); ctx.closePath(); ctx.stroke(); },
+  /* circle */
   cen: (x, y, r) => { ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.stroke(); },
-  quad: (x, y, r) => { ctx.beginPath(); ctx.moveTo(x, y - r * 1.3); ctx.lineTo(x + r * 1.3, y); ctx.lineTo(x, y + r * 1.3); ctx.lineTo(x - r * 1.3, y); ctx.closePath(); ctx.stroke(); },
+  /* circle inside a triangle — centre of area rather than centre of a curve */
+  gcen: (x, y, r) => {
+    ctx.beginPath(); ctx.moveTo(x - r * 1.2, y + r * .85); ctx.lineTo(x, y - r * 1.2); ctx.lineTo(x + r * 1.2, y + r * .85); ctx.closePath(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y + r * .1, r * .42, 0, TAU); ctx.stroke();
+  },
+  /* circle with an X through it */
+  node: (x, y, r) => {
+    ctx.beginPath(); ctx.arc(x, y, r * .92, 0, TAU); ctx.stroke();
+    const d = r * .65;
+    ctx.beginPath(); ctx.moveTo(x - d, y - d); ctx.lineTo(x + d, y + d); ctx.moveTo(x + d, y - d); ctx.lineTo(x - d, y + d); ctx.stroke();
+  },
+  /* diamond */
+  quad: (x, y, r) => { const q = Math.round(r * 1.25); ctx.beginPath(); ctx.moveTo(x, y - q); ctx.lineTo(x + q, y); ctx.lineTo(x, y + q); ctx.lineTo(x - q, y); ctx.closePath(); ctx.stroke(); },
+  /* X */
   int: (x, y, r) => { ctx.beginPath(); ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r); ctx.moveTo(x + r, y - r); ctx.lineTo(x - r, y + r); ctx.stroke(); },
-  perp: (x, y, r) => { ctx.beginPath(); ctx.moveTo(x - r, y - r); ctx.lineTo(x - r, y + r); ctx.lineTo(x + r, y + r); ctx.moveTo(x - r, y); ctx.lineTo(x, y); ctx.lineTo(x, y + r); ctx.stroke(); },
-  tan: (x, y, r) => { ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.moveTo(x - r * 1.4, y - r); ctx.lineTo(x + r * 1.4, y - r); ctx.stroke(); },
-  near: (x, y, r) => { ctx.beginPath(); ctx.moveTo(x - r, y + r); ctx.lineTo(x + r, y - r); ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r); ctx.stroke(); },
+  /* X boxed: the objects only appear to cross, so the mark is qualified */
+  appint: (x, y, r) => {
+    const d = Math.round(r * .72);
+    ctx.beginPath(); ctx.moveTo(x - d, y - d); ctx.lineTo(x + d, y + d); ctx.moveTo(x + d, y - d); ctx.lineTo(x - d, y + d); ctx.stroke();
+    ctx.beginPath(); ctx.rect(x - r, y - r, r * 2, r * 2); ctx.stroke();
+  },
+  /* three dots, matching the dotted extension path they sit on */
+  ext: (x, y, r) => {
+    const d = Math.max(1, Math.round(r * .22));
+    for (const o of [-r * .85, 0, r * .85]) { ctx.beginPath(); ctx.arc(x + o, y, d, 0, TAU); ctx.stroke(); }
+  },
+  /* two squares, offset the way a block sits on its insertion point */
+  ins: (x, y, r) => {
+    const s = Math.round(r * 1.15), o = Math.round(r * .45);
+    ctx.beginPath(); ctx.rect(x - s + o, y - s + o, s * 1.35, s * 1.35); ctx.stroke();
+    ctx.beginPath(); ctx.rect(x - s - o + s * .35, y - s - o + s * .35, s * 1.35, s * 1.35); ctx.stroke();
+  },
+  /* right angle */
+  perp: (x, y, r) => {
+    ctx.beginPath(); ctx.moveTo(x - r, y - r); ctx.lineTo(x - r, y + r); ctx.lineTo(x + r, y + r); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - r, y); ctx.lineTo(x, y); ctx.lineTo(x, y + r); ctx.stroke();
+  },
+  /* circle with its tangent drawn across the top */
+  tan: (x, y, r) => {
+    ctx.beginPath(); ctx.arc(x, y + r * .18, r * .85, 0, TAU); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - r * 1.15, y - r * .8); ctx.lineTo(x + r * 1.15, y - r * .8); ctx.stroke();
+  },
+  /* hourglass */
+  near: (x, y, r) => {
+    ctx.beginPath();
+    ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y - r); ctx.lineTo(x - r, y + r); ctx.lineTo(x + r, y + r);
+    ctx.closePath(); ctx.stroke();
+  },
+  /* two parallel strokes */
+  par: (x, y, r) => {
+    ctx.beginPath();
+    ctx.moveTo(x - r, y + r); ctx.lineTo(x, y - r);
+    ctx.moveTo(x, y + r); ctx.lineTo(x + r, y - r);
+    ctx.stroke();
+  },
+  /* tracking: a fine cross, so the alignment paths stay readable through it */
+  track: (x, y, r) => { ctx.beginPath(); ctx.moveTo(x - r, y); ctx.lineTo(x + r, y); ctx.moveTo(x, y - r); ctx.lineTo(x, y + r); ctx.stroke(); },
   grid: (x, y, r) => { ctx.beginPath(); ctx.moveTo(x - r, y); ctx.lineTo(x + r, y); ctx.moveTo(x, y - r); ctx.lineTo(x, y + r); ctx.stroke(); },
-  ext: (x, y, r) => { ctx.beginPath(); ctx.moveTo(x - r, y); ctx.lineTo(x + r, y); ctx.moveTo(x, y - r); ctx.lineTo(x, y + r); ctx.stroke(); },
-  node: (x, y, r) => { ctx.beginPath(); ctx.arc(x, y, r * .8, 0, TAU); ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r); ctx.stroke(); },
-  wall: (x, y, r) => { ctx.strokeRect(x - r, y - r * .6, r * 2, r * 1.2); },
+  /* the two Orthograph-only modes read as a wall band */
+  wcen: (x, y, r) => {
+    ctx.beginPath(); ctx.rect(x - r, y - Math.round(r * .6), r * 2, Math.round(r * .6) * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - r, y); ctx.lineTo(x + r, y); ctx.stroke();
+  },
+  wface: (x, y, r) => {
+    ctx.beginPath(); ctx.rect(x - r, y - Math.round(r * .6), r * 2, Math.round(r * .6) * 2); ctx.stroke();
+  },
 };
-/* snap glyphs are screen-aligned, exactly as AutoCAD draws them: the marker
-   stays square no matter how the view is rotated */
+SNAP_GLYPH.perpx = SNAP_GLYPH.perp;
+SNAP_GLYPH.tanx = SNAP_GLYPH.tan;
+SNAP_GLYPH.trackx = SNAP_GLYPH.int;
+SNAP_GLYPH.wall = SNAP_GLYPH.wface;
+
+/** round a CSS-pixel coordinate onto the device pixel grid.
+    An odd-width stroke is only crisp when its centre line falls on a device
+    half-pixel; an even one wants a whole pixel. */
+function devSnap(v, lwDev) { const d = V.dpr || 1; return (Math.round(v * d) + ((lwDev % 2) ? 0.5 : 0)) / d; }
+function devRound(v) { const d = V.dpr || 1; return Math.round(v * d) / d; }
+/** the marker stroke width, forced to a whole number of device pixels */
+function markerLW() { const d = V.dpr || 1; return Math.max(1, Math.round(1.5 * d)) / d; }
+
 function drawSnap() {
   const s = ST.snap; if (!s) return;
   const p = w2s(s.p);
   if (!isFinite(p[0]) || !isFinite(p[1])) return;
-  ctx.strokeStyle = CO.snap; ctx.lineWidth = 1.6; ctx.setLineDash(DASH.solid);
-  (SNAP_GLYPH[s.k] || SNAP_GLYPH.near)(p[0], p[1], 6);
-  ctx.fillStyle = CO.snap; ctx.font = "500 9.5px 'JetBrains Mono',monospace";
-  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.fillText(s.k.toUpperCase(), p[0] + 10, p[1] + 8);
+  const d = V.dpr || 1;
+  const lw = markerLW(), lwDev = Math.round(lw * d);
+  const x = devSnap(p[0], lwDev), y = devSnap(p[1], lwDev);
+  const r = Math.max(3, devRound(clamp(+ST.markerSize || 6, 2, 20)));
+  const g = SNAP_GLYPH[s.k] || SNAP_GLYPH.near;
+  ctx.save();
+  ctx.setLineDash(DASH.solid);
+  ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
+  /* a dark backing stroke keeps the glyph readable over bright geometry
+     without ever filling it in */
+  ctx.strokeStyle = CO.bg + 'c0'; ctx.lineWidth = lw + 2 / d;
+  g(x, y, r);
+  ctx.strokeStyle = CO.snap; ctx.lineWidth = lw;
+  g(x, y, r);
+  ctx.restore();
+  if (ST.snapTip) drawSnapTip(x, y, r, ST.snapTip);
 }
+/** the AutoSnap tooltip: a small boxed label that names the mode, flipped
+    back inside the viewport when the cursor is near an edge */
+function drawSnapTip(x, y, r, text) {
+  ctx.save();
+  ctx.font = "500 11px 'JetBrains Mono',ui-monospace,monospace";
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  let w = 60;
+  try { w = ctx.measureText(text).width; } catch (e) { }
+  const padX = 6, h = 18, bw = w + padX * 2, gap = r + 6;
+  let tx = x + gap, ty = y + gap;
+  if (tx + bw > V.w - 2) tx = x - gap - bw;
+  if (ty + h > V.h - 2) ty = y - gap - h;
+  tx = devRound(Math.max(2, tx)); ty = devRound(Math.max(2, ty));
+  ctx.beginPath();
+  roundRectPath(tx, ty, bw, h, 3);
+  ctx.fillStyle = '#0b0e14ee'; ctx.fill();
+  ctx.strokeStyle = CO.snap + '66'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = CO.snap;
+  ctx.fillText(text, tx + padX, ty + h / 2 + 0.5);
+  ctx.restore();
+}
+function roundRectPath(x, y, w, h, r) {
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+/* ---- alignment paths ----
+   Every entry is a polyline in world space, so an arc extension can hand over
+   a curved path and a polar vector a straight one. */
 function drawTracks() {
   if (!ST.tracks || !ST.tracks.length) return;
-  ctx.save(); ctx.strokeStyle = CO.snap + '55'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+  ctx.save();
+  ctx.strokeStyle = CO.snap + '66'; ctx.lineWidth = 1;
+  ctx.setLineDash([2, 3]); ctx.lineCap = 'butt';
   ctx.beginPath();
   rotCS();
-  for (const t of ST.tracks) { w2sI(t[0]); ctx.moveTo(_sx, _sy); w2sI(t[1]); ctx.lineTo(_sx, _sy); }
+  for (const t of ST.tracks) {
+    if (!t || t.length < 2) continue;
+    w2sI(t[0]); ctx.moveTo(_sx, _sy);
+    for (let i = 1; i < t.length; i++) { w2sI(t[i]); ctx.lineTo(_sx, _sy); }
+  }
+  ctx.stroke(); ctx.restore();
+}
+/** the small marker AutoCAD leaves on every acquired tracking point */
+function drawTrackPts() {
+  const pts = ST.trackPts;
+  if (!ST.otrack || !pts || !pts.length) return;
+  const d = V.dpr || 1, lwDev = Math.max(1, Math.round(1.4 * d));
+  ctx.save();
+  ctx.setLineDash(DASH.solid);
+  ctx.strokeStyle = CO.snap + 'cc'; ctx.lineWidth = lwDev / d; ctx.lineCap = 'butt';
+  const a = devRound(4);
+  ctx.beginPath();
+  for (const q of pts) {
+    const s = w2s(q.p);
+    if (!isFinite(s[0]) || !isFinite(s[1])) continue;
+    const x = devSnap(s[0], lwDev), y = devSnap(s[1], lwDev);
+    ctx.moveTo(x - a, y); ctx.lineTo(x + a, y);
+    ctx.moveTo(x, y - a); ctx.lineTo(x, y + a);
+  }
   ctx.stroke(); ctx.restore();
 }
 /* ---- crosshair ----
@@ -554,6 +704,14 @@ function drawCursor() {
     ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm);
   }
   ctx.stroke();
+  /* APBOX: the osnap aperture, shown at a point prompt when it is asked for.
+     It is a different box from the pick box — one is what will be snapped to,
+     the other what will be selected — so they are never drawn together. */
+  if (ST.apBox && typeof showPickBox === 'function' && !showPickBox()) {
+    const a = Math.round(clamp(+ST.aperture || 10, 1, 50));
+    ctx.strokeStyle = CO.snap + '80';
+    ctx.strokeRect(x - a, y - a, a * 2, a * 2);
+  }
   if (typeof showPickBox === 'function' && !showPickBox()) return;
   const b = Math.max(2, +ST.pickBox || 8);
   ctx.strokeStyle = '#ffffff70';
@@ -602,6 +760,7 @@ function paint() {
   if (SEL.size) for (const id of SEL) { const e = DOC.ents.get(id); if (e && fvis(e)) drawEntHL(e, 'sel'); }
   if (ST.preview) for (const e of ST.preview) drawEnt(e, 'prev');
   drawGrips();
+  drawTrackPts();
   drawTracks();
   drawBand();
   drawSnap();

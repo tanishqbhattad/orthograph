@@ -221,7 +221,7 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
   min-width:168px;flex:none;letter-spacing:-.01em}
 #coord b{color:var(--tx2);font-weight:400}
 .tgs{display:flex;align-items:center;gap:3px;flex:none}
-.tg{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;padding:3px 7px;
+.tg{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;padding:3px 6px;
   border-radius:4px;border:1px solid var(--bd);color:var(--tx2);flex:none;height:21px}
 .tg:hover{border-color:var(--bd2);color:var(--tx1)}
 .tg.on{background:var(--amber);border-color:var(--amber);color:#141821}
@@ -295,11 +295,40 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
   border-radius:8px;padding:5px;min-width:186px;box-shadow:0 12px 34px #000a}
 .snapmenu .smh{font-family:var(--mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;
   color:var(--tx2);padding:5px 8px 6px}
-.snapmenu .smi{display:flex;align-items:center;gap:7px;width:100%;text-align:left;
-  padding:5px 8px;border-radius:5px;font-size:12px;color:var(--tx0)}
+.snapmenu .smi{display:flex;align-items:center;gap:8px;width:100%;text-align:left;
+  padding:4px 8px;border-radius:5px;font-size:12px;color:var(--tx0)}
 .snapmenu .smi:hover{background:var(--bg3)}
 .snapmenu .smx{width:11px;color:var(--amber);font-size:11px}
+.snapmenu .smg{width:20px;height:20px;flex:none;display:block}
+.snapmenu .smt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .snapmenu .smsep{height:1px;background:var(--bd);margin:5px 4px}
+
+/* ---------------- drafting settings dialog ---------------- */
+.dstabs{display:flex;gap:2px;margin:2px 0 12px;border-bottom:1px solid var(--bd)}
+.dstab{font-size:11.5px;padding:6px 11px;color:var(--tx2);border-bottom:2px solid transparent;
+  margin-bottom:-1px;border-radius:5px 5px 0 0}
+.dstab:hover{color:var(--tx0);background:var(--bg2)}
+.dstab.on{color:var(--amber);border-bottom-color:var(--amber)}
+.osgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px;margin:2px 0 6px}
+.osr{display:flex;align-items:center;gap:7px;padding:3px 4px;border-radius:5px;cursor:pointer}
+.osr:hover{background:var(--bg2)}
+.osr input{width:13px;height:13px;flex:none;accent-color:var(--amber);cursor:pointer}
+.osr .smg{width:20px;height:20px;flex:none;display:block}
+.osr span{font-size:11.5px;color:var(--tx0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.osr.ext span{color:var(--tx1)}
+.oshead{display:flex;align-items:baseline;gap:10px}
+.oshead .grp2{flex:1;font-family:var(--mono);font-size:8.5px;font-weight:500;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--tx2)}
+.oshead .lnk{font-size:11px;color:var(--amber);padding:2px 4px;border-radius:4px}
+.oshead .lnk:hover{background:var(--bg2)}
+.oshint{margin-top:12px;padding:8px 10px;border-radius:6px;background:var(--bg2);
+  border:1px solid var(--bd);font-size:11px;color:var(--tx1);line-height:1.6}
+.pang{display:flex;flex-wrap:wrap;gap:4px;margin:2px 0 4px;align-items:center}
+.pangb{font-family:var(--mono);font-size:10.5px;padding:3px 8px;border-radius:4px;
+  border:1px solid var(--bd);color:var(--tx1);height:22px}
+.pangb:hover{border-color:var(--bd2);color:var(--tx0)}
+.pangb.on{background:var(--amber);border-color:var(--amber);color:#141821}
+.pnone{font-size:11px;color:var(--tx2);padding:0 2px}
 #toast{position:fixed;bottom:74px;left:50%;transform:translateX(-50%) translateY(8px);
   background:#000;border:1px solid var(--bd2);border-radius:6px;padding:8px 14px;
   font-size:12px;opacity:0;pointer-events:none;transition:.18s;z-index:250}
@@ -401,12 +430,13 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
     <div id="status">
       <span id="coord"></span>
       <div class="tgs">
-        <button class="tg" data-tg="osnap">OSNAP</button>
-        <button class="tg" data-tg="grid">GRID</button>
-        <button class="tg" data-tg="snapgrid">SNAP</button>
-        <button class="tg" data-tg="ortho">ORTHO</button>
-        <button class="tg" data-tg="polar">POLAR</button>
-        <button class="tg" data-tg="dyn">DYN</button>
+        <button class="tg" data-tg="osnap" data-key="F3" data-set="osnap">OSNAP</button>
+        <button class="tg" data-tg="grid" data-key="F7">GRID</button>
+        <button class="tg" data-tg="snapgrid" data-key="F9" data-set="snap">SNAP</button>
+        <button class="tg" data-tg="ortho" data-key="F8">ORTHO</button>
+        <button class="tg" data-tg="polar" data-key="F10" data-set="polar">POLAR</button>
+        <button class="tg" data-tg="otrack" data-key="F11" data-set="otrack">OTRACK</button>
+        <button class="tg" data-tg="dyn" data-key="F12">DYN</button>
       </div>
       <div class="grow"></div>
       <div id="dset"></div>

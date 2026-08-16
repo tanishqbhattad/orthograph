@@ -12,8 +12,11 @@ const SETUP = `
   DOC.gridStep = 100; DOC.snapStep = 100;
   V.w = 1200; V.h = 800; V.z = 1; V.px = 0; V.py = 800; V.rot = 0;
   ST.osnap = true; ST.ortho = false; ST.polar = true; ST.snapgrid = false;
+  ST.otrack = true; ST.trackPolar = true; ST.polarRel = false; ST.polarExtra.length = 0;
   ST.polarInc = 45; ST.snapCycle = 0; ST.snapScr = null;
-  ST.trackPts.length = 0; ST.snapCands = null; ST.snap = null;
+  ST.aperture = 10; ST.markerSize = 6; ST.apBox = false;
+  ST.trackPts.length = 0; ST.parRefs.length = 0; ST.snapCands = null; ST.snap = null;
+  ST.osnapOne = null; ST.osnapOneShot = false; ST.ptMod = null; ST.fromBase = null;
   toggleSnap('all');
 `;
 /* snap at a world point (converted through w2s, so it works at any view angle) */
@@ -407,7 +410,9 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
 
   t('snapMenuItems lists every kind with a label and a state', () => {
     const r = R(`${SETUP} return snapMenuItems();`);
-    eq(r.length, 12);
+    /* the mode set grows; what must hold is that every listed mode is
+       complete and switched on after toggleSnap('all') */
+    ok(r.length >= 14, 'expected the full AutoCAD mode set, got ' + r.length);
     for (const it of r) {
       ok(typeof it.kind === 'string' && it.kind.length, 'kind');
       ok(typeof it.label === 'string' && it.label.length, 'label for ' + it.kind);
@@ -436,8 +441,8 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       const off = snapMenuItems().filter(i => i.on).length;
       toggleSnap('all');
       const on = snapMenuItems().filter(i => i.on).length;
-      return [off, on, toggleSnap('nonsense')];`);
-    eq(r[0], 0); eq(r[1], 12); eq(r[2], false);
+      return [off, on, toggleSnap('nonsense'), snapMenuItems().length];`);
+    eq(r[0], 0); eq(r[1], r[3]); eq(r[2], false);
   });
 
   t('with every snap off the cursor is never pulled anywhere', () => {
