@@ -50,6 +50,7 @@ const ST = {
   snapTip: null,          /* the AutoSnap tooltip string for this cursor position */
   lastCmd: null,          /* for Space = repeat */
   trackPts: [],           /* acquired points for snap tracking: {p,k} */
+  extPts: [],             /* acquired ends for the extension snap: {id,i}  */
   parRefs: [],            /* acquired directions for the parallel snap: {u,a} */
   fromBase: null,         /* FROM: the base point an offset is measured from */
   ptMod: null,            /* a point modifier collecting its own points */
@@ -243,7 +244,7 @@ function releaseTrack(p) {
   return false;
 }
 function clearTracks() {
-  ST.trackPts.length = 0; ST.parRefs.length = 0; ST.tracks = null;
+  ST.trackPts.length = 0; ST.parRefs.length = 0; ST.extPts.length = 0; ST.tracks = null;
   _dwellPt = null; _dwellUsed = false; _parEnt = null; _parUsed = false;
 }
 /** hovering a snap point for TRACK_DWELL_MS acquires it; hovering an already
@@ -931,8 +932,11 @@ function extEnds(e) {
 }
 /** hovering an end remembers it, so the extension survives moving away */
 function acquireExt(hits, raw, r) {
-  for (const h of hits) {
-    const e = h.e;
+  /* hits are distance-sorted, so only the handful nearest the cursor can
+     possibly have an end inside the aperture — scanning the rest is pure cost
+     on a drawing with hundreds of walls under the pointer */
+  for (let i = 0; i < hits.length && i < 6; i++) {
+    const e = hits[i].e;
     if (!EXT_TYPES[e.t] || e.id == null) continue;
     const ends = extEnds(e);
     for (let i = 0; i < 2; i++) {
