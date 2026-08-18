@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Orthograph — browser CAD</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg0:#0e1116; --bg1:#151a21; --bg2:#1c222b; --bg3:#242c37;
+  --bd:#28313d; --bd2:#394453;
+  --tx0:#dbe2ea; --tx1:#8d9aab; --tx2:#5c6878;
+  --amber:#ffd166; --mint:#4ee6a8; --steel:#6ba8ff; --rose:#ff6b81;
+  --ui:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --top:46px; --right:276px; --bot:60px;
+  /* tool rail metrics — mirrored by RAIL_LAYOUT in 13-ui.js.
+     The rail is a fixed 3-column grid and never scrolls: see railMetrics(). */
+  --tool:26px; --tgap:3px; --rpad:6px; --rhead:14px; --rgap:4px;
+  --rail:96px;                     /* 3*26 + 2*3 + 2*6 */
+}
+/* ---- light theme: the same variables, re-pointed ---- */
+body.light{
+  --bg0:#f7f8fa; --bg1:#ffffff; --bg2:#f0f2f6; --bg3:#e4e8ef;
+  --bd:#dde1e8; --bd2:#c3c9d4;
+  --tx0:#1c2430; --tx1:#5a6676; --tx2:#8a93a2;
+  --amber:#b57e00; --mint:#0f9d58; --steel:#1a73e8; --rose:#d93025;
+}
+body.light .tool.on,body.light .mode.on,body.light .tg.on,body.light .btn.pri{color:#fff}
+body.light .segb.on{background:#fff;color:var(--amber);box-shadow:0 0 0 1px var(--bd2) inset}
+body.light .tip,body.light #toast{background:#1c2430;border-color:#3a4454;color:#f2f5f9}
+body.light #hint,body.light .dyn input,body.light #vcube button,body.light #touchbar button{
+  background:#ffffffe6;color:var(--tx0)}
+body.light .snapmenu{box-shadow:0 12px 34px #0002}
+body.light kbd{background:var(--bg2)}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg0);color:var(--tx0);
+  font-family:var(--ui);font-size:13px;-webkit-font-smoothing:antialiased;
+  -webkit-tap-highlight-color:transparent;overscroll-behavior:none}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+input,select,textarea{font:inherit;color:inherit;background:none;border:none;outline:none}
+:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
+
+#app{display:grid;height:100%;
+  grid-template-columns:var(--rail) 1fr var(--right);
+  grid-template-rows:var(--top) 1fr var(--bot);
+  grid-template-areas:"top top top" "rail stage panel" "bot bot bot"}
+
+/* ---------------- top bar ---------------- */
+#topbar{grid-area:top;display:flex;align-items:center;gap:2px;padding:0 10px;
+  background:var(--bg1);border-bottom:1px solid var(--bd);z-index:20}
+.brand{display:flex;align-items:baseline;gap:7px;margin-right:14px;user-select:none}
+.brand b{font-weight:600;letter-spacing:-.02em;font-size:14px}
+.brand span{font-family:var(--mono);font-size:9px;color:var(--tx2);
+  letter-spacing:.14em;text-transform:uppercase}
+.tb{padding:6px 10px;border-radius:5px;color:var(--tx1);font-size:12.5px;white-space:nowrap}
+.tb:hover{background:var(--bg3);color:var(--tx0)}
+.tb:disabled{opacity:.3;cursor:default;background:none;color:var(--tx2)}
+.tb.ico{width:30px;height:28px;padding:0;display:grid;place-items:center}
+.tb.ico svg{width:17px;height:17px;stroke:currentColor;fill:none;
+  stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.tb.ico:disabled:hover{background:none}
+.sep{width:1px;height:20px;background:var(--bd);margin:0 7px;flex:none}
+.grow{flex:1}
+.modes{display:flex;gap:2px;background:var(--bg2);border-radius:7px;padding:2px;margin-left:8px}
+.mode{padding:5px 13px;border-radius:5px;font-size:11.5px;font-weight:500;color:var(--tx1);
+  letter-spacing:.03em;white-space:nowrap}
+.mode:hover{color:var(--tx0)}
+.mode.on{background:var(--amber);color:#141821}
+.unit{font-family:var(--mono);font-size:11px;background:var(--bg2);border:1px solid var(--bd);
+  border-radius:5px;padding:5px 7px;cursor:pointer}
+.unit option{background:var(--bg2)}
+
+/* ---------------- tool rail ----------------
+   A fixed multi-column grid. Every tool in the active mode is on screen at
+   once — there is no scroll container here by design. */
+#rail{grid-area:rail;background:var(--bg1);border-right:1px solid var(--bd);
+  display:grid;grid-template-columns:repeat(3,var(--tool));
+  justify-content:center;align-content:start;
+  gap:var(--tgap);padding:var(--rpad) 0;overflow:hidden;z-index:15}
+.rgrp{grid-column:1/-1;height:var(--rhead);margin-top:var(--rgap);
+  display:flex;align-items:flex-end;
+  font-family:var(--mono);font-size:8px;font-weight:500;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--tx2);padding:0 2px 3px;
+  border-bottom:1px solid var(--bd);user-select:none;white-space:nowrap;overflow:hidden}
+.rgrp:first-child{margin-top:0}
+.tool{width:var(--tool);height:var(--tool);border-radius:5px;
+  display:grid;place-items:center;color:var(--tx1);position:relative}
+.tool svg{width:16px;height:16px;stroke:currentColor;fill:none;
+  stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.tool:hover{background:var(--bg3);color:var(--tx0)}
+.tool.on{background:var(--amber);color:#141821;box-shadow:0 0 0 1px #ffd16655}
+.tool[data-k]::after{content:attr(data-k);position:absolute;right:1px;bottom:0;
+  font-family:var(--mono);font-size:6.5px;line-height:1;opacity:.5;letter-spacing:-.02em}
+.tool.on[data-k]::after{opacity:.65}
+.tip{position:fixed;background:#05070a;border:1px solid var(--bd2);border-radius:5px;
+  padding:5px 9px;font-size:11.5px;pointer-events:none;opacity:0;z-index:400;
+  transition:opacity .1s;white-space:nowrap;box-shadow:0 6px 18px #0009}
+.tip b{font-family:var(--mono);color:var(--amber);font-weight:500;margin-left:8px}
+
+/* ---------------- stage ---------------- */
+#stage{grid-area:stage;position:relative;overflow:hidden;background:var(--bg0);
+  touch-action:none;cursor:crosshair}
+#cv{position:absolute;inset:0;width:100%;height:100%;display:block}
+#hud{position:absolute;inset:0;pointer-events:none}
+.dyn{position:absolute;display:flex;gap:4px;transform:translate(14px,14px);pointer-events:auto}
+.dyn input{font-family:var(--mono);font-size:11.5px;width:78px;padding:4px 6px;
+  background:#0b0e13ee;border:1px solid var(--bd2);border-radius:4px;color:var(--tx0)}
+.dyn input.act{border-color:var(--amber);color:var(--amber)}
+.dyn label{position:absolute;top:-13px;font-family:var(--mono);font-size:8.5px;
+  color:var(--tx2);letter-spacing:.1em}
+#hint{position:absolute;left:12px;top:10px;font-family:var(--mono);font-size:11px;
+  color:var(--tx1);background:#0b0e13cc;border:1px solid var(--bd);border-radius:5px;
+  padding:5px 10px;pointer-events:none;max-width:58%}
+#hint em{color:var(--amber);font-style:normal}
+
+/* ---- navigation widget: fit + view rotation ---- */
+#nav{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;
+  align-items:center;gap:6px;pointer-events:auto;user-select:none}
+.navbtn{width:32px;height:26px;display:grid;place-items:center;color:var(--tx1);
+  background:#0b0e13cc;border:1px solid var(--bd);border-radius:5px}
+.navbtn svg{width:15px;height:15px;stroke:currentColor;fill:none;
+  stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.navbtn:hover{color:var(--amber);border-color:var(--bd2)}
+.navbtn.off{opacity:.35}
+.navbtn.off:hover{color:var(--tx1);border-color:var(--bd)}
+#dialWrap{position:relative;width:60px;height:60px;border-radius:50%;
+  background:#0b0e13d9;border:1px solid var(--bd);display:grid;place-items:center;
+  cursor:grab;touch-action:none}
+#dialWrap:hover{border-color:var(--bd2)}
+#dialWrap:active{cursor:grabbing;border-color:var(--amber)}
+#dial{width:56px;height:56px;overflow:visible;display:block}
+#dial .ring{stroke:var(--bd2);fill:none;stroke-width:1}
+#dial .tick{stroke:var(--tx2);stroke-width:1}
+#dial .tick.maj{stroke:var(--tx1)}
+#dial .idx{fill:var(--tx1)}
+#dial .n{fill:var(--amber)}
+#dial .s{fill:var(--tx2)}
+#dial .bar{stroke:var(--bd2);stroke-width:1}
+#dial .lbl{fill:var(--tx2);font-family:var(--mono);font-size:6px;letter-spacing:.06em}
+#dialRose{transform-origin:28px 28px;transform-box:view-box}
+#navAng{font-family:var(--mono);font-size:10px;font-weight:500;color:var(--amber);
+  background:#0b0e13cc;border:1px solid var(--bd);border-radius:4px;
+  padding:2px 0;width:52px;text-align:center;letter-spacing:.01em}
+#vlegacy{display:none}
+
+#touchbar{position:absolute;right:12px;bottom:12px;display:none;gap:6px;z-index:30}
+#touchbar.show{display:flex}
+#touchbar button{font-family:var(--mono);font-size:11px;padding:9px 13px;border-radius:6px;
+  background:#0b0e13ee;border:1px solid var(--bd2);color:var(--tx0)}
+#touchbar button.pri{background:var(--amber);border-color:var(--amber);color:#141821}
+#drop{position:absolute;inset:0;display:none;place-items:center;background:#0e1116e0;
+  border:2px dashed var(--amber);z-index:50;font-family:var(--mono);
+  font-size:13px;color:var(--amber);letter-spacing:.08em;text-align:center;line-height:2}
+#drop.show{display:grid}
+
+/* ---- floating quick properties ---- */
+.qp{position:absolute;width:198px;pointer-events:auto;z-index:40;
+  background:#0f141bf5;border:1px solid var(--bd2);border-radius:7px;
+  box-shadow:0 10px 28px #000a;overflow:hidden}
+.qp .qph{display:flex;align-items:center;gap:6px;padding:5px 5px 5px 8px;
+  background:var(--bg2);border-bottom:1px solid var(--bd)}
+.qp .qph b{flex:1;font-size:11px;font-weight:600;letter-spacing:.01em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qp .qph i{font-family:var(--mono);font-size:9px;color:var(--tx2);font-style:normal}
+.qp .qph button{width:16px;height:16px;display:grid;place-items:center;
+  color:var(--tx2);border-radius:3px;flex:none}
+.qp .qph button svg{width:9px;height:9px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
+.qp .qph button:hover{color:var(--rose);background:#ffffff10}
+.qp .qpb{padding:5px 0 6px}
+.qp .row{padding:2px 8px;min-height:23px;gap:6px}
+.qp .row label{width:60px;font-size:10px}
+.qp .row .f{padding:3px 6px;font-size:11px;border-radius:3px}
+.qp .row .ro{font-size:11px}
+
+/* ---------------- right panel ---------------- */
+#panel{grid-area:panel;background:var(--bg1);border-left:1px solid var(--bd);
+  display:flex;flex-direction:column;overflow:hidden;z-index:15}
+.ph{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 11px;
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--tx2);border-bottom:1px solid var(--bd);flex:none}
+.ph button{color:var(--tx1);font-size:15px;line-height:1;padding:0 3px}
+.ph button:hover{color:var(--amber)}
+#layers{overflow-y:auto;flex:none;max-height:32%}
+.lay{display:flex;align-items:center;gap:7px;padding:5px 11px;font-size:12px;cursor:pointer}
+.lay:hover{background:var(--bg2)}
+.lay.cur{background:var(--bg3)}
+.lay.cur .lname{color:var(--amber)}
+.sw{width:11px;height:11px;border-radius:2px;border:1px solid #0006;flex:none}
+.lname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lay .ic{opacity:.42;width:14px;height:14px;flex:none}
+.lay .ic:hover{opacity:1}
+.lay .ic svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.5}
+.lay .ic.off{opacity:.85;color:var(--rose)}
+
+#props{flex:1;overflow-y:auto;padding:0 0 14px}
+.pttl{display:flex;align-items:center;gap:8px;padding:8px 11px;
+  background:var(--bg2);border-bottom:1px solid var(--bd)}
+.pttl b{flex:1;font-size:12.5px;font-weight:600;letter-spacing:-.01em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pttl i{font-family:var(--mono);font-size:9.5px;color:var(--tx2);font-style:normal}
+.row{display:flex;align-items:center;gap:8px;padding:3px 11px;min-height:26px}
+.row label{width:80px;font-size:11px;color:var(--tx1);flex:none;line-height:1.25}
+.row .f{flex:1;font-family:var(--mono);font-size:11.5px;background:var(--bg2);
+  border:1px solid var(--bd);border-radius:4px;padding:4px 7px;min-width:0}
+.row .f:hover{border-color:var(--bd2)}
+.row .f:focus{border-color:var(--amber)}
+.row .ro{flex:1;text-align:right;color:var(--tx1);font-family:var(--mono);font-size:11.5px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grp{padding:12px 11px 4px;font-family:var(--mono);font-size:8.5px;font-weight:500;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--tx2);
+  border-top:1px solid var(--bd);margin-top:7px}
+.grp:first-child{border-top:none;margin-top:0}
+.pttl + .grp{border-top:none;margin-top:0;padding-top:9px}
+.empty{padding:20px 13px;color:var(--tx2);font-size:11.5px;line-height:1.65}
+.empty b{display:block;color:var(--tx0);font-size:12.5px;font-weight:600;margin-bottom:5px}
+.empty p{margin:0}
+.empty .cl{margin-top:12px;font-family:var(--mono);font-size:10px;letter-spacing:.05em}
+.empty .cl i{color:var(--amber);font-style:normal}
+
+/* ---------------- bottom bar ---------------- */
+#bot{grid-area:bot;background:var(--bg1);border-top:1px solid var(--bd);
+  display:flex;flex-direction:column;z-index:20}
+#cmdwrap{display:flex;align-items:center;gap:8px;padding:0 11px;height:32px;flex:none}
+#caret{font-family:var(--mono);color:var(--amber);font-size:12px;flex:none}
+#cmd{flex:1;font-family:var(--mono);font-size:12px;min-width:0}
+#cmd::placeholder{color:var(--tx2)}
+#echo{font-family:var(--mono);font-size:11px;color:var(--tx1);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40%;text-align:right}
+#status{display:flex;align-items:center;gap:6px;padding:0 11px 4px;height:28px;flex:none;
+  overflow:hidden}
+#coord{font-family:var(--mono);font-size:11px;color:var(--tx1);
+  min-width:168px;flex:none;letter-spacing:-.01em}
+#coord b{color:var(--tx2);font-weight:400}
+.tgs{display:flex;align-items:center;gap:3px;flex:none}
+.tg{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;padding:3px 7px;
+  border-radius:4px;border:1px solid var(--bd);color:var(--tx2);flex:none;height:21px}
+.tg:hover{border-color:var(--bd2);color:var(--tx1)}
+.tg.on{background:var(--amber);border-color:var(--amber);color:#141821}
+#dset{display:flex;align-items:center;gap:4px;flex:none}
+.ds{display:flex;align-items:center;gap:5px;height:21px;padding:0 6px;flex:none;
+  background:var(--bg2);border:1px solid var(--bd);border-radius:4px;cursor:text}
+.ds i{font-family:var(--mono);font-size:8.5px;font-style:normal;letter-spacing:.1em;
+  color:var(--tx2);user-select:none}
+.ds input{font-family:var(--mono);font-size:10.5px;font-weight:500;color:var(--tx0);
+  width:44px;text-align:right}
+.ds:hover{border-color:var(--bd2)}
+.ds:focus-within{border-color:var(--amber)}
+.ds:focus-within i{color:var(--amber)}
+.gear{width:24px;height:21px;flex:none;display:grid;place-items:center;color:var(--tx2);
+  border:1px solid var(--bd);border-radius:4px}
+.gear:hover{color:var(--amber);border-color:var(--bd2)}
+.gear svg{width:13px;height:13px;stroke:currentColor;fill:none;
+  stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+#dsPop{position:fixed;right:10px;bottom:calc(var(--bot) + 8px);width:242px;z-index:120;
+  background:var(--bg1);border:1px solid var(--bd2);border-radius:8px;
+  box-shadow:0 14px 34px #000b;padding-bottom:9px;display:none;
+  max-height:60vh;overflow-y:auto}
+#dsPop.show{display:block}
+#dsPop .ph{position:sticky;top:0;background:var(--bg1);z-index:1}
+
+/* ---------------- modal ---------------- */
+#modal{position:fixed;inset:0;background:#060810cc;display:none;
+  place-items:center;z-index:300;backdrop-filter:blur(3px)}
+#modal.show{display:grid}
+.card{background:var(--bg1);border:1px solid var(--bd2);border-radius:10px;
+  width:min(460px,92vw);padding:20px;max-height:86vh;overflow-y:auto}
+.card h3{font-size:14px;font-weight:600;margin-bottom:4px}
+.card p{color:var(--tx1);font-size:12px;line-height:1.6;margin-bottom:14px}
+.card .row{padding:5px 0;min-height:0}
+.card .row label{width:96px}
+.acts{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+.btn{padding:7px 14px;border-radius:6px;background:var(--bg3);font-size:12.5px}
+.btn:hover{background:var(--bd2)}
+.btn.pri{background:var(--amber);color:#141821;font-weight:500}
+.btn.pri:hover{filter:brightness(1.08)}
+kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px solid var(--bd);
+  border-bottom-width:2px;border-radius:3px;padding:1px 5px;color:var(--tx0)}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;align-items:center;
+  font-size:12px;color:var(--tx1)}
+/* ---- Command panel: the style header, segmented controls, swatches ---- */
+.sty{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:5px 11px 7px}
+.sty b{font-size:12.5px;font-weight:600;letter-spacing:-.01em}
+.styacts{display:flex;gap:2px}
+.styb{width:24px;height:22px;border-radius:5px;display:grid;place-items:center;color:var(--tx1)}
+.styb:hover{background:var(--bg3);color:var(--tx0)}
+.styb svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.5;
+  stroke-linecap:round;stroke-linejoin:round}
+.seg{display:flex;gap:2px;flex:1;background:var(--bg2);border:1px solid var(--bd);
+  border-radius:6px;padding:2px;min-width:0}
+.segb{flex:1;height:24px;border-radius:4px;display:grid;place-items:center;
+  color:var(--tx1);font-size:11px;min-width:0}
+.segb:hover{background:var(--bg3);color:var(--tx0)}
+.segb.on{background:var(--bg0);color:var(--amber);box-shadow:0 1px 0 #0006 inset}
+.segb svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.4;
+  stroke-linecap:round;stroke-linejoin:round}
+.swrow{display:flex;align-items:center;gap:7px;text-align:left}
+.swb{width:22px;height:13px;border-radius:3px;border:1px solid #0006;flex:none}
+.swt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.swx{width:20px;height:22px;border-radius:4px;color:var(--tx2);flex:none;font-size:14px;line-height:1}
+.swx:hover{background:var(--bg3);color:var(--rose)}
+.cmdhint{margin:10px 11px 4px;padding:7px 9px;border-radius:6px;background:var(--bg2);
+  border:1px solid var(--bd);font-family:var(--mono);font-size:10.5px;color:var(--tx1);line-height:1.55}
+.cmdhint em{color:var(--amber);font-style:normal}
+.snapmenu{position:fixed;z-index:400;background:var(--bg1);border:1px solid var(--bd2);
+  border-radius:8px;padding:5px;min-width:186px;box-shadow:0 12px 34px #000a}
+.snapmenu .smh{font-family:var(--mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--tx2);padding:5px 8px 6px}
+.snapmenu .smi{display:flex;align-items:center;gap:7px;width:100%;text-align:left;
+  padding:5px 8px;border-radius:5px;font-size:12px;color:var(--tx0)}
+.snapmenu .smi:hover{background:var(--bg3)}
+.snapmenu .smx{width:11px;color:var(--amber);font-size:11px}
+.snapmenu .smsep{height:1px;background:var(--bd);margin:5px 4px}
+#toast{position:fixed;bottom:74px;left:50%;transform:translateX(-50%) translateY(8px);
+  background:#000;border:1px solid var(--bd2);border-radius:6px;padding:8px 14px;
+  font-size:12px;opacity:0;pointer-events:none;transition:.18s;z-index:250}
+#toast.show{opacity:1;transform:translateX(-50%)}
+
+@media (max-width:980px){
+  :root{--right:0px;--top:42px;--tool:24px;--rail:90px}
+  #panel{position:fixed;right:0;top:var(--top);bottom:var(--bot);width:250px;
+    transform:translateX(100%);transition:transform .2s;border-left:1px solid var(--bd2)}
+  #panel.open{transform:none}
+  #app{grid-template-columns:var(--rail) 1fr;grid-template-areas:"top top" "rail stage" "bot bot"}
+  .hide-sm{display:none}
+  .brand span{display:none}
+  .brand b{font-size:13px}
+  .brand{margin-right:8px}
+  #topbar{padding:0 6px;gap:0}
+  .tb{padding:6px 7px;font-size:12px}
+  .mode{padding:5px 9px;font-size:11px}
+  .tool[data-k]::after{display:none}
+  #coord{min-width:132px;font-size:10px}
+  #hint{max-width:52%;font-size:10.5px}
+  #dset .ds:nth-child(n+3){display:none}
+}
+@media (max-width:760px){ #dset{display:none} }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div class="brand"><b>Orthograph</b><span>CAD</span></div>
+    <button class="tb" id="mNew">New</button>
+    <button class="tb" id="mOpen">Open</button>
+    <button class="tb" id="mSave">Save</button>
+    <button class="tb hide-sm" id="mExport">Export</button>
+    <div class="sep"></div>
+    <button class="tb ico" id="mUndo" title="Undo">Undo</button>
+    <button class="tb ico" id="mRedo" title="Redo">Redo</button>
+    <div class="modes">
+      <button class="mode on" data-mode="drafting">Drafting</button>
+      <button class="mode" data-mode="arch">Architecture</button>
+    </div>
+    <div class="grow"></div>
+    <select class="unit hide-sm" id="unit">
+      <option value="mm">mm</option><option value="cm">cm</option>
+      <option value="m">m</option><option value="in">in</option><option value="ft">ft-in</option>
+    </select>
+    <div class="sep"></div>
+    <button class="tb" id="mHelp">?</button>
+    <button class="tb" id="mPanel" style="display:none">Panel</button>
+  </div>
+
+  <div id="rail"></div>
+
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="hud">
+      <div id="hint"></div>
+      <div id="nav">
+        <button class="navbtn" id="vFit" title="Zoom to fit the drawing">FIT</button>
+        <div id="dialWrap" title="Drag to rotate the view · double-click for north up">
+          <svg id="dial" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg">
+            <circle class="ring" cx="28" cy="28" r="24"/>
+            <path class="idx" d="M28 0.5l3 5h-6z"/>
+            <g id="dialRose">
+              <path class="tick maj" d="M28 6v4M28 46v4M6 28h4M46 28h4"/>
+              <path class="tick" d="M39.6 8.1l-2 3.5M16.4 47.9l2-3.5M47.9 39.6l-3.5-2M8.1 16.4l3.5 2M47.9 16.4l-3.5 2M8.1 39.6l3.5-2M39.6 47.9l-2-3.5M16.4 8.1l2 3.5"/>
+              <path class="bar" d="M28 13v30M13 28h30"/>
+              <path class="n" d="M28 10l4.6 12L28 19.4 23.4 22z"/>
+              <path class="s" d="M28 46l-4.6-12L28 36.6l4.6-2.6z"/>
+              <text class="lbl" x="28" y="31.6" text-anchor="middle">N</text>
+            </g>
+          </svg>
+        </div>
+        <div id="navAng">0.0°</div>
+        <button class="navbtn" id="vNorth" title="Reset view rotation to north up">N</button>
+        
+      </div>
+    </div>
+    <div id="touchbar">
+      <button id="tEsc">Cancel</button>
+      <button class="pri" id="tDone">Done</button>
+    </div>
+    <div id="drop">DROP A DXF, DWG OR PROJECT FILE</div>
+  </div>
+
+  <div id="panel">
+    <div class="ph">Layers <button id="addLay" title="New layer">+</button></div>
+    <div id="layers"></div>
+    <div class="ph">Properties</div>
+    <div id="props"></div>
+  </div>
+
+  <div id="bot">
+    <div id="cmdwrap">
+      <span id="caret">❯</span>
+      <input id="cmd" autocomplete="off" spellcheck="false" placeholder="Type a command — LINE, WALL, DOOR, TRIM, OFFSET… or press a shortcut">
+      <span id="echo"></span>
+    </div>
+    <div id="status">
+      <span id="coord"></span>
+      <div class="tgs">
+        <button class="tg" data-tg="osnap">OSNAP</button>
+        <button class="tg" data-tg="grid">GRID</button>
+        <button class="tg" data-tg="snapgrid">SNAP</button>
+        <button class="tg" data-tg="ortho">ORTHO</button>
+        <button class="tg" data-tg="polar">POLAR</button>
+        <button class="tg" data-tg="dyn">DYN</button>
+      </div>
+      <div class="grow"></div>
+      <div id="dset"></div>
+      <button class="gear" id="dsMore">⚙</button>
+    </div>
+  </div>
+</div>
+
+<div id="dsPop"></div>
+<div id="modal"><div class="card" id="card"></div></div>
+<div id="toast"></div>
+<input type="file" id="fileIn" accept=".dxf,.dwg,.json,.ocad" style="display:none">
+<script>
+/*__ORTHOGRAPH_BUNDLE__*/
+</script>
+</body>
+</html>
