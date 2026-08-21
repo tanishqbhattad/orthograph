@@ -197,7 +197,10 @@ function query(x0, y0, x1, y1) {
 /* ============================================================
    history — journalled patches, O(changed) not O(document)
    ============================================================ */
-const HIST = { past: [], future: [], depth: 200 };
+/* `seq` stamps every patch so UNDO Mark/Back can name a point in the journal
+   that survives undo and redo; `group` tags the patches of a BEgin/End group
+   so the whole group undoes as one operation. */
+const HIST = { past: [], future: [], depth: 200, seq: 0, group: 0, groupSeq: 0, marks: [] };
 const JN = { on: false, before: new Map(), added: new Set(), removed: new Map(), layers: null, cur: null, uid: 0 };
 
 function begin() {
@@ -221,9 +224,11 @@ function addEnt(e) {
   e.id = e.id || UID++;
   if (e.id >= UID) UID = e.id + 1;
   e.layer = e.layer || DOC.cur;
-  if (e.color === undefined) e.color = null;      /* null = ByLayer */
-  if (e.lw === undefined) e.lw = null;
-  if (e.lt === undefined) e.lt = null;
+  /* null = ByLayer. CECOLOR/CELWEIGHT/CELTYPE override that for new objects,
+     which is what makes those system variables real. */
+  if (e.color === undefined) e.color = DOC.cecolor || null;
+  if (e.lw === undefined) e.lw = DOC.celweight != null ? DOC.celweight : null;
+  if (e.lt === undefined) e.lt = DOC.celtype || null;
   DOC.ents.set(e.id, e); markDirty(e.id); DOCV++;
   if (JN.on) JN.added.add(e.id);
   if (IDX) idxInsert(e);
@@ -255,6 +260,8 @@ function commit(label) {
   const p = { chg, add: addv, del: delv, lay, cur: { b: JN.cur, a: DOC.cur }, uid: { b: JN.uid, a: UID } };
   JN.on = false;
   if (chg.length || addv.length || delv.length || lay || p.cur.b !== p.cur.a) {
+    p.seq = ++HIST.seq;
+    if (HIST.group) p.grp = HIST.group;
     HIST.past.push(p);
     if (HIST.past.length > HIST.depth) HIST.past.shift();
     HIST.future.length = 0;

@@ -283,6 +283,10 @@ const _dashC = new Map();
 let _dashK = 0;                                    /* world mm -> screen px, incl. LTSCALE */
 function ltScale() { const s = DOC.ltScale != null ? DOC.ltScale : VS.ltScale; return s > 0 ? s : 1; }
 function dashSync() { _dashK = V.z * ltScale(); }
+/* The scale is derived inside dashFor as well, rather than trusting a
+   dashSync() earlier in the frame: any caller outside the render loop would
+   otherwise be handed a pattern computed against a stale or zero scale, which
+   silently collapses every linetype to solid. */
 function dashFor(lt) {
   if (!lt || lt === 'solid') return DASH_SOLID;
   const def = LTDEF[lt];
@@ -290,11 +294,12 @@ function dashFor(lt) {
   let c = _dashC.get(lt);
   if (!c) _dashC.set(lt, c = { k: NaN, dot: NaN, arr: new Array(def.length), solid: false });
   const dot = Math.max(HAIR, 0.75);
-  if (c.k !== _dashK || c.dot !== dot) {
-    c.k = _dashK; c.dot = dot;
+  const k = V.z * ltScale();
+  if (c.k !== k || c.dot !== dot) {
+    c.k = k; c.dot = dot;
     let per = 0;
     for (let i = 0; i < def.length; i++) {
-      const v = def[i] === 0 ? dot : def[i] * _dashK;   /* a zero-length dash is a dot */
+      const v = def[i] === 0 ? dot : def[i] * k;        /* a zero-length dash is a dot */
       c.arr[i] = v; per += v;
     }
     c.solid = !(per > LT_MIN_PX && per < LT_MAX_PX);
@@ -302,24 +307,10 @@ function dashFor(lt) {
   return c.solid ? DASH_SOLID : c.arr;
 }
 
-/* ============================================================
-   lineweights
-   ------------------------------------------------------------
-   A lineweight is a *plot* width in millimetres, not a model dimension: it is
-   the same thickness on screen however far you zoom, which is what makes a
-   0.5mm pen look like a 0.5mm pen. LWDISPLAY (the status bar's LWT) turns
-   that on; with it off, everything draws as AutoCAD's one-pixel hairline.
-   ============================================================ */
-const LW_LADDER = [0, 0.05, 0.09, 0.13, 0.15, 0.18, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50,
-  0.53, 0.60, 0.70, 0.80, 0.90, 1.00, 1.06, 1.20, 1.40, 1.58, 2.00, 2.11];
-const LW_DEFAULT = 0.25;                           /* LWDEFAULT */
-const PX_PER_MM = 96 / 25.4;                       /* the CSS reference pixel: 1in = 96px */
-/** nearest standard pen width, so the property panels only ever offer real ones */
-function lwSnap(mm) {
-  let best = LW_DEFAULT, bd = Infinity;
-  for (const v of LW_LADDER) { const d = Math.abs(v - mm); if (d < bd) { bd = d; best = v; } }
-  return best;
-}
+/* LW_LADDER, LW_DEFAULT, PX_PER_MM and lwSnap live in 00-core.js — the
+   document model needs LW_DEFAULT for its fallback layer, and 01-doc.js is
+   evaluated four modules before this one. Only the renderer-facing part,
+   which needs HAIR and ST, stays here. */
 function lwPx(mm) {
   if (ST.lwt === false) return HAIR;
   const w = (mm > 0 ? mm : 0) * PX_PER_MM;

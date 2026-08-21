@@ -480,7 +480,9 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       startCmd('zoom'); cmdEnter(); out.rt = !!ST.rtzoom; endCmd(true); out.rtOff = !!ST.rtzoom;
       return out;`);
     eq(r.defined, true);
-    eq(r.alias.join(','), 'zoom,zoom,pan,draworder');
+    /* ALIAS canonicalises to the uppercase acad.pgp command name — that is the
+       single source of truth the command engine resolves against. */
+    eq(r.alias.join(','), 'ZOOM,ZOOM,PAN,DRAWORDER');
     eq(r.panOn, true, 'the PAN command must arm the pan mode');
     eq(r.panOff, false, 'and let go of it when it ends');
     eq(r.rt, true, 'ZOOM then Enter is AutoCAD\'s real-time zoom');

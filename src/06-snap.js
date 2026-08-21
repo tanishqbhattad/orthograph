@@ -59,7 +59,7 @@ const ST = {
 };
 /** the pick box only shows when no command is running (AutoCAD behaviour) */
 function showPickBox() { return !CMD || CMD.phase === 'sel'; }
-const SNAP_R = 10;                                /* default aperture, screen px */
+let SNAP_R = 14;                                  /* aperture, screen px — the APERTURE system variable */
 const SNAP_CYCLE_RESET = 4;                       /* px of travel that resets Tab cycling */
 const TRACK_DWELL_MS = 260;                       /* hover time before a point is acquired */
 const TRACK_MAX = 7;                              /* AutoCAD keeps seven acquired points */
