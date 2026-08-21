@@ -12,8 +12,16 @@ const SETUP = `
   DOC.gridStep = 100; DOC.snapStep = 100;
   V.w = 1200; V.h = 800; V.z = 1; V.px = 0; V.py = 800; V.rot = 0;
   ST.osnap = true; ST.ortho = false; ST.polar = true; ST.snapgrid = false;
+  ST.otrack = true; ST.trackPolar = true; ST.polarRel = false; ST.polarExtra.length = 0;
   ST.polarInc = 45; ST.snapCycle = 0; ST.snapScr = null;
-  ST.trackPts.length = 0; ST.snapCands = null; ST.snap = null;
+  ST.aperture = 10; ST.markerSize = 6; ST.apBox = false;
+  ST.trackPts.length = 0; ST.parRefs.length = 0; ST.snapCands = null; ST.snap = null;
+  /* extPts leaks between suites exactly like trackPts does — the app's own
+     clearTracks() resets all three together, so pinning two of them was a
+     latent bug. It stayed invisible while arbitration was priority-first,
+     because perpx (46) outranked a stray ext (20) however close the ext was. */
+  ST.extPts.length = 0; ST.tracks = null;
+  ST.osnapOne = null; ST.osnapOneShot = false; ST.ptMod = null; ST.fromBase = null;
   toggleSnap('all');
 `;
 /* snap at a world point (converted through w2s, so it works at any view angle) */
@@ -43,13 +51,26 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(r.kinds.includes('near'), 'nearest should still be offered for Tab');
   });
 
-  t('intersection outranks a closer midpoint', () => {
+  /* Rewritten when arbitration became distance-first. The cursor here is
+     2.83px from the midpoint and 6.32px from the intersection, so the midpoint
+     is plainly what is being pointed at; the old assertion encoded priority
+     dominance and handed back a point 6px from the crosshair. Priority still
+     decides once the two are comparably close — the second half pins that, so
+     this cannot be satisfied by ignoring priority altogether. */
+  t('the closer of intersection and midpoint wins', () => {
     const r = R(`${SETUP}
       addEnt({t:'line',a:[0,0],b:[200,0]});
       addEnt({t:'line',a:[108,-50],b:[108,50]});
       ${AT(102, 2)}`);
-    eq(r.k, 'int'); pt(r, 108, 0);
-    ok(r.kinds.includes('mid'), 'the midpoint is still a candidate');
+    eq(r.k, 'mid'); pt(r, 100, 0);
+    ok(r.kinds.includes('int'), 'the intersection is still a candidate');
+
+    /* same geometry, cursor moved beside the intersection instead */
+    const x = R(`${SETUP}
+      addEnt({t:'line',a:[0,0],b:[200,0]});
+      addEnt({t:'line',a:[108,-50],b:[108,50]});
+      ${AT(107, 1)}`);
+    eq(x.k, 'int'); pt(x, 108, 0);
   });
 
   t('midpoint outranks nearest and lands exactly halfway', () => {
@@ -248,11 +269,14 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       addEnt({t:'line',a:[0,0],b:[200,0]});
       ${AT(102, 2)}`);
     eq(r.k, 'mid'); pt(r, 100, 0);
+    /* cursor sits beside the intersection rather than the midpoint, so this
+       still exercises intersection-under-rotation now that the closer
+       candidate wins rather than the higher-priority one */
     const x = R(`${SETUP}
       V.rot = rad(30);
       addEnt({t:'line',a:[0,0],b:[200,0]});
       addEnt({t:'line',a:[108,-50],b:[108,50]});
-      ${AT(102, 2)}`);
+      ${AT(107, 1)}`);
     eq(x.k, 'int'); pt(x, 108, 0);
   });
 
@@ -407,7 +431,9 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
 
   t('snapMenuItems lists every kind with a label and a state', () => {
     const r = R(`${SETUP} return snapMenuItems();`);
-    eq(r.length, 12);
+    /* the mode set grows; what must hold is that every listed mode is
+       complete and switched on after toggleSnap('all') */
+    ok(r.length >= 14, 'expected the full AutoCAD mode set, got ' + r.length);
     for (const it of r) {
       ok(typeof it.kind === 'string' && it.kind.length, 'kind');
       ok(typeof it.label === 'string' && it.label.length, 'label for ' + it.kind);
@@ -436,8 +462,8 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       const off = snapMenuItems().filter(i => i.on).length;
       toggleSnap('all');
       const on = snapMenuItems().filter(i => i.on).length;
-      return [off, on, toggleSnap('nonsense')];`);
-    eq(r[0], 0); eq(r[1], 12); eq(r[2], false);
+      return [off, on, toggleSnap('nonsense'), snapMenuItems().length];`);
+    eq(r[0], 0); eq(r[1], r[3]); eq(r[2], false);
   });
 
   t('with every snap off the cursor is never pulled anywhere', () => {
@@ -526,5 +552,62 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       for (let i = 0; i < 40; i++) snapPoint(600 + (i % 5), 800 - (i % 5), null);
       return Date.now() - t0;`);
     ok(r < 900, '40 snaps against a 5000-vertex polyline took ' + r + 'ms');
+  });
+
+  /* ============================================================
+     The arbitration rule itself.
+
+     Everything above tests which point a given snap kind returns.
+     This group pins the rule that decides WHICH KIND WINS, because
+     that rule is a single constant (SNAP_BIAS_PX) and a single sort,
+     and getting it wrong is invisible to every other test in this
+     file while making the app feel broken in real use.
+
+     The rule: score = distance − priority × (SNAP_BIAS_PX / maxPri).
+     Distance decides; priority only buys a bounded head start.
+     ============================================================ */
+  group('snap: arbitration');
+
+  /* The defect this rule replaced, measured from the real app: the cursor sat
+     0.29px from an apparent intersection and 5.7px from an endpoint, and the
+     endpoint won because it outranked. Points 20x further away must not win. */
+  t('a candidate under the crosshair beats a higher-priority one across the box', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line',a:[0,0],b:[100,0]});
+      addEnt({t:'line',a:[0,-40],b:[0,40]});
+      ${AT(0.3, 0.3)}`);
+    eq(r.k, 'end', 'an endpoint at 0.42px should win outright');
+
+    /* now push the endpoint out and put a nearest right under the cursor */
+    const x = R(`${SETUP}
+      addEnt({t:'line',a:[0,0],b:[100,0]});
+      ${AT(9, 0)}`);
+    eq(x.k, 'near', 'a nearest at 0px beats an endpoint 9px away');
+    pt(x, 9, 0);
+  });
+
+  /* The converse, and the reason this is not simply "closest wins": within the
+     head start, priority still decides. An endpoint slightly further from the
+     cursor than a nearest is still what the drafter meant. */
+  t('priority still wins inside the head-start band', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line',a:[0,0],b:[100,0]});
+      ${AT(3, 0)}`);
+    eq(r.k, 'end', 'an endpoint 3px out beats the nearest directly under the cursor');
+    pt(r, 0, 0);
+  });
+
+  /* The head start is bounded in SCREEN space, so it must survive zoom: the
+     same world geometry at a different zoom must arbitrate the same way when
+     the cursor is the same number of *pixels* from each candidate. */
+  t('the head start is measured in screen px, not world units', () => {
+    const at = z => R(`${SETUP}
+      V.z = ${z};
+      addEnt({t:'line',a:[0,0],b:[${100 / z},0]});
+      const _s = w2s([0,0]); const _p = snapPoint(_s[0] + 3, _s[1], null);
+      return { k: ST.snap && ST.snap.k, p: _p };`);
+    eq(at(1).k, 'end');
+    eq(at(4).k, 'end', 'zoomed in 4x, 3px from the endpoint still resolves to it');
+    eq(at(0.25).k, 'end', 'zoomed out 4x, 3px from the endpoint still resolves to it');
   });
 };

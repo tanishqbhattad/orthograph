@@ -51,12 +51,21 @@ const META = {
   all: () => { SEL.clear(); [...DOC.ents.values()].filter(pickable).forEach(e => SEL.add(e.id)); syncUI(); draw(); },
   qsave: () => doSave(), save: () => doSave(), saveas: () => doExport(), open: () => $('#fileIn').click(),
   new: () => doNew(), help: showHelp, '?': showHelp,
-  ortho: () => tgl('ortho'), osnap: () => tgl('osnap'), grid: () => tgl('grid'),
+  ortho: () => tgl('ortho'), grid: () => tgl('grid'),
   polar: () => tgl('polar'), snap: () => tgl('snapgrid'), dyn: () => tgl('dyn'),
+  otrack: () => tgl('otrack'),
+  /* OSNAP opens the dialog and -OSNAP toggles, exactly as AutoCAD splits them */
+  osnap: () => openOsnapSettings(2), '-osnap': () => tgl('osnap'),
+  dsettings: () => openOsnapSettings(2), ds: () => openOsnapSettings(2),
+  se: () => openOsnapSettings(2), os: () => openOsnapSettings(2),
+  polarang: () => openOsnapSettings(1), snapang: () => openOsnapSettings(1),
+  aperture: () => openOsnapSettings(2),
+  osmode: () => { toast('OSMODE ' + osmode()); openOsnapSettings(2); },
   drafting: () => setMode('drafting'), arch: () => setMode('arch'), architecture: () => setMode('arch'),
   types: openTypeManager, wt: openTypeManager,
   units: () => toast('Use the unit menu, top right'),
-  dimstyle: openDimStyle, ds: openDimStyle,
+  /* DS is AutoCAD's DSETTINGS alias, so the dimension style keeps DDIM */
+  dimstyle: openDimStyle, ddim: openDimStyle, dst: openDimStyle,
   purge: () => {
     begin(); touchLayers();
     DOC.layers = DOC.layers.filter(l => l.name === '0' || [...DOC.ents.values()].some(e => e.layer === l.name));
@@ -136,8 +145,25 @@ function runInput(s) {
   if (p && CMD) { cmdPoint(p); return; }
   echo('Unknown: ' + s);
 }
-function tgl(k) { ST[k] = !ST[k]; syncToggles(); draw(); echo(k.toUpperCase() + ' ' + (ST[k] ? 'on' : 'off')); }
-function syncToggles() { document.querySelectorAll('.tg').forEach(b => b.classList.toggle('on', !!ST[b.dataset.tg])); }
+/* draftToggle (06-snap) owns the ORTHO/POLAR exclusion rule and the redraw */
+function tgl(k) { const v = draftToggle(k); echo(k.toUpperCase() + ' ' + (v ? 'on' : 'off')); return v; }
+function syncToggles() {
+  document.querySelectorAll('.tg').forEach(b => {
+    b.classList.toggle('on', !!ST[b.dataset.tg]);
+    if (!b.title) {
+      const k = b.dataset.key;
+      b.title = b.textContent.trim() + (k ? '  ' + k : '') +
+        (b.dataset.set ? '  ·  right-click for settings' : '');
+    }
+    if (b.dataset.set && !b._wired) {
+      b._wired = 1;
+      b.addEventListener('contextmenu', ev => {
+        ev.preventDefault();
+        openOsnapSettings(b.dataset.set === 'polar' || b.dataset.set === 'otrack' ? 1 : b.dataset.set === 'snap' ? 0 : 2);
+      });
+    }
+  });
+}
 
 function syncCoord() {
   const n = $('#coord'); if (!n) return;
@@ -207,6 +233,11 @@ function crossQuad(e, quad) {
 }
 function localXY(ev) { const r = cv.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; }
 function refPoint() {
+  /* FROM's base point and MID-BETWEEN's first pick outrank the command's own
+     last point: that is what makes the rubber band, ortho and the dynamic
+     input read from the right place while a modifier is pending */
+  const m = typeof ptModRef === 'function' && ptModRef();
+  if (m) return m;
   if (CMD && CMD.phase === 'run' && CMD.pts && CMD.pts.length) return CMD.pts[CMD.pts.length - 1];
   if (ST.dragGrip) return ST.dragGrip.p;
   return null;
@@ -542,6 +573,8 @@ window.addEventListener('keydown', ev => {
   if (ev.key === 'F3') { ev.preventDefault(); return tgl('osnap'); }
   if (ev.key === 'F7') { ev.preventDefault(); return tgl('grid'); }
   if (ev.key === 'F10') { ev.preventDefault(); return tgl('polar'); }
+  if (ev.key === 'F11') { ev.preventDefault(); return tgl('otrack'); }
+  if (ev.key === 'F12') { ev.preventDefault(); return tgl('dyn'); }
   if (/^[0-9.@\-]$/.test(ev.key) && CMD) { if (!focusDyn()) focusCmd(); return; }
   /* A letter typed while a command is running belongs to that command — the
      on-screen prompt says "C to close", so C must close, not start CIRCLE.
@@ -652,10 +685,18 @@ function showHelp() {
     <kbd>X V</kbd><span>Trim (hold <kbd>Shift</kbd> to extend), Fillet</span>
     <kbd>W D N</kbd><span>In Architecture: Wall, Door, wiNdow</span>
     <kbd>Q</kbd><span>Zoom to everything</span>
-    <kbd>F3 F7 F8 F9 F10</kbd><span>Object snap · grid · ortho · grid snap · polar</span>
+    <kbd>F3 F7 F8 F9 F10 F11 F12</kbd><span>Object snap · grid · ortho · grid snap · polar · snap tracking · dynamic input</span>
+    <kbd>Tab</kbd><span>Cycle the snap candidates under the cursor</span>
+    <kbd>Shift</kbd>+<kbd>right-click</kbd><span>One-shot object snap, FROM, mid between 2 points</span>
     <kbd>Space</kbd><span>Repeat the last command</span>
     <kbd>Esc</kbd><span>Cancel / clear the selection</span>
   </div>
+  <p style="margin-top:12px"><b>Precision.</b> Hover a snap point for a moment to acquire it, then track orthogonal or polar
+  paths out of it — two acquired points give you their crossing. <kbd>FROM</kbd> at any point prompt sets a base point to
+  measure an offset from, <kbd>M2P</kbd> takes the middle of two picks, and typing <kbd>MID</kbd>, <kbd>CEN</kbd>,
+  <kbd>PER</kbd>… overrides the running snaps for one point. Hold <kbd>Shift</kbd>+<kbd>E</kbd> endpoint,
+  <kbd>Shift</kbd>+<kbd>V</kbd> midpoint, <kbd>Shift</kbd>+<kbd>C</kbd> centre, <kbd>Shift</kbd>+<kbd>D</kbd> nothing.
+  <kbd>OSNAP</kbd> opens the settings.</p>
   <p style="margin-top:14px">Coordinates take <kbd>250</kbd>, <kbd>1200,600</kbd>, <kbd>@0,-450</kbd>, <kbd>@800&lt;30</kbd>,
   and units like <kbd>2.5m</kbd> or <kbd>4'-6"</kbd>. Drag left→right to take what is fully inside,
   right→left to catch anything you touch.</p>
