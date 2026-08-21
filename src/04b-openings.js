@@ -67,7 +67,6 @@ function doorShapes(o) {
   return out;
 }
 const polarPt = (c, r, a) => [c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)];
-const rotv = (v, t) => [v[0] * Math.cos(t) - v[1] * Math.sin(t), v[0] * Math.sin(t) + v[1] * Math.cos(t)];
 /* arcs are stored CCW from a0 to a1; swap when the swing runs clockwise */
 function arcRec(c, r, a0, a1) {
   const ccw = wrapS(a1 - a0) >= 0;

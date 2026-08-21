@@ -515,4 +515,3 @@ function delWallCascade(id) {
   if (w && w.t === 'wall') for (const o of (openingsByHost().get(id) || [])) delEnt(o.id);
   delEnt(id);
 }
-function isArchEnt(e) { return !!GEOM[e.t]; }

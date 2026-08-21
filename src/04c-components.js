@@ -449,7 +449,15 @@ function roomBoundary(r) {
   let pts = null;
   try { pts = roomTrace(r.seed, r.lvl || 0); } catch (e) { pts = null; }
   if (!pts) pts = r.pts;                           /* keep the last good shape */
-  else if (r.pts !== pts) r.pts = pts;             /* cache onto the entity for save/export */
+  /* Deliberately does NOT write pts back onto the entity. It used to, "for
+     save/export", which made a read mutate the document outside the journal
+     and without mut(): straight after an undo, r.pts still held the traced
+     polygon for the *pre-undo* wall positions until something re-read it, and
+     a file saved in that window persisted a state undo had never produced.
+     The cache below is keyed on DOCV and lives outside the entity, which is
+     all the rendering path ever needed. The one consumer that genuinely needs
+     a materialised polygon is the .ocad writer, and it materialises its own
+     copy at write time — see roomForSave() in 11-io.js. */
   _roomCache.set(r.id, { v: DOCV, pts });
   return pts;
 }
