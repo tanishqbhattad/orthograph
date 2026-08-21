@@ -295,6 +295,8 @@ function initShellUI() {
   if (n) { n.innerHTML = svg('north'); tipOn(n, 'Reset view rotation', '', 'left'); n.onclick = () => setViewRot(0); }
   const g = $('#dsMore');
   if (g) { g.innerHTML = svg('gear'); g.onclick = toggleDrawPop; tipOn(g, 'Drawing settings', '', 'left'); }
+  const vs = $('#vscale');
+  if (vs) { vs.onclick = () => { pushView(); fit(null, true); }; syncScale(); }
 
   /* the widget is inside #stage: keep its pointer traffic off the canvas */
   const nav = $('#nav');
@@ -381,6 +383,16 @@ function drawSettingsExtras(w) {
     v => { ST.crossLen = clamp(v, 1, 100); draw(); }, 1);
   addRow(w, 'Pick box px', ST.pickBox || 8,
     v => { ST.pickBox = clamp(Math.round(v), 2, 40); draw(); }, 1);
+  addRow(w, 'Zoom factor', VS.zoomFactor, v => { VS.zoomFactor = clamp(Math.round(v), 3, 100); }, 1);
+  grpRow(w, 'Display');
+  addRow(w, 'LTSCALE', ltScale(), v => { DOC.ltScale = clamp(v, 1e-4, 1e6); draw(); }, 1);
+  addRow(w, 'Grid major', VS.gridMajor, v => { VS.gridMajor = clamp(Math.round(v), 1, 100); draw(); }, 1);
+  btnRow(w, 'Lineweights', ST.lwt === false ? 'off' : 'on', () => {
+    ST.lwt = ST.lwt === false; syncToggles(); draw(); buildDrawPop();
+  });
+  btnRow(w, 'UCS icon', VS.ucsIcon ? 'on' : 'off', () => {
+    VS.ucsIcon = !VS.ucsIcon; draw(); buildDrawPop();
+  });
   btnRow(w, 'Wall poche', DOC.wallHatch === false ? 'off' : 'on', () => {
     begin(); DOC.wallHatch = DOC.wallHatch === false; commit('Wall poche');
     draw(); syncUI();
@@ -458,9 +470,11 @@ function buildLayers() {
 function renameLayer(l) {
   modal(`<h3>Layer</h3>
     <div class="row"><label>Name</label><input class="f" id="ln" value="${esc(l.name)}"></div>
-    <div class="row"><label>Lineweight</label><input class="f" id="lw" value="${l.lw}"></div>
+    <div class="row"><label>Lineweight</label><select class="f" id="lw">
+      ${LW_LADDER.map(v => `<option value="${v}" ${lwSnap(l.lw) === v ? 'selected' : ''}>${v === 0 ? '0.00 (hairline)' : v.toFixed(2) + ' mm'}</option>`).join('')}
+    </select></div>
     <div class="row"><label>Linetype</label><select class="f" id="lt">
-      ${['solid', 'dashed', 'hidden', 'center', 'dashdot'].map(t => `<option ${t === l.lt ? 'selected' : ''}>${t}</option>`).join('')}
+      ${Object.keys(LTDEF).concat('solid').sort().map(t => `<option ${t === l.lt ? 'selected' : ''}>${t}</option>`).join('')}
     </select></div>`, () => {
     const n = $('#ln').value.trim().toUpperCase();
     begin(); touchLayers();
@@ -469,7 +483,7 @@ function renameLayer(l) {
       for (const e of DOC.ents.values()) if (e.layer === old) { mut(e); e.layer = n; }
       if (DOC.cur === old) DOC.cur = n;
     }
-    l.lw = parseFloat($('#lw').value) || 0.25;
+    l.lw = lwSnap(parseFloat($('#lw').value));
     l.lt = $('#lt').value;
     commit('Layer updated'); buildLayers(); draw();
   });

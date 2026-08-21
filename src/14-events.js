@@ -35,9 +35,19 @@ const ALIAS = {
   w: 'wall', wa: 'wall', wr: 'wallrect', dr: 'door', win: 'window', wi: 'window',
   col: 'column', str: 'stair', rm: 'room', gr: 'grid',
   wf: 'wallflip', wj: 'walljoin', ws: 'wallsplit',
+  z: 'zoom', zo: 'zoom', dro: 'draworder', dor: 'draworder', pa: 'pan',
 };
 const META = {
-  u: undo, undo, redo, z: () => fit(), zoom: () => fit(), ze: () => fit(), zoomextents: () => fit(),
+  u: undo, undo, redo,
+  ze: () => fit(null, true), zoomextents: () => fit(null, true), ea: () => zoomAll(true),
+  zp: () => zoomPrev(), zoomprevious: () => zoomPrev(),
+  ltscale: s => setVar('ltscale', s), lts: s => setVar('ltscale', s),
+  zoomfactor: s => setVar('zoomfactor', s), gridmajor: s => setVar('gridmajor', s),
+  cursorsize: s => setVar('cursorsize', s), pickbox: s => setVar('pickbox', s),
+  vtduration: s => setVar('vtduration', s),
+  lwdisplay: s => setFlag(s, () => ST.lwt !== false, v => { ST.lwt = v; syncToggles(); }, 'LWDISPLAY'),
+  lwt: s => setFlag(s, () => ST.lwt !== false, v => { ST.lwt = v; syncToggles(); }, 'LWDISPLAY'),
+  ucsicon: s => setFlag(s, () => VS.ucsIcon, v => { VS.ucsIcon = v; }, 'UCSICON'),
   all: () => { SEL.clear(); [...DOC.ents.values()].filter(pickable).forEach(e => SEL.add(e.id)); syncUI(); draw(); },
   qsave: () => doSave(), save: () => doSave(), saveas: () => doExport(), open: () => $('#fileIn').click(),
   new: () => doNew(), help: showHelp, '?': showHelp,
@@ -115,7 +125,8 @@ function runInput(s) {
   if (!s) { if (CMD) return cmdEnter(); if (HISTC.length) return runInput(HISTC[HISTC.length - 1]); return; }
   if (CMD && cmdText(s)) { cmdPreview(ST.cur || [0, 0]); draw(); return; }
   const k = s.toLowerCase().split(/\s+/)[0];
-  if (META[k]) { META[k](); echo(k.toUpperCase()); return; }
+  /* the whole line goes through, so `LTSCALE 20` works the way AutoCAD takes it */
+  if (META[k]) { META[k](s); echo(k.toUpperCase()); return; }
   const key = ALIAS[k] || k;
   if (CMDS[key]) {
     if (CMDS[key].group === 'arch' && MODE !== 'arch') setMode('arch');
@@ -129,10 +140,23 @@ function tgl(k) { ST[k] = !ST[k]; syncToggles(); draw(); echo(k.toUpperCase() + 
 function syncToggles() { document.querySelectorAll('.tg').forEach(b => b.classList.toggle('on', !!ST[b.dataset.tg])); }
 
 function syncCoord() {
+  const n = $('#coord'); if (!n) return;
+  if (!VS.coords) { n.innerHTML = '<b>COORDS off</b>'; return; }
   const p = ST.cur || [0, 0];
-  let s = `<b>X</b> ${fmt(p[0])}  <b>Y</b> ${fmt(p[1])}`;
-  if (ST.lastPt && ST.drawing) s += `  <b>Δ</b> ${fmt(dist(ST.lastPt, p))} ∠${deg(ang(ST.lastPt, p)).toFixed(1)}°`;
-  const n = $('#coord'); if (n) n.innerHTML = s;
+  /* relative display, like AutoCAD's second COORDS mode, once there is a
+     rubber band to measure from */
+  const rel = VS.coords === 2 && ST.lastPt && ST.drawing;
+  let s = rel
+    ? `<b>Δ</b> ${fmt(dist(ST.lastPt, p))} <b>&lt;</b> ${deg(ang(ST.lastPt, p)).toFixed(1)}°`
+    : `<b>X</b> ${fmt(p[0])}  <b>Y</b> ${fmt(p[1])}`;
+  if (!rel && ST.lastPt && ST.drawing) s += `  <b>Δ</b> ${fmt(dist(ST.lastPt, p))} ∠${deg(ang(ST.lastPt, p)).toFixed(1)}°`;
+  n.innerHTML = s;
+}
+/** the view scale, in the 1:n form a drafter reads off a title block */
+function syncScale() {
+  const n = $('#vscale'); if (!n) return;
+  n.textContent = viewScaleText();
+  n.title = 'View scale on screen · click to zoom to extents';
 }
 
 /* ---------- pointer + keyboard ---------- */
@@ -189,7 +213,9 @@ function refPoint() {
 }
 stage.addEventListener('pointerdown', ev => {
   if (ev.target.closest('.dyn')) return;
-  stage.setPointerCapture(ev.pointerId);
+  /* a pointer that has already been released throws here, and losing the
+     capture must never cost us the whole press */
+  try { stage.setPointerCapture(ev.pointerId); } catch (_) { }
   ptrs.set(ev.pointerId, localXY(ev));
   if (cmdIn) cmdIn.blur();
   if (ptrs.size === 2) {
@@ -198,8 +224,16 @@ stage.addEventListener('pointerdown', ev => {
   }
   const scr = localXY(ev);
   downScr = scr; moved = false;
-  if (ev.button === 1 || (ev.button === 0 && ev.altKey) || ev.button === 2) {
-    ST.panning = { x: scr[0], y: scr[1], px: V.px, py: V.py }; return;
+  /* Pan on the middle button, on a held spacebar, and for the whole of the
+     PAN command. The right button is AutoCAD's shortcut menu, not a pan. */
+  if (ev.button === 1 || (ev.button === 0 && (ev.altKey || ST.panReady || ST.panCmd))) {
+    cancelAnim();
+    ST.panning = { x: scr[0], y: scr[1], px: V.px, py: V.py };
+    ST.panDragged = false; navCursor(); return;
+  }
+  /* ZOOM real time: drag up to magnify, anchored where the drag started */
+  if (ST.rtzoom && ev.button === 0) {
+    ST.rtdrag = { x: scr[0], y: scr[1] }; navCursor(); return;
   }
   const p = snapPoint(scr[0], scr[1], refPoint());
   ST.cur = p; downPt = p;
@@ -225,9 +259,17 @@ stage.addEventListener('pointermove', ev => {
     return;
   }
   if (ST.panning) {
+    /* 1:1 and absolute — recomputed from the press point every move, so a pan
+       can never accumulate drift however long the drag runs */
     V.px = ST.panning.px + (scr[0] - ST.panning.x);
     V.py = ST.panning.py + (scr[1] - ST.panning.y);
-    moved = true; draw(); return;
+    moved = true; ST.panDragged = true; syncViewUI(); draw(); return;
+  }
+  if (ST.rtdrag) {
+    const dy = scr[1] - ST.rtdrag.y;
+    ST.rtdrag.y = scr[1];
+    if (dy) zoomAt(ST.rtdrag.x, ST.rtdrag.y, Math.pow(1.006, -dy));
+    return;
   }
   const p = snapPoint(scr[0], scr[1], refPoint());
   ST.cur = p;
@@ -244,7 +286,8 @@ stage.addEventListener('pointermove', ev => {
 stage.addEventListener('pointerup', ev => {
   ptrs.delete(ev.pointerId);
   if (ptrs.size < 2) pinch = null;
-  if (ST.panning) { ST.panning = null; downPt = null; downScr = null; return; }
+  if (ST.panning) { ST.panning = null; navCursor(); downPt = null; downScr = null; return; }
+  if (ST.rtdrag) { ST.rtdrag = null; navCursor(); downPt = null; downScr = null; return; }
   const scr = localXY(ev);
   const p = ST.cur || s2w(scr[0], scr[1]);
   if (ST.dragGrip) { ST.dragGrip = null; commit('Edit'); draw(); downPt = null; return; }
@@ -305,14 +348,26 @@ stage.addEventListener('dblclick', () => {
   } else if (MODE !== 'arch' && GEOM[e.t]) setMode('arch');
   draw();
 });
+/* AutoCAD sizes the wheel step from ZOOMFACTOR and only ever sees detents;
+   the browser hands us a delta instead — 100 units per notch on a wheel, a
+   few units at a time on a trackpad — so dividing gives one feel on both. */
 stage.addEventListener('wheel', ev => {
   ev.preventDefault();
   const scr = localXY(ev);
-  const f = Math.pow(0.9988, ev.deltaY * (ev.deltaMode === 1 ? 16 : 1));
-  zoomAt(scr[0], scr[1], clamp(f, .2, 5));
+  const unit = ev.deltaMode === 1 ? 3 : ev.deltaMode === 2 ? 1 : 100;
+  const notches = clamp(ev.deltaY / unit, -4, 4);
+  if (!notches) return;
+  zoomAt(scr[0], scr[1], wheelFactor(notches));
   ST.cur = snapPoint(scr[0], scr[1], refPoint());
   syncCoord(); syncDyn();
 }, { passive: false });
+/* the crosshair is drawn on the canvas, so the pointer has to be told when it
+   is over the drawing area and when it has left */
+stage.addEventListener('pointerenter', () => { ST.inView = true; navCursor(); draw(); });
+stage.addEventListener('pointerleave', () => {
+  if (ST.panning) return;
+  ST.inView = false; navCursor(); draw();
+});
 
 /* ============================================================
    Dynamic input
@@ -448,6 +503,7 @@ window.addEventListener('keydown', ev => {
     if (dynLocked()) { dynRelease(); draw(); return; }
     dynKill();
     if (CMD) endCmd(); else { SEL.clear(); syncUI(); }
+    ST.rtzoom = false; ST.rtdrag = null; ST.panReady = false; navCursor();
     ST.band = null; hint(''); draw(); return;
   }
   if (inField) {
@@ -474,11 +530,11 @@ window.addEventListener('keydown', ev => {
     if (SEL.size) { begin(); selEnts().forEach(e => eraseEnt(e.id)); commit('Erase'); draw(); syncUI(); }
     return;
   }
+  /* Space is Enter, as in AutoCAD — but holding it arms a pan, so the action
+     waits for the key to come back up and only fires if nothing was dragged. */
   if (ev.key === ' ') {
     ev.preventDefault();
-    if (CMD) return cmdEnter();
-    if (ST.lastCmd && CMDS[ST.lastCmd]) { startCmd(ST.lastCmd); echo(ST.lastCmd.toUpperCase()); return; }
-    if (HISTC.length) runInput(HISTC[HISTC.length - 1]);
+    if (!ev.repeat) { ST.panReady = true; ST.panDragged = false; navCursor(); }
     return;
   }
   if (ev.key === 'F8') { ev.preventDefault(); return tgl('ortho'); }
@@ -503,9 +559,20 @@ window.addEventListener('keydown', ev => {
   }
   const map = MODE === 'arch' ? KEYS_ARCH : KEYS_DRAFT;
   if (map[K] && !ev.repeat) { ev.preventDefault(); startCmd(map[K]); return; }
-  if (K === 'q') { ev.preventDefault(); fit(); }
+  if (K === 'q') { ev.preventDefault(); pushView(); fit(null, true); }
 });
-window.addEventListener('keyup', ev => { if (ev.key === 'Shift') ST.shift = false; });
+window.addEventListener('keyup', ev => {
+  if (ev.key === 'Shift') ST.shift = false;
+  if (ev.key === ' ') {
+    const dragged = ST.panDragged;
+    ST.panReady = false; ST.panDragged = false; navCursor();
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (dragged || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (CMD) return cmdEnter();
+    if (ST.lastCmd && CMDS[ST.lastCmd]) { startCmd(ST.lastCmd); echo(ST.lastCmd.toUpperCase()); return; }
+    if (HISTC.length) runInput(HISTC[HISTC.length - 1]);
+  }
+});
 window.addEventListener('keydown', ev => { if (ev.key === 'Shift') ST.shift = true; });
 
 /* ---------- clipboard ---------- */
@@ -651,7 +718,7 @@ function boot() {
   $('#mUndo').onclick = undo;
   $('#mRedo').onclick = redo;
   $('#unit').onchange = () => { DOC.units = $('#unit').value; syncUI(); syncCoord(); draw(); };
-  $('#vFit').onclick = () => fit();
+  $('#vFit').onclick = () => { pushView(); fit(null, true); };
   $('#mHelp').onclick = showHelp;
   $('#mPanel').onclick = () => $('#panel').classList.toggle('open');
   $('#tEsc').onclick = () => { endCmd(); SEL.clear(); syncUI(); draw(); syncTouch(); };
@@ -673,7 +740,7 @@ function boot() {
     const h = (window.innerHeight || 800);
     if (h !== _railH) { _railH = h; buildRail(); }
   }).observe(stage);
-  resize(); fit(); syncUI(); syncToggles(); syncCoord();
+  resize(); fit(); syncUI(); syncToggles(); syncCoord(); syncScale(); navCursor();
   if (window.innerWidth <= 860) $('#mPanel').style.display = '';
   hint('Press <em>?</em> for the shortcut list · <em>Ctrl+D</em> swaps Drafting and Architecture');
   setTimeout(() => hint(''), 7000);

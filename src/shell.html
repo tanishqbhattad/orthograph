@@ -10,6 +10,7 @@
 <style>
 :root{
   --bg0:#0e1116; --bg1:#151a21; --bg2:#1c222b; --bg3:#242c37;
+  --canvas:#212830;                /* model space — mirrored by CO.bg in 05-view.js */
   --bd:#28313d; --bd2:#394453;
   --tx0:#dbe2ea; --tx1:#8d9aab; --tx2:#5c6878;
   --amber:#ffd166; --mint:#4ee6a8; --steel:#6ba8ff; --rose:#ff6b81;
@@ -87,8 +88,12 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 .tip b{font-family:var(--mono);color:var(--amber);font-weight:500;margin-left:8px}
 
 /* ---------------- stage ---------------- */
-#stage{grid-area:stage;position:relative;overflow:hidden;background:var(--bg0);
-  touch-action:none;cursor:crosshair}
+/* the drawing area carries AutoCAD's model-space grey, a little lighter than
+   the chrome around it; the crosshair is drawn on the canvas, so the system
+   cursor is hidden and JS puts it back for the pan and zoom modes */
+#stage{grid-area:stage;position:relative;overflow:hidden;background:var(--canvas);
+  touch-action:none;cursor:none}
+#hud,#nav,#touchbar,#drop,.qp{cursor:default}
 #cv{position:absolute;inset:0;width:100%;height:100%;display:block}
 #hud{position:absolute;inset:0;pointer-events:none}
 .dyn{position:absolute;display:flex;gap:4px;transform:translate(14px,14px);pointer-events:auto}
@@ -220,6 +225,9 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 #coord{font-family:var(--mono);font-size:11px;color:var(--tx1);
   min-width:168px;flex:none;letter-spacing:-.01em}
 #coord b{color:var(--tx2);font-weight:400}
+#vscale{font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--tx1);
+  height:21px;padding:0 8px;flex:none;border:1px solid var(--bd);border-radius:4px}
+#vscale:hover{color:var(--amber);border-color:var(--bd2)}
 .tgs{display:flex;align-items:center;gap:3px;flex:none}
 .tg{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;padding:3px 7px;
   border-radius:4px;border:1px solid var(--bd);color:var(--tx2);flex:none;height:21px}
@@ -407,8 +415,10 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
         <button class="tg" data-tg="ortho">ORTHO</button>
         <button class="tg" data-tg="polar">POLAR</button>
         <button class="tg" data-tg="dyn">DYN</button>
+        <button class="tg" data-tg="lwt" title="Show lineweights at their true plotted width">LWT</button>
       </div>
       <div class="grow"></div>
+      <button id="vscale" title="View scale on screen">1:1</button>
       <div id="dset"></div>
       <button class="gear" id="dsMore">⚙</button>
     </div>
