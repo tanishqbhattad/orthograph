@@ -214,6 +214,19 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 /* ---------------- bottom bar ---------------- */
 #bot{grid-area:bot;background:var(--bg1);border-top:1px solid var(--bd);
   display:flex;flex-direction:column;z-index:20}
+/* The command transcript. Collapsed it shows the last few lines, which is
+   what AutoCAD's docked command line does; F2 opens the tall history window.
+   Without this the app buffered every prompt, error and variable readout and
+   displayed none of them — a typo produced silence. */
+#cmdhist{flex:none;max-height:74px;overflow-y:auto;overflow-x:hidden;
+  padding:5px 11px 0;font-family:var(--mono);font-size:11px;line-height:1.55;
+  color:var(--tx1);border-bottom:1px solid transparent;scrollbar-width:thin}
+#cmdhist:empty{display:none}
+#cmdhist.open{max-height:38vh;border-bottom-color:var(--bd);background:var(--bg0)}
+#cmdhist .cl{white-space:pre-wrap;word-break:break-word}
+#cmdhist .cl.err{color:var(--red,#f85149)}
+#cmdhist .cl.cmd{color:var(--amber)}
+#cmdhist .cl.dim{color:var(--tx2)}
 #cmdwrap{display:flex;align-items:center;gap:8px;padding:0 11px;height:32px;flex:none}
 #caret{font-family:var(--mono);color:var(--amber);font-size:12px;flex:none}
 #cmd{flex:1;font-family:var(--mono);font-size:12px;min-width:0}
@@ -449,6 +462,7 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
   </div>
 
   <div id="bot">
+    <div id="cmdhist" aria-live="polite"></div>
     <div id="cmdwrap">
       <span id="caret">❯</span>
       <input id="cmd" autocomplete="off" spellcheck="false" placeholder="Type a command — LINE, WALL, DOOR, TRIM, OFFSET… or press a shortcut">

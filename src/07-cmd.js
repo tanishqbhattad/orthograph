@@ -574,6 +574,13 @@ function startCmd(key, arg, quiet) {
   const c = { def, pts: [], step: 0, data: {}, arg };
   CMD = c;
   ST.lastCmd = key; ST.lastArg = arg;              /* Space repeats this */
+  /* One command is one undo step, however many patches it takes to build.
+     HIST.group was recorded onto every patch and then never set by anything,
+     so the grouping machinery was inert and U after a four-segment LINE took
+     back a single segment. An explicit UNDO Begin group, if the user opened
+     one, outranks this and is restored when the command ends. */
+  c.grpOuter = HIST.group;
+  if (!HIST.group) HIST.group = ++HIST.groupSeq;
   ST.tool = key; ST.drawing = true; ST.preview = null; ST.angOverride = null;
   cliRemember(cmdName(key));
   /* alwaysSel commands (GRIPEDIT and friends) open the Select prompt even when
@@ -605,8 +612,13 @@ function startTransparent(key, arg) {
     if (typeof dynKill === 'function') dynKill();
     CMD = null; ST.preview = null;
   }
+  /* Space/Enter repeats the last command the user actually chose. A
+     transparent command is a detour inside another one, not a choice — letting
+     startCmd stamp it meant Enter after 'ZOOM inside LINE restarted ZOOM. */
+  const prevCmd = ST.lastCmd, prevArg = ST.lastArg;
   startCmd(key, arg, true);
   if (CMD) CMD.transparent = true;
+  ST.lastCmd = prevCmd; ST.lastArg = prevArg;
 }
 /** put the interrupted command back exactly where it was */
 function resumeSuspended() {
@@ -629,6 +641,7 @@ function endCmd(silent, cancelled) {
   const c = CMD;
   if (c && c.def.done) { try { c.def.done(c); } catch (e) { console.error(e); } }
   const had = !!c;
+  if (c) HIST.group = c.grpOuter || 0;             /* close this command's group */
   CMD = null; ST.drawing = false; ST.preview = null; ST.tool = 'select'; ST.tracks = null;
   ST.angOverride = null;
   if (c && c.transparent && TRANS.length) { resumeSuspended(); return; }

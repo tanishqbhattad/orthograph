@@ -535,6 +535,18 @@ window.addEventListener('keydown', ev => {
     if (!cancelCmd()) { selClearAll(); syncUI(); }
     ST.rtzoom = false; ST.rtdrag = null; ST.panReady = false; navCursor();
     bandCancel(); gripMenuClose(); hint(''); draw(); return;  }
+  /* The drafting toggles are hoisted above the in-a-field guard on purpose.
+     Typing any letter focuses the command line, so with them below it F8 would
+     be dead for the whole of every command — which is exactly when a drafter
+     reaches for it. They are function keys; no text field wants them. */
+  if (ev.key === 'F2') { ev.preventDefault(); if (typeof toggleCliHistory === 'function') toggleCliHistory(); return; }
+  if (ev.key === 'F8') { ev.preventDefault(); return tgl('ortho'); }
+  if (ev.key === 'F9') { ev.preventDefault(); return tgl('snapgrid'); }
+  if (ev.key === 'F3') { ev.preventDefault(); return tgl('osnap'); }
+  if (ev.key === 'F7') { ev.preventDefault(); return tgl('grid'); }
+  if (ev.key === 'F10') { ev.preventDefault(); return tgl('polar'); }
+  if (ev.key === 'F11') { ev.preventDefault(); return tgl('otrack'); }
+  if (ev.key === 'F12') { ev.preventDefault(); return tgl('dyn'); }
   if (inField) {
     if (ev.key === 'Enter' && $('#modal').classList.contains('show') && tag !== 'TEXTAREA') {
       const f = _ok; closeModal(); if (f) f();
@@ -578,13 +590,6 @@ window.addEventListener('keydown', ev => {
     if (SEL.size) { begin(); selEnts().forEach(e => eraseEnt(e.id)); commit('Erase'); draw(); syncUI(); }
     return;
   }
-  if (ev.key === 'F8') { ev.preventDefault(); return tgl('ortho'); }
-  if (ev.key === 'F9') { ev.preventDefault(); return tgl('snapgrid'); }
-  if (ev.key === 'F3') { ev.preventDefault(); return tgl('osnap'); }
-  if (ev.key === 'F7') { ev.preventDefault(); return tgl('grid'); }
-  if (ev.key === 'F10') { ev.preventDefault(); return tgl('polar'); }
-  if (ev.key === 'F11') { ev.preventDefault(); return tgl('otrack'); }
-  if (ev.key === 'F12') { ev.preventDefault(); return tgl('dyn'); }
   /* Numbers and coordinate punctuation go to the dynamic input at the cursor;
      everything else goes to the command line. There are no instant one-key
      tools, because there are none in AutoCAD: you type L and press Enter. */

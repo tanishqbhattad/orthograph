@@ -353,4 +353,105 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       return CLI.lines.map(l => l.t).join(' | ');`);
     ok(/Unknown command "NOSUCHTHING"\.  Press F1 for help\./.test(r), r);
   });
+
+  /* ============================================================
+     Findings from the first hostile review of the command line.
+
+     Four of the five were subsystems that were fully built and
+     then wired to nothing, which is the failure mode that unit
+     tests are worst at catching: every part works, and the whole
+     is dead. Each test below was checked to FAIL against the code
+     as it stood before the fix.
+     ============================================================ */
+  group('command line: defects found by review');
+
+  /* The worst of them. cliPrint() filled CLI.lines and called renderCli(),
+     which was never defined anywhere — so every prompt, error and variable
+     readout was recorded and thrown away. A typo produced silence. */
+  t('the transcript is actually rendered, not just buffered', () => {
+    const r = R(`${SETUP}
+      const box = document.getElementById('cmdhist');
+      if (!box) return { pane:false };
+      CLI.lines.length = 0; CLI.open = false; renderCli();
+      dispatch('FLOOBLE');
+      const rows = [...(box.children||[])].map(d => d.textContent);
+      const cls  = [...(box.children||[])].map(d => d.className);
+      dispatch('LTSCALE 25');
+      return { pane:true, buffered: CLI.lines.length,
+               rows, cls, rowsAfter: (box.children||[]).length,
+               lastRow: (box.children||[])[(box.children||[]).length-1].textContent };`);
+    ok(r.pane, 'there must be a transcript element at all');
+    ok(r.buffered >= 1, 'the line was buffered');
+    ok(r.rows.length >= 1, 'and it must be VISIBLE — rendered rows: ' + r.rows.length);
+    ok(/Unknown command "FLOOBLE"/.test(r.rows.join(' ')),
+      'the unknown-command message must reach the screen, got: ' + JSON.stringify(r.rows));
+    ok(r.cls.join(' ').includes('err'), 'an error must be styled as one');
+    ok(/LTSCALE = 25/.test(r.lastRow), 'a variable readout is shown too: ' + r.lastRow);
+  });
+
+  /* HIST stamped every patch with a group and nothing ever set the group, so
+     the machinery was inert: U after a four-segment LINE took back one
+     segment. AutoCAD undoes the command. */
+  t('undo takes back a whole command, not one patch of it', () => {
+    const r = R(`${SETUP}
+      const n0 = DOC.ents.size;
+      startCmd('line');
+      cmdPoint([0,0]); cmdPoint([1000,0]); cmdPoint([1000,1000]); cmdPoint([0,1000]);
+      endCmd(true);
+      const drawn = DOC.ents.size - n0;
+      undo(); const afterUndo = DOC.ents.size - n0;
+      redo(); const afterRedo = DOC.ents.size - n0;
+      return { drawn, afterUndo, afterRedo };`);
+    eq(r.drawn, 3, 'three segments were drawn');
+    eq(r.afterUndo, 0, 'one undo must remove all three, not ' + (3 - r.afterUndo));
+    eq(r.afterRedo, 3, 'and redo must bring the whole command back');
+  });
+
+  /* The per-command group must not trample an explicit UNDO Begin group. */
+  t('an explicit UNDO group still spans several commands', () => {
+    const r = R(`${SETUP}
+      const n0 = DOC.ents.size;
+      undoGroupBegin();
+      startCmd('line'); cmdPoint([0,0]);   cmdPoint([100,0]);  endCmd(true);
+      startCmd('line'); cmdPoint([0,50]);  cmdPoint([100,50]); endCmd(true);
+      undoGroupEnd();
+      const drawn = DOC.ents.size - n0;
+      undo();
+      return { drawn, afterUndo: DOC.ents.size - n0 };`);
+    eq(r.drawn, 2);
+    eq(r.afterUndo, 0, 'one undo must take back both commands in the group');
+  });
+
+  /* The global key handler returned at the in-a-field guard before reaching
+     the F-key block. Since typing any letter focuses the command line, F8 was
+     dead for the whole of every command — precisely when it is reached for. */
+  t('the drafting toggles work while the command line has focus', () => {
+    const r = R(`${SETUP}
+      const inp = document.getElementById('cmd');
+      const out = {};
+      for (const [key, flag] of [['F8','ortho'],['F3','osnap'],['F9','snapgrid']]) {
+        if (inp && inp.focus) inp.focus();
+        const before = ST[flag];
+        window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles:true, cancelable:true }));
+        out[key] = (ST[flag] !== before);
+      }
+      return out;`);
+    eq(r.F8, true, 'F8 must toggle ORTHO with focus in the command line');
+    eq(r.F3, true, 'F3 must toggle OSNAP there too');
+    eq(r.F9, true, 'and F9 SNAP');
+  });
+
+  /* startCmd stamped ST.lastCmd unconditionally, so Enter after a transparent
+     'ZOOM inside LINE restarted ZOOM rather than repeating LINE. */
+  t('Enter repeats the interrupted command, not the transparent detour', () => {
+    const r = R(`${SETUP}
+      ST.lastCmd = null;
+      startCmd('line'); cmdPoint([0,0]);
+      startTransparent('zoom');
+      const during = ST.lastCmd;
+      endCmd(true);
+      return { during, after: ST.lastCmd };`);
+    eq(r.during, 'line', 'a transparent command must not claim the repeat slot');
+    eq(r.after, 'line');
+  });
 };

@@ -1670,3 +1670,36 @@ function buildOsnapTab(w, W, redraw) {
   w.appendChild(el('div', 'oshint',
     'Shift + right-click for a one-shot override. Hold Shift+E endpoint, Shift+V midpoint, ' +
     'Shift+C centre, Shift+D nothing. Tab cycles the candidates under the cursor.'));}
+
+/* ============================================================
+   The command transcript.
+
+   cliPrint() has always filled CLI.lines and then called renderCli(), which
+   did not exist — so every prompt, every error and every variable readout was
+   recorded and thrown away. Typing a command that does not exist produced no
+   visible response at all, which is the single worst thing a command line can
+   do. This is that function.
+   ============================================================ */
+function renderCli() {
+  const box = $('#cmdhist'); if (!box) return;
+  const n = CLI.open ? CLI.lines.length : 4;
+  const show = CLI.lines.slice(-n);
+  /* rebuilt rather than appended: the buffer is capped at CLI.max and trims
+     from the front, so the DOM would drift out of step with it */
+  box.innerHTML = '';
+  for (const l of show) {
+    const d = el('div', 'cl' + (l.c ? ' ' + l.c : ''));
+    d.textContent = l.t;
+    box.appendChild(d);
+  }
+  box.classList.toggle('open', !!CLI.open);
+  box.scrollTop = box.scrollHeight;
+}
+/** F2 — the tall history window, as in AutoCAD */
+function toggleCliHistory() {
+  CLI.open = !CLI.open;
+  renderCli();
+  const box = $('#cmdhist');
+  if (box) box.scrollTop = box.scrollHeight;
+}
+

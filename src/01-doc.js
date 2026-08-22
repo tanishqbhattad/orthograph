@@ -294,16 +294,34 @@ function applyPatch(p, redoDir) {
   DOC.cur = p.cur[src]; UID = p.uid[src];
   idxInvalidate();
 }
+/* A command is one undo step, however many patches it took to build. The group
+   stamp was already being recorded on every patch and then never read, so U
+   after a four-segment LINE removed one segment and left the rest — AutoCAD
+   takes the whole command back. */
+function undoOne(from, to, forward) {
+  const p = from.pop();
+  applyPatch(p, forward);
+  to.push(p);
+  return p.grp;
+}
 function undo() {
   if (JN.on) rollback();
   if (!HIST.past.length) return echo('Nothing to undo');
-  const p = HIST.past.pop();
-  applyPatch(p, false);
-  HIST.future.push(p);
+  const g = undoOne(HIST.past, HIST.future, false);
+  if (g != null)
+    while (HIST.past.length && HIST.past[HIST.past.length - 1].grp === g)
+      undoOne(HIST.past, HIST.future, false);
   echo('Undo'); syncUI(); draw();
 }
 function redo() {
   if (!HIST.future.length) return echo('Nothing to redo');
+  /* symmetric with undo: a grouped command comes back in one step */
+  const g0 = HIST.future[HIST.future.length - 1].grp;
+  if (g0 != null) {
+    while (HIST.future.length && HIST.future[HIST.future.length - 1].grp === g0)
+      undoOne(HIST.future, HIST.past, true);
+    echo('Redo'); syncUI(); draw(); return;
+  }
   const p = HIST.future.pop();
   applyPatch(p, true);
   HIST.past.push(p);

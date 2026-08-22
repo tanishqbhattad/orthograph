@@ -74,10 +74,39 @@ function install(g) {
   const cv = doc.getElementById('cv');
   cv.width = 1200; cv.height = 800;
   g.document = doc;
+  /* Window events are real here, not swallowed. They used to be a no-op, which
+     meant every window-level key handler in the app was unregistered under
+     test — so none of the keyboard behaviour was reachable headlessly, and a
+     whole class of bug (a toggle that is dead while a field has focus) could
+     only ever be found by driving a browser. */
+  const winListeners = Object.create(null);
   g.window = {
-    addEventListener: () => { }, innerWidth: 1400, innerHeight: 900, devicePixelRatio: 1,
+    innerWidth: 1400, innerHeight: 900, devicePixelRatio: 1,
     matchMedia: () => ({ matches: false }),
     requestAnimationFrame: f => 0,
+    addEventListener(t, f) { (winListeners[t] || (winListeners[t] = [])).push(f); },
+    removeEventListener(t, f) {
+      const a = winListeners[t]; if (!a) return;
+      const i = a.indexOf(f); if (i >= 0) a.splice(i, 1);
+    },
+    dispatchEvent(ev) {
+      for (const f of (winListeners[ev.type] || []).slice()) f(ev);
+      return !ev.defaultPrevented;
+    },
+  };
+  /* enough of the KeyboardEvent shape for the app's handlers to read */
+  g.KeyboardEvent = class KeyboardEvent {
+    constructor(type, o) {
+      o = o || {};
+      this.type = type; this.key = o.key || '';
+      this.ctrlKey = !!o.ctrlKey; this.metaKey = !!o.metaKey;
+      this.shiftKey = !!o.shiftKey; this.altKey = !!o.altKey;
+      this.repeat = !!o.repeat; this.bubbles = !!o.bubbles;
+      this.cancelable = !!o.cancelable; this.defaultPrevented = false;
+      this.target = doc.activeElement || doc.body;
+    }
+    preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
+    stopPropagation() { }
   };
   g.navigator = { maxTouchPoints: 0 };
   g.requestAnimationFrame = f => 0;

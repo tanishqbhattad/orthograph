@@ -214,6 +214,19 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 /* ---------------- bottom bar ---------------- */
 #bot{grid-area:bot;background:var(--bg1);border-top:1px solid var(--bd);
   display:flex;flex-direction:column;z-index:20}
+/* The command transcript. Collapsed it shows the last few lines, which is
+   what AutoCAD's docked command line does; F2 opens the tall history window.
+   Without this the app buffered every prompt, error and variable readout and
+   displayed none of them — a typo produced silence. */
+#cmdhist{flex:none;max-height:74px;overflow-y:auto;overflow-x:hidden;
+  padding:5px 11px 0;font-family:var(--mono);font-size:11px;line-height:1.55;
+  color:var(--tx1);border-bottom:1px solid transparent;scrollbar-width:thin}
+#cmdhist:empty{display:none}
+#cmdhist.open{max-height:38vh;border-bottom-color:var(--bd);background:var(--bg0)}
+#cmdhist .cl{white-space:pre-wrap;word-break:break-word}
+#cmdhist .cl.err{color:var(--red,#f85149)}
+#cmdhist .cl.cmd{color:var(--amber)}
+#cmdhist .cl.dim{color:var(--tx2)}
 #cmdwrap{display:flex;align-items:center;gap:8px;padding:0 11px;height:32px;flex:none}
 #caret{font-family:var(--mono);color:var(--amber);font-size:12px;flex:none}
 #cmd{flex:1;font-family:var(--mono);font-size:12px;min-width:0}
@@ -449,6 +462,7 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
   </div>
 
   <div id="bot">
+    <div id="cmdhist" aria-live="polite"></div>
     <div id="cmdwrap">
       <span id="caret">❯</span>
       <input id="cmd" autocomplete="off" spellcheck="false" placeholder="Type a command — LINE, WALL, DOOR, TRIM, OFFSET… or press a shortcut">
@@ -903,16 +917,34 @@ function applyPatch(p, redoDir) {
   DOC.cur = p.cur[src]; UID = p.uid[src];
   idxInvalidate();
 }
+/* A command is one undo step, however many patches it took to build. The group
+   stamp was already being recorded on every patch and then never read, so U
+   after a four-segment LINE removed one segment and left the rest — AutoCAD
+   takes the whole command back. */
+function undoOne(from, to, forward) {
+  const p = from.pop();
+  applyPatch(p, forward);
+  to.push(p);
+  return p.grp;
+}
 function undo() {
   if (JN.on) rollback();
   if (!HIST.past.length) return echo('Nothing to undo');
-  const p = HIST.past.pop();
-  applyPatch(p, false);
-  HIST.future.push(p);
+  const g = undoOne(HIST.past, HIST.future, false);
+  if (g != null)
+    while (HIST.past.length && HIST.past[HIST.past.length - 1].grp === g)
+      undoOne(HIST.past, HIST.future, false);
   echo('Undo'); syncUI(); draw();
 }
 function redo() {
   if (!HIST.future.length) return echo('Nothing to redo');
+  /* symmetric with undo: a grouped command comes back in one step */
+  const g0 = HIST.future[HIST.future.length - 1].grp;
+  if (g0 != null) {
+    while (HIST.future.length && HIST.future[HIST.future.length - 1].grp === g0)
+      undoOne(HIST.future, HIST.past, true);
+    echo('Redo'); syncUI(); draw(); return;
+  }
   const p = HIST.future.pop();
   applyPatch(p, true);
   HIST.past.push(p);
@@ -6729,6 +6761,13 @@ function startCmd(key, arg, quiet) {
   const c = { def, pts: [], step: 0, data: {}, arg };
   CMD = c;
   ST.lastCmd = key; ST.lastArg = arg;              /* Space repeats this */
+  /* One command is one undo step, however many patches it takes to build.
+     HIST.group was recorded onto every patch and then never set by anything,
+     so the grouping machinery was inert and U after a four-segment LINE took
+     back a single segment. An explicit UNDO Begin group, if the user opened
+     one, outranks this and is restored when the command ends. */
+  c.grpOuter = HIST.group;
+  if (!HIST.group) HIST.group = ++HIST.groupSeq;
   ST.tool = key; ST.drawing = true; ST.preview = null; ST.angOverride = null;
   cliRemember(cmdName(key));
   /* alwaysSel commands (GRIPEDIT and friends) open the Select prompt even when
@@ -6760,8 +6799,13 @@ function startTransparent(key, arg) {
     if (typeof dynKill === 'function') dynKill();
     CMD = null; ST.preview = null;
   }
+  /* Space/Enter repeats the last command the user actually chose. A
+     transparent command is a detour inside another one, not a choice — letting
+     startCmd stamp it meant Enter after 'ZOOM inside LINE restarted ZOOM. */
+  const prevCmd = ST.lastCmd, prevArg = ST.lastArg;
   startCmd(key, arg, true);
   if (CMD) CMD.transparent = true;
+  ST.lastCmd = prevCmd; ST.lastArg = prevArg;
 }
 /** put the interrupted command back exactly where it was */
 function resumeSuspended() {
@@ -6784,6 +6828,7 @@ function endCmd(silent, cancelled) {
   const c = CMD;
   if (c && c.def.done) { try { c.def.done(c); } catch (e) { console.error(e); } }
   const had = !!c;
+  if (c) HIST.group = c.grpOuter || 0;             /* close this command's group */
   CMD = null; ST.drawing = false; ST.preview = null; ST.tool = 'select'; ST.tracks = null;
   ST.angOverride = null;
   if (c && c.transparent && TRANS.length) { resumeSuspended(); return; }
@@ -13202,6 +13247,39 @@ function buildOsnapTab(w, W, redraw) {
     'Shift + right-click for a one-shot override. Hold Shift+E endpoint, Shift+V midpoint, ' +
     'Shift+C centre, Shift+D nothing. Tab cycles the candidates under the cursor.'));}
 
+/* ============================================================
+   The command transcript.
+
+   cliPrint() has always filled CLI.lines and then called renderCli(), which
+   did not exist — so every prompt, every error and every variable readout was
+   recorded and thrown away. Typing a command that does not exist produced no
+   visible response at all, which is the single worst thing a command line can
+   do. This is that function.
+   ============================================================ */
+function renderCli() {
+  const box = $('#cmdhist'); if (!box) return;
+  const n = CLI.open ? CLI.lines.length : 4;
+  const show = CLI.lines.slice(-n);
+  /* rebuilt rather than appended: the buffer is capped at CLI.max and trims
+     from the front, so the DOM would drift out of step with it */
+  box.innerHTML = '';
+  for (const l of show) {
+    const d = el('div', 'cl' + (l.c ? ' ' + l.c : ''));
+    d.textContent = l.t;
+    box.appendChild(d);
+  }
+  box.classList.toggle('open', !!CLI.open);
+  box.scrollTop = box.scrollHeight;
+}
+/** F2 — the tall history window, as in AutoCAD */
+function toggleCliHistory() {
+  CLI.open = !CLI.open;
+  renderCli();
+  const box = $('#cmdhist');
+  if (box) box.scrollTop = box.scrollHeight;
+}
+
+
 /* ===== 14-events.js ===== */
 /* ============================================================
    ORTHOGRAPH — 14 events, command line, files, boot
@@ -13740,6 +13818,18 @@ window.addEventListener('keydown', ev => {
     if (!cancelCmd()) { selClearAll(); syncUI(); }
     ST.rtzoom = false; ST.rtdrag = null; ST.panReady = false; navCursor();
     bandCancel(); gripMenuClose(); hint(''); draw(); return;  }
+  /* The drafting toggles are hoisted above the in-a-field guard on purpose.
+     Typing any letter focuses the command line, so with them below it F8 would
+     be dead for the whole of every command — which is exactly when a drafter
+     reaches for it. They are function keys; no text field wants them. */
+  if (ev.key === 'F2') { ev.preventDefault(); if (typeof toggleCliHistory === 'function') toggleCliHistory(); return; }
+  if (ev.key === 'F8') { ev.preventDefault(); return tgl('ortho'); }
+  if (ev.key === 'F9') { ev.preventDefault(); return tgl('snapgrid'); }
+  if (ev.key === 'F3') { ev.preventDefault(); return tgl('osnap'); }
+  if (ev.key === 'F7') { ev.preventDefault(); return tgl('grid'); }
+  if (ev.key === 'F10') { ev.preventDefault(); return tgl('polar'); }
+  if (ev.key === 'F11') { ev.preventDefault(); return tgl('otrack'); }
+  if (ev.key === 'F12') { ev.preventDefault(); return tgl('dyn'); }
   if (inField) {
     if (ev.key === 'Enter' && $('#modal').classList.contains('show') && tag !== 'TEXTAREA') {
       const f = _ok; closeModal(); if (f) f();
@@ -13783,13 +13873,6 @@ window.addEventListener('keydown', ev => {
     if (SEL.size) { begin(); selEnts().forEach(e => eraseEnt(e.id)); commit('Erase'); draw(); syncUI(); }
     return;
   }
-  if (ev.key === 'F8') { ev.preventDefault(); return tgl('ortho'); }
-  if (ev.key === 'F9') { ev.preventDefault(); return tgl('snapgrid'); }
-  if (ev.key === 'F3') { ev.preventDefault(); return tgl('osnap'); }
-  if (ev.key === 'F7') { ev.preventDefault(); return tgl('grid'); }
-  if (ev.key === 'F10') { ev.preventDefault(); return tgl('polar'); }
-  if (ev.key === 'F11') { ev.preventDefault(); return tgl('otrack'); }
-  if (ev.key === 'F12') { ev.preventDefault(); return tgl('dyn'); }
   /* Numbers and coordinate punctuation go to the dynamic input at the cursor;
      everything else goes to the command line. There are no instant one-key
      tools, because there are none in AutoCAD: you type L and press Enter. */
