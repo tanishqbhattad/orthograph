@@ -3,35 +3,24 @@
 Browser CAD: AutoCAD-style drafting with a Revit-style parametric architecture
 layer, shipped as one self-contained HTML file.
 
-**State as of handoff: everything builds, 247 unit tests pass, 12 behavioural
-checks pass, DXF validates against ezdxf with 0 audit errors.** No known
-blockers. The open items at the bottom are polish and one real correctness bug
-(see *Known bugs*, item 1).
+**State: everything builds, 348 unit tests pass, 12 behavioural checks pass,
+DXF validates against ezdxf with 0 audit errors.** No known blockers and no
+known correctness bugs — the `roomBoundary()` write-during-read described under
+*Known bugs* was fixed on 21 Aug 2026 and is pinned by a regression test that
+was confirmed to fail against the old code.
 
 ---
 
 ## 1. Where everything is
 
-The project currently lives in a Cowork session output folder:
-
 ```
-C:\Users\Tanishq\AppData\Roaming\Claude\local-agent-mode-sessions\
-  830c8908-0ab0-4b96-adc9-fa975890b82d\
-  513eca51-846b-41bf-86a4-4276f7f2c3c5\
-  local_90670052-77ef-4e31-b809-d109d9ac6f5e\
-  outputs\orthograph\
+C:\Users\Tanishq\projects\orthograph
 ```
 
-> **Do this first.** That path is session-scoped and will not survive. Copy the
-> whole `orthograph\` folder somewhere permanent before doing any work:
->
-> ```powershell
-> $src = "C:\Users\Tanishq\AppData\Roaming\Claude\local-agent-mode-sessions\830c8908-0ab0-4b96-adc9-fa975890b82d\513eca51-846b-41bf-86a4-4276f7f2c3c5\local_90670052-77ef-4e31-b809-d109d9ac6f5e\outputs\orthograph"
-> Copy-Item -Recurse $src "$HOME\projects\orthograph"
-> cd "$HOME\projects\orthograph"
-> ```
->
-> Everything below assumes you are in the project root.
+> **Superseded.** This section originally pointed at a session-scoped Cowork
+> output folder that no longer exists. The project moved to the path above on
+> 16 Aug 2026 and is a git repository; `master` is the integrated line. See
+> `PLAN.md` for what is done, what is next, and why the scope is what it is.
 
 ### Tree
 
@@ -85,9 +74,10 @@ orthograph/
 
 ```bash
 node build.js            # → orthograph.html   (must be re-run after ANY src/ change)
-node test/run.js         # 247 unit tests, zero dependencies
+node test/run.js         # 348 unit tests, zero dependencies
 node test/run.js wall    # run a subset by name substring
 node tools/verify.js     # 12 behavioural checks
+node tools/serve.js      # serve at 127.0.0.1:8017 — file:// gives the page no origin
 ```
 
 DXF validation needs Python:
@@ -227,21 +217,23 @@ thicknesses for exactly this reason.
 
 **Real bugs**
 
-1. `roomBoundary()` in `04c-components.js` writes `r.pts` during a *read*, with
-   no `mut()` and no `DOCV++`. Right after `undo()`, `r.pts` can still hold the
-   post-move polygon until something re-reads it. A `.ocad` or DXF written in
-   that window persists a state undo never produced. **Fix properly** — either
-   make it a pure read that caches outside the entity, or journal the write.
+1. ~~`roomBoundary()` writes `r.pts` during a *read*.~~ **FIXED 21 Aug 2026.**
+   It is a pure read now; the `.ocad` writer materialises its own copy at write
+   time via `roomForSave()` in `11-io.js`. Three tests in `test/suites/arch.js`
+   pin it, including one reproducing the original corrupt-file sequence
+   (trace -> edit -> trace -> undo -> save), verified to fail against the
+   pre-fix code.
 2. An unenclosed room silently keeps its last good area. `PROPS.room` says
    "follows the walls" and `QUICK.room` says "not enclosed", but the drawing
    gives no signal. Should draw the boundary dashed and flag it in the tag.
 
 **Dead code to delete**
 
-`src/04-arch.js` (stub), `src/05-view-OLDBENCH.txt`, `isArchEnt` (04a),
-`rotv` (04b), `releaseTrack` (06), `bumpIndex` alias (01), `dir2` in
-`stairPath`, and `window.saveTypeTable` leaks a global out of
-`openTypeManager` (13-ui).
+~~`src/04-arch.js`~~, ~~`src/05-view-OLDBENCH.txt`~~, ~~`isArchEnt`~~,
+~~`rotv`~~ and ~~`dir2`~~ are gone. Still open: `releaseTrack` (06),
+`bumpIndex` alias (01), and `window.saveTypeTable` leaking a global out of
+`openTypeManager` (13-ui) — deferred while branches were in flight, safe to
+remove now.
 
 **Polish**
 
@@ -285,5 +277,6 @@ Not yet created — these are the remaining steps:
 5. Create the repo and push. There is no GitHub connector in this Cowork
    session, so this step has to be done with `gh repo create` or the web UI.
 
-README claims to verify before publishing: it currently says 247 tests, which
-is correct as of this handoff.
+README is current as of 22 Aug 2026 and says 348 tests, which is correct.
+`LICENSE` (MIT) and `.github/workflows/ci.yml` now exist; CI fails the build if
+the committed `orthograph.html` is stale, which has shipped from here before.

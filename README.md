@@ -30,7 +30,7 @@ src/
   14-events.js       events, command line, files, boot
 test/
   run.js             core tests, no dependencies — `node test/run.js`
-  suites/*.js        per-area suites, auto-loaded (247 tests in total)
+  suites/*.js        per-area suites, auto-loaded (348 tests in total)
   load.js            loads the bundle into a vm sandbox
   dom-stub.js        minimal DOM + a tracing canvas, so rendering is testable
 tools/
@@ -38,17 +38,53 @@ tools/
   make_hard_dxf.py   builds a deliberately awkward R2018 file for the importer
 ```
 
+## Running it
+
+`orthograph.html` opens straight from disk, but **serve it if you are developing**:
+loaded over `file://` the page has no origin, which breaks canvas readback and any
+storage it touches.
+
+```
+node tools/serve.js            # → http://127.0.0.1:8017/
+```
+
 ## Build and test
 
 ```
 node build.js                  # → orthograph.html
-node test/run.js               # 247 tests
+node test/run.js               # 348 tests
 node test/run.js wall          # run a subset by name
 
 pip install ezdxf
 python3 tools/make_hard_dxf.py # generate the import fixture
 python3 tools/check_dxf.py test/out/fixture.dxf
 ```
+
+## Precision
+
+The part that decides whether a CAD tool is usable. Sixteen object snap modes
+(endpoint, midpoint, centre, geometric centre, node, quadrant, intersection,
+apparent intersection, extension, insertion, perpendicular, tangent, nearest,
+parallel and the two wall-specific ones), each with AutoCAD's own marker glyph
+and a tooltip. Polar tracking with configurable increments, object snap tracking
+that acquires points on dwell and crosses their alignment paths, temporary
+overrides, FROM and mid-between-2-points.
+
+Candidates are ranked by **distance to the cursor**, with priority buying only a
+bounded head start — so a perpendicular under the crosshair is not stolen by an
+endpoint eight pixels away, which is the failure that makes most snap engines
+tiring to use.
+
+The command line is the real one: acad.pgp aliases, prompts whose bracketed
+keywords are typed by their capital, transparent commands, `U`/`REDO`, and about
+forty live system variables reachable through `SETVAR`. Coordinates take every
+AutoCAD form — absolute, relative `@dx,dy`, polar `@dist<angle`, direct distance
+entry and the `#` override.
+
+Selection follows the same rules: left-to-right windows (blue, solid, encloses),
+right-to-left crosses (green, dashed, touches), with live preview of what the box
+would take, lasso, fence, cycling through overlapping objects, and grips that go
+blue → hover → hot red with the full stretch/move/rotate/scale/mirror cycle.
 
 ## The two modes
 
@@ -119,6 +155,7 @@ either side of it. The point you drag to sets the first flight.
 ## Known limits
 
 - No paper space or plotting.
+- DWG remains experimental and unverified against AutoCAD — use DXF.
 - Hatch boundaries come from closed objects or a point inside one, not from a full
   arrangement trace of crossing lines.
 - Splines are drawn through fit points (Catmull-Rom) and exported as clamped B-splines;
@@ -126,3 +163,7 @@ either side of it. The point you drag to sets the first flight.
 - Wall cleanup handles L corners, straight runs, T-junctions, crossings and Y/X nodes
   where three or more walls meet.
 - One level is drawn at a time; levels exist as data but there is no level switcher yet.
+
+## Licence
+
+MIT. See `LICENSE`.
