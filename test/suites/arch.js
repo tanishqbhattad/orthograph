@@ -325,4 +325,93 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       return bad;`);
     eq(r.length, 0, r.join(' | '));
   });
+
+  /* ============================================================
+     roomBoundary() must not mutate the document.
+
+     It used to cache its traced polygon straight onto the entity
+     "for save/export" — a write performed during a *read*, with no
+     mut() and no journal entry. Undo therefore could not restore
+     it, so immediately after an undo the room still carried the
+     polygon for the wall positions that undo had just reverted,
+     and a file written in that window persisted a state the user
+     had never created and could not get back to.
+     ============================================================ */
+  group('rooms: reading a boundary never mutates the document');
+
+  /* The exact sequence that produced a corrupt file: trace, edit, trace,
+     undo, save. The saved polygon must describe the room as it stands
+     after the undo, not as it was before. */
+  t('a save straight after undo writes the post-undo room, not the pre-undo one', () => {
+    const r = R(`${SETUP}
+      const W = 6000, H = 4000;
+      const c = [[0,0],[W,0],[W,H],[0,H]];
+      for (let i = 0; i < 4; i++)
+        addEnt({t:'wall', a:c[i], b:c[(i+1)%4], wt:'gen100', layer:'A-WALL'});
+      const room = addEnt({t:'room', seed:[W/2,H/2], auto:true, layer:'A-AREA'});
+      const before = polyArea(roomBoundary(room));
+
+      /* Widen the room by 2000mm. Every vertex sitting on the right-hand edge
+         moves together — dragging the right wall alone would just open a gap
+         at both corners, and an unenclosed room traces to null, which measures
+         nothing. */
+      begin();
+      for (const w of [...DOC.ents.values()].filter(e => e.t === 'wall')) {
+        mut(w);
+        if (w.a[0] === W) w.a = [W + 2000, w.a[1]];
+        if (w.b[0] === W) w.b = [W + 2000, w.b[1]];
+      }
+      commit('widen');
+      /* re-read while the wall is moved — this is the read that used to
+         write the wider polygon onto the entity, outside the journal */
+      const widened = polyArea(roomBoundary(room));
+
+      undo();
+
+      /* save WITHOUT re-reading the boundary first, exactly as a user
+         hitting Ctrl+S straight after Ctrl+Z would */
+      const saved = JSON.parse(saveNative()).ents.find(e => e.t === 'room');
+      return { before, widened, savedArea: polyArea(saved.pts),
+               liveArea: polyArea(roomBoundary(room)) };`);
+
+    ok(r.widened > r.before * 1.2, 'the edit really did widen the room');
+    close(r.liveArea, r.before, 1, 'after undo the live boundary is the original again');
+    close(r.savedArea, r.before, 1,
+      'the SAVED polygon must be the post-undo room — got ' + Math.round(r.savedArea) +
+      ', expected ' + Math.round(r.before) + ' (pre-undo was ' + Math.round(r.widened) + ')');
+  });
+
+  /* The narrower invariant, stated on its own so a future refactor cannot
+     quietly reintroduce the write: reading is not an edit. */
+  t('reading a boundary bumps neither DOCV nor the undo stack', () => {
+    const r = R(`${SETUP}
+      const c = [[0,0],[6000,0],[6000,4000],[0,4000]];
+      for (let i = 0; i < 4; i++)
+        addEnt({t:'wall', a:c[i], b:c[(i+1)%4], wt:'gen100', layer:'A-WALL'});
+      const room = addEnt({t:'room', seed:[3000,2000], auto:true, layer:'A-AREA'});
+      roomBoundary(room);                     /* prime the cache */
+      const v0 = DOCV, h0 = HIST.past.length, p0 = JSON.stringify(room.pts || null);
+      for (let i = 0; i < 5; i++) roomBoundary(room);
+      return { dv: DOCV - v0, dh: HIST.past.length - h0,
+               entityChanged: JSON.stringify(room.pts || null) !== p0 };`);
+    eq(r.dv, 0, 'DOCV must not move');
+    eq(r.dh, 0, 'no undo step may be pushed');
+    eq(r.entityChanged, false, 'the entity itself must be untouched by a read');
+  });
+
+  /* Materialising for the file is still required: an automatic room stores a
+     seed, not a polygon, so a saved file must carry a usable outline. */
+  t('the saved file still carries a real polygon for an automatic room', () => {
+    const r = R(`${SETUP}
+      const c = [[0,0],[6000,0],[6000,4000],[0,4000]];
+      for (let i = 0; i < 4; i++)
+        addEnt({t:'wall', a:c[i], b:c[(i+1)%4], wt:'gen100', layer:'A-WALL'});
+      addEnt({t:'room', seed:[3000,2000], auto:true, layer:'A-AREA'});
+      const saved = JSON.parse(saveNative()).ents.find(e => e.t === 'room');
+      return { n: (saved.pts || []).length, area: polyArea(saved.pts || []),
+               seedKept: !!saved.seed, stillAuto: saved.auto === true };`);
+    eq(r.n, 4, 'four corners written to the file');
+    close(r.area, 5900 * 3900, 1, 'and they describe the real traced room');
+    ok(r.seedKept && r.stillAuto, 'it stays an automatic room on reload');
+  });
 };

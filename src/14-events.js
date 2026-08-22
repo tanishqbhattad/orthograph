@@ -2,7 +2,29 @@
    ORTHOGRAPH — 14 events, command line, files, boot
    ============================================================ */
 function echo(s) { const n = $('#echo'); if (n) n.textContent = s || ''; }
-function hint(h) { const n = $('#hint'); if (!n) return; n.innerHTML = h || ''; n.style.display = h ? '' : 'none'; }
+/** Every command states its prompt through hint(). The engine parses that one
+    string, and the HUD, the keyword list and the command line all render from
+    the parsed form — so a command never has to say the same thing twice. */
+function hint(h) { promptSet(h); }
+/** a keyword with its typed letters marked, the way AutoCAD capitalises them */
+function kwHtml(k) {
+  const w = k.word, i = w.toLowerCase().indexOf(k.key.toLowerCase());
+  if (i < 0) return '<em>' + esc(w) + '</em>';
+  return esc(w.slice(0, i)) + '<em>' + esc(w.slice(i, i + k.key.length)) + '</em>' + esc(w.slice(i + k.key.length));
+}
+function renderPrompt() {
+  const n = $('#hint'); if (!n) return;
+  const p = PROMPT;
+  let h = '';
+  if (p.base || p.keys.length) {
+    h = esc(p.base.replace(/:\s*$/, ''));
+    if (p.keys.length) h += (p.base ? ' or ' : '') + '[' + p.keys.map(kwHtml).join('/') + ']';
+    if (!/[.?!:]$/.test(h)) h += ':';
+    if (p.extra) h += ' · ' + esc(p.extra);
+  }
+  n.innerHTML = h;
+  n.style.display = h ? '' : 'none';
+}
 let _tt;
 function toast(s) {
   const t = $('#toast'); if (!t) return;
@@ -16,46 +38,8 @@ function syncUI() {
   if (r) r.disabled = !HIST.future.length;
 }
 
-/* ---------- command line ---------- */
-const ALIAS = {
-  l: 'line', li: 'line', pl: 'pline', p: 'pline', spl: 'spline', sp: 'spline',
-  rec: 'rect', r: 'rect', rectang: 'rect', rectangle: 'rect',
-  c: 'circle', ci: 'circle', a: 'arc', el: 'ellipse', g: 'polygon', pol: 'polygon', po: 'point',
-  do: 'donut', xl: 'xline', revcloud: 'revcloud', rev: 'revcloud', h: 'hatch', bh: 'hatch',
-  t: 'text', dt: 'text', mt: 'mtext', le: 'leader', lead: 'leader',
-  d: 'dim', di: 'dim', dimlinear: 'dim', dimaligned: 'dim', dli: 'dim', dco: 'dimcont',
-  m: 'move', mv: 'move', k: 'copy', co: 'copy', cp: 'copy', o: 'rotate', ro: 'rotate',
-  s: 'scale', sc: 'scale', i: 'mirror', mi: 'mirror', f: 'offset', off: 'offset',
-  x: 'trim', tr: 'trim', ex: 'extend', len: 'lengthen', v: 'fillet', fil: 'fillet', cha: 'chamfer',
-  ar: 'array', br: 'break', j: 'join', pe: 'pedit', xp: 'explode', exp: 'explode',
-  e: 'erase', del: 'erase', er: 'erase', st: 'stretch', al: 'align',
-  div: 'divide', me: 'measure', ma: 'matchprop', mat: 'matchprop',
-  b: 'block', ins: 'insert', qs: 'qselect', ls: 'list', li2: 'list',
-  di2: 'dist', dis: 'dist', aa: 'area',
-  w: 'wall', wa: 'wall', wr: 'wallrect', dr: 'door', win: 'window', wi: 'window',
-  col: 'column', str: 'stair', rm: 'room', gr: 'grid',
-  wf: 'wallflip', wj: 'walljoin', ws: 'wallsplit',
-};
-const META = {
-  u: undo, undo, redo, z: () => fit(), zoom: () => fit(), ze: () => fit(), zoomextents: () => fit(),
-  all: () => { SEL.clear(); [...DOC.ents.values()].filter(pickable).forEach(e => SEL.add(e.id)); syncUI(); draw(); },
-  qsave: () => doSave(), save: () => doSave(), saveas: () => doExport(), open: () => $('#fileIn').click(),
-  new: () => doNew(), help: showHelp, '?': showHelp,
-  ortho: () => tgl('ortho'), osnap: () => tgl('osnap'), grid: () => tgl('grid'),
-  polar: () => tgl('polar'), snap: () => tgl('snapgrid'), dyn: () => tgl('dyn'),
-  drafting: () => setMode('drafting'), arch: () => setMode('arch'), architecture: () => setMode('arch'),
-  types: openTypeManager, wt: openTypeManager,
-  units: () => toast('Use the unit menu, top right'),
-  dimstyle: openDimStyle, ds: openDimStyle,
-  purge: () => {
-    begin(); touchLayers();
-    DOC.layers = DOC.layers.filter(l => l.name === '0' || [...DOC.ents.values()].some(e => e.layer === l.name));
-    if (!DOC.layers.some(l => l.name === DOC.cur)) DOC.cur = '0';
-    commit('Purged unused layers'); syncUI();
-  },
-  audit: runAudit,
-  dwg: () => doSaveDWG(),
-};
+/* The alias table, the META registry and the dispatcher all live in 07-cmd.js
+   now — one source of truth, so ALIAS agrees with what AutoComplete offers. */
 function openDimStyle() {
   const S = dimStyle();
   modal(`<h3>Dimension style</h3>
@@ -99,45 +83,61 @@ function runAudit() {
   });
 }
 const cmdIn = $('#cmd');
-const HISTC = []; let hi = -1;
+let hi = -1;                                       /* index into CLI.history */
 function focusCmd() { if (cmdIn) cmdIn.focus(); }
-if (cmdIn) cmdIn.addEventListener('keydown', ev => {
-  if (ev.key === 'ArrowUp') { if (hi < HISTC.length - 1) { hi++; cmdIn.value = HISTC[HISTC.length - 1 - hi]; } ev.preventDefault(); }
-  else if (ev.key === 'ArrowDown') { if (hi > 0) { hi--; cmdIn.value = HISTC[HISTC.length - 1 - hi]; } else { hi = -1; cmdIn.value = ''; } ev.preventDefault(); }
-  else if (ev.key === 'Escape') { cmdIn.value = ''; endCmd(); cv.focus(); }
-  else if (ev.key === 'Enter') {
+if (cmdIn && cmdIn.addEventListener) cmdIn.addEventListener('keydown', ev => {
+  const H = CLI.history;
+  if (ev.key === 'ArrowUp') { if (hi < H.length - 1) { hi++; cmdIn.value = H[H.length - 1 - hi]; } ev.preventDefault(); }
+  else if (ev.key === 'ArrowDown') { if (hi > 0) { hi--; cmdIn.value = H[H.length - 1 - hi]; } else { hi = -1; cmdIn.value = ''; } ev.preventDefault(); }
+  else if (ev.key === 'Escape') { cmdIn.value = ''; cancelCmd(); if (cv.focus) cv.focus(); }
+  else if (ev.key === 'Enter' || (ev.key === ' ' && !cmdTakesSpace())) {
     const s = cmdIn.value.trim(); cmdIn.value = '';
-    if (s) { HISTC.push(s); hi = -1; }
+    if (s) { H.push(s); hi = -1; if (H.length > 200) H.shift(); }
     runInput(s); ev.preventDefault();
   }
 });
-function runInput(s) {
-  if (!s) { if (CMD) return cmdEnter(); if (HISTC.length) return runInput(HISTC[HISTC.length - 1]); return; }
-  if (CMD && cmdText(s)) { cmdPreview(ST.cur || [0, 0]); draw(); return; }
-  const k = s.toLowerCase().split(/\s+/)[0];
-  if (META[k]) { META[k](); echo(k.toUpperCase()); return; }
-  const key = ALIAS[k] || k;
-  if (CMDS[key]) {
-    if (CMDS[key].group === 'arch' && MODE !== 'arch') setMode('arch');
-    startCmd(key); echo(CMDS[key].key.toUpperCase()); return;
-  }
-  const p = parseCoord(s, ST.lastPt, ST.cur);
-  if (p && CMD) { cmdPoint(p); return; }
-  echo('Unknown: ' + s);
+/** TEXT and friends read a literal line, so Space must not act as Enter there */
+function cmdTakesSpace() {
+  return !!(CMD && CMD.phase === 'run' && (CMD.def.key === 'text' || CMD.def.key === 'mtext' || CMD.def.key === 'leader'));
 }
-function tgl(k) {
-  /* SELECTIONCYCLING is 0/1/2 — off, badge only, badge and list — not a flag */
-  if (k === 'selCycling') ST.selCycling = ST.selCycling ? 0 : 2;
-  else ST[k] = !ST[k];
-  syncToggles(); draw(); echo(k.toUpperCase() + ' ' + (ST[k] ? 'on' : 'off'));
+/* draftToggle (06-snap) owns the ORTHO/POLAR exclusion rule and the redraw */
+function tgl(k) { const v = draftToggle(k); echo(k.toUpperCase() + ' ' + (v ? 'on' : 'off')); return v; }
+function syncToggles() {
+  document.querySelectorAll('.tg').forEach(b => {
+    b.classList.toggle('on', !!ST[b.dataset.tg]);
+    if (!b.title) {
+      const k = b.dataset.key;
+      b.title = b.textContent.trim() + (k ? '  ' + k : '') +
+        (b.dataset.set ? '  ·  right-click for settings' : '');
+    }
+    if (b.dataset.set && !b._wired) {
+      b._wired = 1;
+      b.addEventListener('contextmenu', ev => {
+        ev.preventDefault();
+        openOsnapSettings(b.dataset.set === 'polar' || b.dataset.set === 'otrack' ? 1 : b.dataset.set === 'snap' ? 0 : 2);
+      });
+    }
+  });
 }
-function syncToggles() { document.querySelectorAll('.tg').forEach(b => b.classList.toggle('on', !!ST[b.dataset.tg])); }
 
 function syncCoord() {
+  const n = $('#coord'); if (!n) return;
+  if (!VS.coords) { n.innerHTML = '<b>COORDS off</b>'; return; }
   const p = ST.cur || [0, 0];
-  let s = `<b>X</b> ${fmt(p[0])}  <b>Y</b> ${fmt(p[1])}`;
-  if (ST.lastPt && ST.drawing) s += `  <b>Δ</b> ${fmt(dist(ST.lastPt, p))} ∠${deg(ang(ST.lastPt, p)).toFixed(1)}°`;
-  const n = $('#coord'); if (n) n.innerHTML = s;
+  /* relative display, like AutoCAD's second COORDS mode, once there is a
+     rubber band to measure from */
+  const rel = VS.coords === 2 && ST.lastPt && ST.drawing;
+  let s = rel
+    ? `<b>Δ</b> ${fmt(dist(ST.lastPt, p))} <b>&lt;</b> ${deg(ang(ST.lastPt, p)).toFixed(1)}°`
+    : `<b>X</b> ${fmt(p[0])}  <b>Y</b> ${fmt(p[1])}`;
+  if (!rel && ST.lastPt && ST.drawing) s += `  <b>Δ</b> ${fmt(dist(ST.lastPt, p))} ∠${deg(ang(ST.lastPt, p)).toFixed(1)}°`;
+  n.innerHTML = s;
+}
+/** the view scale, in the 1:n form a drafter reads off a title block */
+function syncScale() {
+  const n = $('#vscale'); if (!n) return;
+  n.textContent = viewScaleText();
+  n.title = 'View scale on screen · click to zoom to extents';
 }
 
 /* ---------- pointer + keyboard ---------- */
@@ -174,6 +174,11 @@ function takeStyleFrom(p) {
 }
 function localXY(ev) { const r = cv.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; }
 function refPoint() {
+  /* FROM's base point and MID-BETWEEN's first pick outrank the command's own
+     last point: that is what makes the rubber band, ortho and the dynamic
+     input read from the right place while a modifier is pending */
+  const m = typeof ptModRef === 'function' && ptModRef();
+  if (m) return m;
   if (CMD && CMD.phase === 'run' && CMD.pts && CMD.pts.length) return CMD.pts[CMD.pts.length - 1];
   /* a grip edit measures from its base point, so ortho, polar and the dynamic
      length/angle box all bind the drag exactly as they do while drawing */
@@ -198,7 +203,9 @@ function startBandGesture(scr, kind, sense, keep) {
 }
 stage.addEventListener('pointerdown', ev => {
   if (ev.target.closest('.dyn')) return;
-  stage.setPointerCapture(ev.pointerId);
+  /* a pointer that has already been released throws here, and losing the
+     capture must never cost us the whole press */
+  try { stage.setPointerCapture(ev.pointerId); } catch (_) { }
   ptrs.set(ev.pointerId, localXY(ev));
   if (cmdIn) cmdIn.blur();
   if (ptrs.size === 2) {
@@ -207,9 +214,16 @@ stage.addEventListener('pointerdown', ev => {
   }
   const scr = localXY(ev);
   downScr = scr; moved = false; pend = null;
-  if (ev.button === 1 || (ev.button === 0 && ev.altKey) || ev.button === 2) {
-    ST.panning = { x: scr[0], y: scr[1], px: V.px, py: V.py }; return;
+  /* Pan on the middle button, on a held spacebar, and for the whole of the
+     PAN command. The right button is AutoCAD's shortcut menu, not a pan. */
+  if (ev.button === 1 || (ev.button === 0 && (ev.altKey || ST.panReady || ST.panCmd))) {
+    cancelAnim();
+    ST.panning = { x: scr[0], y: scr[1], px: V.px, py: V.py };
+    ST.panDragged = false; navCursor(); return;
   }
+  /* ZOOM real time: drag up to magnify, anchored where the drag started */
+  if (ST.rtzoom && ev.button === 0) {
+    ST.rtdrag = { x: scr[0], y: scr[1] }; navCursor(); return;  }
   const p = snapPoint(scr[0], scr[1], refPoint());
   ST.cur = p; downPt = p;
   ST.shift = ev.shiftKey;
@@ -252,9 +266,17 @@ stage.addEventListener('pointermove', ev => {
     return;
   }
   if (ST.panning) {
+    /* 1:1 and absolute — recomputed from the press point every move, so a pan
+       can never accumulate drift however long the drag runs */
     V.px = ST.panning.px + (scr[0] - ST.panning.x);
     V.py = ST.panning.py + (scr[1] - ST.panning.y);
-    moved = true; draw(); return;
+    moved = true; ST.panDragged = true; syncViewUI(); draw(); return;
+  }
+  if (ST.rtdrag) {
+    const dy = scr[1] - ST.rtdrag.y;
+    ST.rtdrag.y = scr[1];
+    if (dy) zoomAt(ST.rtdrag.x, ST.rtdrag.y, Math.pow(1.006, -dy));
+    return;
   }
   const p = snapPoint(scr[0], scr[1], refPoint());
   ST.cur = p;
@@ -280,8 +302,8 @@ stage.addEventListener('pointermove', ev => {
 stage.addEventListener('pointerup', ev => {
   ptrs.delete(ev.pointerId);
   if (ptrs.size < 2) pinch = null;
-  if (ST.panning) { ST.panning = null; downPt = null; downScr = null; pend = null; return; }
-  const scr = localXY(ev);
+  if (ST.panning) { ST.panning = null; navCursor(); downPt = null; downScr = null; pend = null; return; }
+  if (ST.rtdrag) { ST.rtdrag = null; navCursor(); downPt = null; downScr = null; pend = null; return; }  const scr = localXY(ev);
   const p = ST.cur || s2w(scr[0], scr[1]);
   /* a grip dragged rather than clicked finishes where the button came up */
   if (CMD && CMD.def.key === 'gripedit' && moved) {
@@ -346,14 +368,26 @@ stage.addEventListener('dblclick', () => {
   } else if (MODE !== 'arch' && GEOM[e.t]) setMode('arch');
   draw();
 });
+/* AutoCAD sizes the wheel step from ZOOMFACTOR and only ever sees detents;
+   the browser hands us a delta instead — 100 units per notch on a wheel, a
+   few units at a time on a trackpad — so dividing gives one feel on both. */
 stage.addEventListener('wheel', ev => {
   ev.preventDefault();
   const scr = localXY(ev);
-  const f = Math.pow(0.9988, ev.deltaY * (ev.deltaMode === 1 ? 16 : 1));
-  zoomAt(scr[0], scr[1], clamp(f, .2, 5));
+  const unit = ev.deltaMode === 1 ? 3 : ev.deltaMode === 2 ? 1 : 100;
+  const notches = clamp(ev.deltaY / unit, -4, 4);
+  if (!notches) return;
+  zoomAt(scr[0], scr[1], wheelFactor(notches));
   ST.cur = snapPoint(scr[0], scr[1], refPoint());
   syncCoord(); syncDyn();
 }, { passive: false });
+/* the crosshair is drawn on the canvas, so the pointer has to be told when it
+   is over the drawing area and when it has left */
+stage.addEventListener('pointerenter', () => { ST.inView = true; navCursor(); draw(); });
+stage.addEventListener('pointerleave', () => {
+  if (ST.panning) return;
+  ST.inView = false; navCursor(); draw();
+});
 
 /* ============================================================
    Dynamic input
@@ -375,6 +409,18 @@ function dynRelease() {
 }
 function dynKill() { if (dynEl) { dynEl.remove(); dynEl = null; } dynMode = null; dynRelease(); }
 function dynLocked() { return dynLock.f1 || dynLock.f2; }
+/** the `<45` angle override: lock the angle field so the mouse only sets length */
+function dynLockAngle(degVal) {
+  syncDyn();
+  const f2 = $('#dF2');
+  if (!f2 || dynMode !== 'polar') return false;
+  f2.value = String(deg(rad(degVal)).toFixed(1));
+  dynLock.f2 = true;
+  if (f2.classList) f2.classList.add('act');
+  cmdPreview(dynApply(ST.cur));
+  draw();
+  return true;
+}
 
 /** the point the command should actually use, after any locked field */
 function dynApply(p) {
@@ -471,14 +517,6 @@ function focusDyn() {
   return true;
 }
 
-const KEYS_DRAFT = {
-  l: 'line', p: 'pline', r: 'rect', c: 'circle', a: 'arc', e: 'ellipse', g: 'polygon',
-  t: 'text', d: 'dim', h: 'hatch', m: 'move', k: 'copy', o: 'rotate', s: 'scale',
-  i: 'mirror', f: 'offset', x: 'trim', v: 'fillet',
-};
-const KEYS_ARCH = {
-  w: 'wall', d: 'door', n: 'window', t: 'text', m: 'move', k: 'copy', o: 'rotate', i: 'mirror',
-};
 window.addEventListener('keydown', ev => {
   const tag = document.activeElement && document.activeElement.tagName;
   const inField = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
@@ -488,13 +526,15 @@ window.addEventListener('keydown', ev => {
     if (ST.styleTarget) { ST.styleTarget = null; echo('Cancelled'); buildProps(); return; }
     if ($('#modal').classList.contains('show')) return closeModal();
     if (dynLocked()) { dynRelease(); draw(); return; }
-    /* an in-flight window goes first: the selection you already have survives
-       abandoning the box, exactly as it does in AutoCAD */
+    /* An in-flight window goes first: abandoning the box leaves the selection
+       you already had, exactly as AutoCAD does. Otherwise one Esc cancels
+       whatever is running — command, transparent command, grip drag — and
+       rolls the journal back; a second clears the selection. */
     if (ST.band) { bandCancel(); ST.pendOption = null; draw(); return; }
     dynKill();
-    if (CMD) endCmd(); else { selClearAll(); syncUI(); }
-    gripMenuClose(); hint(''); draw(); return;
-  }
+    if (!cancelCmd()) { selClearAll(); syncUI(); }
+    ST.rtzoom = false; ST.rtdrag = null; ST.panReady = false; navCursor();
+    bandCancel(); gripMenuClose(); hint(''); draw(); return;  }
   if (inField) {
     if (ev.key === 'Enter' && $('#modal').classList.contains('show') && tag !== 'TEXTAREA') {
       const f = _ok; closeModal(); if (f) f();
@@ -509,34 +549,33 @@ window.addEventListener('keydown', ev => {
       if (gripCtrl()) { ev.preventDefault(); syncGripMenu(); }
       return;
     }
-    if (K === 'z') { ev.preventDefault(); ev.shiftKey ? redo() : undo(); }
-    else if (K === 'y') { ev.preventDefault(); redo(); }
-    else if (K === 'a') { ev.preventDefault(); META.all(); }
-    else if (K === 's') { ev.preventDefault(); doSave(); }
+    if (K === 'z') { ev.preventDefault(); ev.shiftKey ? redoStep() : undoStep(); }
+    else if (K === 'y') { ev.preventDefault(); redoStep(); }
+    else if (K === 'a') { ev.preventDefault(); selectAll(); }    else if (K === 's') { ev.preventDefault(); doSave(); }
     else if (K === 'o') { ev.preventDefault(); $('#fileIn').click(); }
     else if (K === 'c') { ev.preventDefault(); doClipCopy(); }
     else if (K === 'v') { ev.preventDefault(); doClipPaste(); }
     else if (K === 'd') { ev.preventDefault(); setMode(MODE === 'arch' ? 'drafting' : 'arch'); }
     return;
   }
-  if (ev.key === 'Enter') { ev.preventDefault(); if (CMD) cmdEnter(); else focusCmd(); return; }
-  if (ev.key === 'Delete' || ev.key === 'Backspace') {
-    ev.preventDefault();
-    if (SEL.size) { begin(); selEnts().forEach(e => eraseEnt(e.id)); commit('Erase'); draw(); syncUI(); }
-    return;
-  }
+  /* Shift+Space steps the rollover through the objects sharing the pick box.
+     It has to be tested before the plain Space handler below, which returns. */
   if (ev.key === ' ' && ev.shiftKey && selPhase() && ST.cycleList && ST.cycleList.length > 1) {
-    /* Shift+Space steps the rollover through the objects sharing the pick box */
     ev.preventDefault();
     cyclePick(1);
     echo('Cycle ' + (ST.cycleIdx + 1) + '/' + ST.cycleList.length);
     draw(); return;
   }
-  if (ev.key === ' ') {
+  /* Enter and Space both mean "again" at the Command prompt, and "done" inside
+     a command — the two keys a draughtsman's left hand never leaves. */
+  if (ev.key === 'Enter' || ev.key === ' ') {
     ev.preventDefault();
     if (CMD) return cmdEnter();
-    if (ST.lastCmd && CMDS[ST.lastCmd]) { startCmd(ST.lastCmd); echo(ST.lastCmd.toUpperCase()); return; }
-    if (HISTC.length) runInput(HISTC[HISTC.length - 1]);
+    repeatLast(); return;
+  }
+  if (ev.key === 'Delete' || ev.key === 'Backspace') {
+    ev.preventDefault();
+    if (SEL.size) { begin(); selEnts().forEach(e => eraseEnt(e.id)); commit('Erase'); draw(); syncUI(); }
     return;
   }
   if (ev.key === 'F8') { ev.preventDefault(); return tgl('ortho'); }
@@ -544,26 +583,24 @@ window.addEventListener('keydown', ev => {
   if (ev.key === 'F3') { ev.preventDefault(); return tgl('osnap'); }
   if (ev.key === 'F7') { ev.preventDefault(); return tgl('grid'); }
   if (ev.key === 'F10') { ev.preventDefault(); return tgl('polar'); }
-  if (/^[0-9.@\-]$/.test(ev.key) && CMD) { if (!focusDyn()) focusCmd(); return; }
-  /* A letter typed while a command is running belongs to that command — the
-     on-screen prompt says "C to close", so C must close, not start CIRCLE.
-     Only if the running command has no use for the key does it fall through
-     to starting a tool. */
-  if (CMD && CMD.phase === 'run' && /^[a-z]$/.test(K) && !ev.repeat) {
-    let taken = false;
-    try { taken = !!cmdText(K); } catch (e) { taken = false; }
-    if (taken) {
-      ev.preventDefault();
-      cmdPreview(ST.cur || [0, 0]);
-      syncDyn(); draw();
-      return;
-    }
+  if (ev.key === 'F11') { ev.preventDefault(); return tgl('otrack'); }
+  if (ev.key === 'F12') { ev.preventDefault(); return tgl('dyn'); }
+  /* Numbers and coordinate punctuation go to the dynamic input at the cursor;
+     everything else goes to the command line. There are no instant one-key
+     tools, because there are none in AutoCAD: you type L and press Enter. */
+  if (/^[0-9.@#\-]$/.test(ev.key) && CMD && ST.dyn && focusDyn()) return;
+  if (ev.key.length === 1 && !ev.altKey) {
+    /* the character is appended here rather than left to the browser: focus
+       moves during this keydown, and the keypress that follows would otherwise
+       still be delivered to the canvas */
+    ev.preventDefault();
+    if (cmdIn) { cmdIn.value += ev.key; focusCmd(); }
+    return;
   }
-  const map = MODE === 'arch' ? KEYS_ARCH : KEYS_DRAFT;
-  if (map[K] && !ev.repeat) { ev.preventDefault(); startCmd(map[K]); return; }
-  if (K === 'q') { ev.preventDefault(); fit(); }
 });
-window.addEventListener('keyup', ev => { if (ev.key === 'Shift') ST.shift = false; });
+window.addEventListener('keyup', ev => {
+  if (ev.key === 'Shift') ST.shift = false;
+});
 window.addEventListener('keydown', ev => { if (ev.key === 'Shift') ST.shift = true; });
 
 /* ---------- clipboard ---------- */
@@ -643,10 +680,18 @@ function showHelp() {
     <kbd>X V</kbd><span>Trim (hold <kbd>Shift</kbd> to extend), Fillet</span>
     <kbd>W D N</kbd><span>In Architecture: Wall, Door, wiNdow</span>
     <kbd>Q</kbd><span>Zoom to everything</span>
-    <kbd>F3 F7 F8 F9 F10</kbd><span>Object snap · grid · ortho · grid snap · polar</span>
+    <kbd>F3 F7 F8 F9 F10 F11 F12</kbd><span>Object snap · grid · ortho · grid snap · polar · snap tracking · dynamic input</span>
+    <kbd>Tab</kbd><span>Cycle the snap candidates under the cursor</span>
+    <kbd>Shift</kbd>+<kbd>right-click</kbd><span>One-shot object snap, FROM, mid between 2 points</span>
     <kbd>Space</kbd><span>Repeat the last command</span>
     <kbd>Esc</kbd><span>Cancel / clear the selection</span>
   </div>
+  <p style="margin-top:12px"><b>Precision.</b> Hover a snap point for a moment to acquire it, then track orthogonal or polar
+  paths out of it — two acquired points give you their crossing. <kbd>FROM</kbd> at any point prompt sets a base point to
+  measure an offset from, <kbd>M2P</kbd> takes the middle of two picks, and typing <kbd>MID</kbd>, <kbd>CEN</kbd>,
+  <kbd>PER</kbd>… overrides the running snaps for one point. Hold <kbd>Shift</kbd>+<kbd>E</kbd> endpoint,
+  <kbd>Shift</kbd>+<kbd>V</kbd> midpoint, <kbd>Shift</kbd>+<kbd>C</kbd> centre, <kbd>Shift</kbd>+<kbd>D</kbd> nothing.
+  <kbd>OSNAP</kbd> opens the settings.</p>
   <p style="margin-top:14px">Coordinates take <kbd>250</kbd>, <kbd>1200,600</kbd>, <kbd>@0,-450</kbd>, <kbd>@800&lt;30</kbd>,
   and units like <kbd>2.5m</kbd> or <kbd>4'-6"</kbd>. Drag left→right to take what is fully inside,
   right→left to catch anything you touch.</p>
@@ -709,7 +754,7 @@ function boot() {
   $('#mUndo').onclick = undo;
   $('#mRedo').onclick = redo;
   $('#unit').onchange = () => { DOC.units = $('#unit').value; syncUI(); syncCoord(); draw(); };
-  $('#vFit').onclick = () => fit();
+  $('#vFit').onclick = () => { pushView(); fit(null, true); };
   $('#mHelp').onclick = showHelp;
   $('#mPanel').onclick = () => $('#panel').classList.toggle('open');
   $('#tEsc').onclick = () => { endCmd(); SEL.clear(); syncUI(); draw(); syncTouch(); };
@@ -731,9 +776,11 @@ function boot() {
     const h = (window.innerHeight || 800);
     if (h !== _railH) { _railH = h; buildRail(); }
   }).observe(stage);
-  resize(); fit(); syncUI(); syncToggles(); syncCoord();
+  resize(); fit(); syncUI(); syncToggles(); syncCoord(); syncScale(); navCursor();
   if (window.innerWidth <= 860) $('#mPanel').style.display = '';
-  hint('Press <em>?</em> for the shortcut list · <em>Ctrl+D</em> swaps Drafting and Architecture');
+  /* plain text on purpose: hint() parses bracketed and <em> markup as command
+     keywords, and the welcome banner is not a prompt */
+  hint('Type ? for the shortcut list. Ctrl+D swaps Drafting and Architecture.');
   setTimeout(() => hint(''), 7000);
   echo('Ready');
 }

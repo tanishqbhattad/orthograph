@@ -89,6 +89,18 @@ function exportPNG(maxPx) {
 
 /* ---------------- native project file ---------------- */
 const FILE_VERSION = 2;
+/* An automatic room stores a seed, not a polygon — roomBoundary() derives the
+   shape on demand and caches it outside the entity, so r.pts on a live auto
+   room may be stale or absent. Materialise it here, on a copy, so the file
+   carries a usable outline for anything that reads it without this app's
+   tracer. Copying rather than writing through is the point: the document must
+   not change because it was saved. */
+function roomForSave(e) {
+  if (e.t !== 'room' || !e.auto || !e.seed) return e;
+  const pts = roomBoundary(e);
+  if (!pts || pts === e.pts) return e;
+  return Object.assign({}, e, { pts: pts.map(p => p.slice()) });
+}
 function saveNative() {
   return JSON.stringify({
     app: 'orthograph', v: FILE_VERSION, units: DOC.units, textH: DOC.textH,
@@ -96,7 +108,7 @@ function saveNative() {
     layers: DOC.layers, cur: DOC.cur, blocks: DOC.blocks || {},
     wallTypes: DOC.wallTypes, doorTypes: DOC.doorTypes, winTypes: DOC.winTypes,
     levels: DOC.levels, curLevel: DOC.curLevel,
-    ents: [...DOC.ents.values()],
+    ents: [...DOC.ents.values()].map(roomForSave),
   });
 }
 function loadNative(txt) {

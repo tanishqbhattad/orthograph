@@ -118,61 +118,61 @@ const RAILS = {
   drafting: [
     ['Select', [
       ['select', 'Select', 'Esc'], ['qselect', 'Quick select', ''],
-      ['matchprop', 'Match properties', ''],
+      ['matchprop', 'Match properties', 'MA'],
     ]],
     ['Draw', [
-      ['line', 'Line', 'L'], ['pline', 'Polyline', 'P'], ['spline', 'Spline', ''],
-      ['rect', 'Rectangle', 'R'], ['circle', 'Circle', 'C'], ['arc', 'Arc', 'A'],
-      ['ellipse', 'Ellipse', 'E'], ['polygon', 'Polygon', 'G'], ['donut', 'Donut', ''],
-      ['point', 'Point', ''], ['xline', 'Construction line', ''], ['ray', 'Ray', ''],
+      ['line', 'Line', 'L'], ['pline', 'Polyline', 'PL'], ['spline', 'Spline', 'SPL'],
+      ['rect', 'Rectangle', 'REC'], ['circle', 'Circle', 'C'], ['arc', 'Arc', 'A'],
+      ['ellipse', 'Ellipse', 'EL'], ['polygon', 'Polygon', 'POL'], ['donut', 'Donut', 'DO'],
+      ['point', 'Point', 'PO'], ['xline', 'Construction line', 'XL'], ['ray', 'Ray', ''],
       ['revcloud', 'Revision cloud', ''], ['hatch', 'Hatch', 'H'],
     ]],
     ['Annotate', [
-      ['text', 'Single-line text', 'T'], ['mtext', 'Paragraph text', ''],
-      ['leader', 'Leader note', ''], ['dim', 'Dimension', 'D'],
-      ['dimcont', 'Continue dimension', ''],
+      ['text', 'Single-line text', 'DT'], ['mtext', 'Paragraph text', 'MT'],
+      ['leader', 'Leader note', 'LE'], ['dim', 'Dimension', 'DLI'],
+      ['dimcont', 'Continue dimension', 'DCO'],
     ]],
     ['Transform', [
-      ['move', 'Move', 'M'], ['copy', 'Copy', 'K'], ['rotate', 'Rotate', 'O'],
-      ['scale', 'Scale', 'S'], ['mirror', 'Mirror', 'I'], ['offset', 'Offset', 'F'],
-      ['array', 'Array', ''], ['stretch', 'Stretch', ''], ['align', 'Align', ''],
+      ['move', 'Move', 'M'], ['copy', 'Copy', 'CO'], ['rotate', 'Rotate', 'RO'],
+      ['scale', 'Scale', 'SC'], ['mirror', 'Mirror', 'MI'], ['offset', 'Offset', 'O'],
+      ['array', 'Array', 'AR'], ['stretch', 'Stretch', 'S'], ['align', 'Align', 'AL'],
     ]],
     ['Modify', [
-      ['trim', 'Trim', 'X'], ['extend', 'Extend', ''], ['lengthen', 'Lengthen', ''],
-      ['fillet', 'Fillet', 'V'], ['chamfer', 'Chamfer', ''], ['break', 'Break', ''],
-      ['join', 'Join', ''], ['pedit', 'Edit polyline', ''], ['explode', 'Explode', ''],
-      ['divide', 'Divide', ''], ['measure', 'Measure along', ''], ['erase', 'Erase', 'Del'],
+      ['trim', 'Trim', 'TR'], ['extend', 'Extend', 'EX'], ['lengthen', 'Lengthen', 'LEN'],
+      ['fillet', 'Fillet', 'F'], ['chamfer', 'Chamfer', 'CHA'], ['break', 'Break', 'BR'],
+      ['join', 'Join', 'J'], ['pedit', 'Edit polyline', 'PE'], ['explode', 'Explode', 'X'],
+      ['divide', 'Divide', 'DIV'], ['measure', 'Measure along', 'ME'], ['erase', 'Erase', 'E'],
     ]],
     ['Blocks', [
-      ['block', 'Make block', ''], ['insert', 'Insert block', ''],
+      ['block', 'Make block', 'B'], ['insert', 'Insert block', 'I'],
     ]],
     ['Inquiry', [
-      ['dist', 'Distance', ''], ['area', 'Area', ''],
-      ['id', 'Point coordinates', ''], ['list', 'List properties', ''],
+      ['dist', 'Distance', 'DI'], ['area', 'Area', 'AA'],
+      ['id', 'Point coordinates', ''], ['list', 'List properties', 'LI'],
     ]],
   ],
   arch: [
     ['Select', [['select', 'Select', 'Esc']]],
     ['Build', [
-      ['wall', 'Wall', 'W'], ['wallrect', 'Room of walls', ''],
-      ['column', 'Column', ''], ['stair', 'Stair', ''],
+      ['wall', 'Wall', 'W'], ['wallrect', 'Room of walls', 'WR'],
+      ['column', 'Column', 'COL'], ['stair', 'Stair', 'STR'],
     ]],
     ['Openings', [
-      ['door', 'Door', 'D'], ['window', 'Window', 'N'], ['wallflip', 'Flip opening', ''],
+      ['door', 'Door', 'DR'], ['window', 'Window', 'WI'], ['wallflip', 'Flip opening', 'WF'],
     ]],
     ['Wall tools', [
-      ['walljoin', 'Clean up corners', ''], ['wallsplit', 'Split wall', ''],
+      ['walljoin', 'Clean up corners', 'WJ'], ['wallsplit', 'Split wall', 'WS'],
     ]],
     ['Space', [
-      ['room', 'Room / area tag', ''], ['grid', 'Structural grid', ''],
+      ['room', 'Room / area tag', 'RM'], ['grid', 'Structural grid', 'CG'],
     ]],
     ['Transform', [
-      ['move', 'Move', 'M'], ['copy', 'Copy', 'K'], ['rotate', 'Rotate', 'O'],
-      ['mirror', 'Mirror', 'I'], ['array', 'Array', ''], ['erase', 'Erase', 'Del'],
+      ['move', 'Move', 'M'], ['copy', 'Copy', 'CO'], ['rotate', 'Rotate', 'RO'],
+      ['mirror', 'Mirror', 'MI'], ['array', 'Array', 'AR'], ['erase', 'Erase', 'E'],
     ]],
     ['Annotate', [
-      ['dim', 'Dimension', ''], ['text', 'Text', 'T'],
-      ['dist', 'Distance', ''], ['area', 'Area', ''],
+      ['dim', 'Dimension', 'DLI'], ['text', 'Text', 'DT'],
+      ['dist', 'Distance', 'DI'], ['area', 'Area', 'AA'],
     ]],
   ],
 };
@@ -295,6 +295,8 @@ function initShellUI() {
   if (n) { n.innerHTML = svg('north'); tipOn(n, 'Reset view rotation', '', 'left'); n.onclick = () => setViewRot(0); }
   const g = $('#dsMore');
   if (g) { g.innerHTML = svg('gear'); g.onclick = toggleDrawPop; tipOn(g, 'Drawing settings', '', 'left'); }
+  const vs = $('#vscale');
+  if (vs) { vs.onclick = () => { pushView(); fit(null, true); }; syncScale(); }
 
   /* the widget is inside #stage: keep its pointer traffic off the canvas */
   const nav = $('#nav');
@@ -383,7 +385,22 @@ function drawSettingsExtras(w) {
     v => { ST.pickBox = clamp(Math.round(v), 2, 40); draw(); }, 1);
   addRow(w, 'Grip size px', ST.gripSize || 5,
     v => { ST.gripSize = clamp(Math.round(v), 2, 20); draw(); }, 1);
-  btnRow(w, 'Wall poche', DOC.wallHatch === false ? 'off' : 'on', () => {
+  /* snap settings first, since they follow the pick box; display below */
+  addRow(w, 'Aperture px', ST.aperture || 10,
+    v => { ST.aperture = clamp(Math.round(v), 1, 50); draw(); }, 1);
+  addRow(w, 'Marker px', ST.markerSize || 6,
+    v => { ST.markerSize = clamp(Math.round(v), 2, 20); draw(); }, 1);
+  btnRow(w, 'Object snap', 'Settings…', () => { w.classList.remove('show'); openOsnapSettings(2); });
+  addRow(w, 'Zoom factor', VS.zoomFactor, v => { VS.zoomFactor = clamp(Math.round(v), 3, 100); }, 1);
+  grpRow(w, 'Display');
+  addRow(w, 'LTSCALE', ltScale(), v => { DOC.ltScale = clamp(v, 1e-4, 1e6); draw(); }, 1);
+  addRow(w, 'Grid major', VS.gridMajor, v => { VS.gridMajor = clamp(Math.round(v), 1, 100); draw(); }, 1);
+  btnRow(w, 'Lineweights', ST.lwt === false ? 'off' : 'on', () => {
+    ST.lwt = ST.lwt === false; syncToggles(); draw(); buildDrawPop();
+  });
+  btnRow(w, 'UCS icon', VS.ucsIcon ? 'on' : 'off', () => {
+    VS.ucsIcon = !VS.ucsIcon; draw(); buildDrawPop();
+  });  btnRow(w, 'Wall poche', DOC.wallHatch === false ? 'off' : 'on', () => {
     begin(); DOC.wallHatch = DOC.wallHatch === false; commit('Wall poche');
     draw(); syncUI();
   });
@@ -460,9 +477,11 @@ function buildLayers() {
 function renameLayer(l) {
   modal(`<h3>Layer</h3>
     <div class="row"><label>Name</label><input class="f" id="ln" value="${esc(l.name)}"></div>
-    <div class="row"><label>Lineweight</label><input class="f" id="lw" value="${l.lw}"></div>
+    <div class="row"><label>Lineweight</label><select class="f" id="lw">
+      ${LW_LADDER.map(v => `<option value="${v}" ${lwSnap(l.lw) === v ? 'selected' : ''}>${v === 0 ? '0.00 (hairline)' : v.toFixed(2) + ' mm'}</option>`).join('')}
+    </select></div>
     <div class="row"><label>Linetype</label><select class="f" id="lt">
-      ${['solid', 'dashed', 'hidden', 'center', 'dashdot'].map(t => `<option ${t === l.lt ? 'selected' : ''}>${t}</option>`).join('')}
+      ${Object.keys(LTDEF).concat('solid').sort().map(t => `<option ${t === l.lt ? 'selected' : ''}>${t}</option>`).join('')}
     </select></div>`, () => {
     const n = $('#ln').value.trim().toUpperCase();
     begin(); touchLayers();
@@ -471,7 +490,7 @@ function renameLayer(l) {
       for (const e of DOC.ents.values()) if (e.layer === old) { mut(e); e.layer = n; }
       if (DOC.cur === old) DOC.cur = n;
     }
-    l.lw = parseFloat($('#lw').value) || 0.25;
+    l.lw = lwSnap(parseFloat($('#lw').value));
     l.lt = $('#lt').value;
     commit('Layer updated'); buildLayers(); draw();
   });
@@ -1351,43 +1370,72 @@ function arrayPath(src) {
 
 
 /* ============================================================
-   Object snap menu (Shift + right-click, as in AutoCAD) and the
-   drawing settings that had no UI: crosshair length, pick box
-   size and the wall poche toggle.
+   Object snap cursor menu (Shift + right-click, as in AutoCAD)
+   ------------------------------------------------------------
+   This menu is NOT the running-snap switchboard — that is the Drafting
+   Settings dialog below. Picking a mode here is a one-shot override that
+   applies to the next point and then gets out of the way, which is what
+   AutoCAD's object snap cursor menu does.
    ============================================================ */
 let SNAPMENU = null;
 function hideSnapMenu() { if (SNAPMENU) { SNAPMENU.remove(); SNAPMENU = null; } }
+/** render one AutoSnap glyph into a data URL, using the renderer's own glyph
+    table so the menu and the dialog can never drift from what is drawn */
+function snapGlyphURL(kind, size, colour) {
+  if (typeof SNAP_GLYPH !== 'function' && typeof SNAP_GLYPH !== 'object') return '';
+  const g = SNAP_GLYPH[kind] || SNAP_GLYPH.near;
+  if (!g) return '';
+  let c;
+  try { c = document.createElement('canvas'); } catch (e) { return ''; }
+  if (typeof c.toDataURL !== 'function') return '';
+  const s = size || 20;
+  c.width = s; c.height = s;
+  const g2 = c.getContext('2d');
+  const old = ctx;
+  try {
+    ctx = g2;
+    g2.strokeStyle = colour || '#4ee6a8';
+    g2.lineWidth = 1.3; g2.lineCap = 'butt'; g2.lineJoin = 'miter';
+    g((s / 2) + .5, (s / 2) + .5, Math.round(s * 0.28));
+  } catch (e) { return ''; } finally { ctx = old; }
+  try { return c.toDataURL(); } catch (e) { return ''; }
+}
+function snapGlyphImg(kind) {
+  const u = snapGlyphURL(kind, 20);
+  return u ? `<img class="smg" src="${u}" alt="">` : '<span class="smg"></span>';
+}
 function showSnapMenu(sx, sy) {
   hideSnapMenu();
   if (typeof snapMenuItems !== 'function') return;
-  const items = snapMenuItems();
-  const rows = items.map(it =>
-    `<button class="smi" data-k="${esc(it.kind)}"><span class="smx">${it.on ? '✓' : ''}</span>${esc(it.label)}</button>`).join('');
+  const row = (k, label) =>
+    `<button class="smi" data-k="${esc(k)}">${snapGlyphImg(k)}<span class="smt">${esc(label)}</span></button>`;
+  const rows = snapMenuItems().map(it => row(it.kind, it.label)).join('');
   SNAPMENU = el('div', 'snapmenu',
-    `<div class="smh">Object snap</div>${rows}
+    `<button class="smi" data-m="tt"><span class="smg"></span><span class="smt">Temporary track point</span></button>
+     <button class="smi" data-m="from"><span class="smg"></span><span class="smt">From</span></button>
+     <button class="smi" data-m="m2p"><span class="smg"></span><span class="smt">Mid between 2 points</span></button>
      <div class="smsep"></div>
-     <button class="smi" data-k="__all"><span class="smx"></span>Turn all on</button>
-     <button class="smi" data-k="__none"><span class="smx"></span>Turn all off</button>`);
+     <div class="smh">Object snap — next point only</div>${rows}
+     <button class="smi" data-k="none"><span class="smg"></span><span class="smt">None</span></button>
+     <div class="smsep"></div>
+     <button class="smi" data-s="1"><span class="smg"></span><span class="smt">Object snap settings…</span></button>`);
   document.body.appendChild(SNAPMENU);
-  SNAPMENU.style.left = Math.min(sx, (window.innerWidth || 1200) - 200) + 'px';
-  SNAPMENU.style.top = Math.min(sy, (window.innerHeight || 800) - 380) + 'px';
+  const H = (window.innerHeight || 800), W = (window.innerWidth || 1200);
+  SNAPMENU.style.left = Math.max(4, Math.min(sx, W - 232)) + 'px';
+  SNAPMENU.style.top = Math.max(4, Math.min(sy, H - 470)) + 'px';
   SNAPMENU.querySelectorAll('.smi').forEach(b => {
     b.onclick = ev => {
       ev.stopPropagation();
-      const k = b.dataset.k;
-      if (k === '__all' || k === '__none') {
-        for (const it of snapMenuItems()) if (!!ST.osnapOn[it.kind] !== (k === '__all')) toggleSnap(it.kind);
-      } else toggleSnap(k);
-      const st = showSnapMenuPos;
+      const d = b.dataset;
       hideSnapMenu();
-      if (st) showSnapMenu(st[0], st[1]);
+      if (d.s) { openOsnapSettings(); return; }
+      if (d.m) { startPtMod(d.m); draw(); return; }
+      setSnapOverride(d.k, true);
+      echo(d.k === 'none' ? 'No snap for the next point' : snapKindLabel(d.k).toUpperCase());
       draw();
     };
   });
-  showSnapMenuPos = [sx, sy];
 }
-let showSnapMenuPos = null;
-
 /* ============================================================
    SELECTION CYCLING LIST
    ------------------------------------------------------------
@@ -1475,3 +1523,150 @@ function syncGripMenu() {
   GRIPMENU.style.top = clamp(s[1] + 12, 6, Math.max(6, vh - 24 - m.items.length * 21)) + 'px';
   return GRIPMENU;
 }
+
+/* ============================================================
+   Drafting settings — snap and grid, polar tracking, object snap.
+   One dialog, the three tabs AutoCAD's DSETTINGS has, because they are the
+   three halves of the same decision and splitting them makes users hunt.
+   ============================================================ */
+const POLAR_PRESETS = [90, 45, 30, 22.5, 18, 15, 10, 5];
+function openOsnapSettings(tab) {
+  /* edited on a working copy: Cancel has to mean cancel */
+  const W = {
+    on: Object.assign({}, ST.osnapOn),
+    osnap: !!ST.osnap, polar: !!ST.polar, ortho: !!ST.ortho, otrack: !!ST.otrack,
+    snapgrid: !!ST.snapgrid, grid: !!ST.grid,
+    polarInc: +ST.polarInc || 45,
+    extra: (ST.polarExtra || []).slice(),
+    polarRel: !!ST.polarRel, trackPolar: ST.trackPolar !== false,
+    aperture: clamp(+ST.aperture || 10, 1, 50),
+    markerSize: clamp(+ST.markerSize || 6, 2, 20),
+    apBox: !!ST.apBox,
+    gridStep: DOC.gridStep, snapStep: DOC.snapStep,
+  };
+  const tabs = ['Snap and grid', 'Polar tracking', 'Object snap'];
+  let cur = tab == null ? 2 : tab;
+
+  modal(`<h3>Drafting settings</h3>
+    <div class="dstabs" id="dsTabs">${tabs.map((t, i) =>
+    `<button class="dstab${i === cur ? ' on' : ''}" data-i="${i}">${esc(t)}</button>`).join('')}</div>
+    <div id="dsBody"></div>`, () => {
+    Object.assign(ST.osnapOn, W.on);
+    ST.osnap = W.osnap; ST.otrack = W.otrack; ST.snapgrid = W.snapgrid; ST.grid = W.grid;
+    /* ortho and polar are mutually exclusive, so route them through the one
+       place that knows it */
+    if (W.polar !== ST.polar) draftToggle('polar', W.polar);
+    if (W.ortho !== ST.ortho) draftToggle('ortho', W.ortho);
+    ST.polarInc = clamp(W.polarInc, 0.1, 180);
+    ST.polarExtra = W.extra.slice();
+    ST.polarRel = W.polarRel; ST.trackPolar = W.trackPolar;
+    ST.aperture = W.aperture; ST.markerSize = W.markerSize; ST.apBox = W.apBox;
+    DOC.gridStep = Math.max(W.gridStep, 1e-6); DOC.snapStep = Math.max(W.snapStep, 1e-6);
+    buildDrawSettings(); syncToggles(); draw();
+  });
+  $('#mo').textContent = 'OK';
+
+  const body = () => {
+    const b = $('#dsBody'); if (!b) return;
+    clearNode(b);
+    if (cur === 0) buildSnapGridTab(b, W);
+    else if (cur === 1) buildPolarTab(b, W, body);
+    else buildOsnapTab(b, W, body);
+  };
+  const tb = $('#dsTabs');
+  if (tb) tb.querySelectorAll('.dstab').forEach(t => {
+    t.onclick = () => {
+      cur = +t.dataset.i;
+      tb.querySelectorAll('.dstab').forEach(x => x.classList.toggle('on', +x.dataset.i === cur));
+      body();
+    };
+  });
+  body();
+}
+function chk(w, label, val, on, hintText) {
+  const r = el('label', 'osr');
+  const i = el('input'); i.type = 'checkbox'; i.checked = !!val;
+  i.onchange = () => on(!!i.checked);
+  const s = el('span', '', esc(label));
+  if (hintText) r.title = hintText;
+  r.append(i, s); w.appendChild(r); return i;
+}
+function buildSnapGridTab(w, W) {
+  grpRow(w, 'Snap');
+  chk(w, 'Snap on (F9)', W.snapgrid, v => W.snapgrid = v);
+  addRow(w, 'Snap step', W.snapStep, v => W.snapStep = v);
+  grpRow(w, 'Grid');
+  chk(w, 'Grid on (F7)', W.grid, v => W.grid = v);
+  addRow(w, 'Grid step', W.gridStep, v => W.gridStep = v);
+  grpRow(w, 'Cursor');
+  addRow(w, 'Crosshair %', ST.crossLen == null ? 100 : ST.crossLen,
+    v => { ST.crossLen = clamp(v, 1, 100); draw(); }, 1);
+  addRow(w, 'Pick box px', ST.pickBox || 8,
+    v => { ST.pickBox = clamp(Math.round(v), 2, 40); draw(); }, 1);
+}
+function buildPolarTab(w, W, redraw) {
+  grpRow(w, 'Polar tracking');
+  chk(w, 'Polar tracking on (F10)', W.polar, v => { W.polar = v; if (v) W.ortho = false; });
+  chk(w, 'Ortho on (F8)', W.ortho, v => { W.ortho = v; if (v) W.polar = false; });
+  w.appendChild(el('div', 'grp', 'Increment angle'));
+  const g = el('div', 'pang');
+  for (const a of POLAR_PRESETS) {
+    const b = el('button', 'pangb' + (Math.abs(W.polarInc - a) < 1e-9 ? ' on' : ''), a + '°');
+    b.onclick = () => { W.polarInc = a; redraw(); };
+    g.appendChild(b);
+  }
+  w.appendChild(g);
+  addRow(w, 'Custom °', W.polarInc, v => { W.polarInc = clamp(v, 0.1, 180); redraw(); }, 1);
+  w.appendChild(el('div', 'grp', 'Additional angles'));
+  const x = el('div', 'pang');
+  for (const a of W.extra) {
+    const b = el('button', 'pangb on', a + '° ×');
+    b.title = 'Remove this angle';
+    b.onclick = () => { W.extra = W.extra.filter(v => v !== a); redraw(); };
+    x.appendChild(b);
+  }
+  if (!W.extra.length) x.appendChild(el('span', 'pnone', 'none'));
+  w.appendChild(x);
+  const add = txtRow(w, 'Add angle °', '', v => {
+    const n = parseFloat(v);
+    if (isFinite(n) && !W.extra.some(q => Math.abs(q - n) < 1e-9)) { W.extra.push(((n % 360) + 360) % 360); W.extra.sort((a, b) => a - b); }
+    redraw();
+  });
+  if (add) add.placeholder = 'e.g. 33.75';
+  chk(w, 'Measure angles from the last segment', W.polarRel,
+    v => W.polarRel = v, 'Relative to last segment, rather than absolute from 0°');
+  grpRow(w, 'Object snap tracking');
+  chk(w, 'Object snap tracking on (F11)', W.otrack, v => W.otrack = v);
+  chk(w, 'Track using all polar angles', W.trackPolar,
+    v => W.trackPolar = v, 'Off: tracking paths run orthogonally only');
+}
+function buildOsnapTab(w, W, redraw) {
+  const head = el('div', 'oshead');
+  head.appendChild(el('span', 'grp2', 'Object snap modes'));
+  const all = el('button', 'lnk', 'Select all');
+  all.onclick = () => { for (const s of SNAP_KINDS) W.on[s.k] = 1; redraw(); };
+  const none = el('button', 'lnk', 'Clear all');
+  none.onclick = () => { for (const s of SNAP_KINDS) W.on[s.k] = 0; redraw(); };
+  head.append(all, none);
+  w.appendChild(head);
+  chk(w, 'Object snap on (F3)', W.osnap, v => W.osnap = v);
+  const grid = el('div', 'osgrid');
+  for (const s of SNAP_KINDS) {
+    const r = el('label', 'osr' + (s.bit > 65535 ? ' ext' : ''));
+    r.title = s.bit > 65535 ? s.label + ' — an Orthograph mode, no AutoCAD equivalent' : s.label;
+    const i = el('input'); i.type = 'checkbox'; i.checked = !!W.on[s.k];
+    i.onchange = () => { W.on[s.k] = i.checked ? 1 : 0; };
+    const u = snapGlyphURL(s.k, 20);
+    const ic = u ? el('img', 'smg') : el('span', 'smg');
+    if (u) ic.src = u;
+    r.append(i, ic, el('span', '', esc(s.label)));
+    grid.appendChild(r);
+  }
+  w.appendChild(grid);
+  grpRow(w, 'AutoSnap');
+  addRow(w, 'Aperture px', W.aperture, v => W.aperture = clamp(Math.round(v), 1, 50), 1);
+  addRow(w, 'Marker px', W.markerSize, v => W.markerSize = clamp(Math.round(v), 2, 20), 1);
+  chk(w, 'Show the aperture box', W.apBox, v => W.apBox = v);
+  w.appendChild(el('div', 'oshint',
+    'Shift + right-click for a one-shot override. Hold Shift+E endpoint, Shift+V midpoint, ' +
+    'Shift+C centre, Shift+D nothing. Tab cycles the candidates under the cursor.'));}

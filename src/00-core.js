@@ -104,3 +104,21 @@ function fmtArea(mm2) {
   return (+(mm2 / k).toFixed(2)) + ' ' + u + '²';
 }
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* ---------------- lineweights ----------------
+   A lineweight is a *plot* width in millimetres, not a model dimension: it is
+   the same thickness on screen however far you zoom, which is what makes a
+   0.5mm pen look like a 0.5mm pen. The ladder is the set of widths a plotter
+   can actually produce, so the property panels never offer anything else.
+   These live in core rather than with the renderer because the document model
+   needs LW_DEFAULT for its fallback layer. */
+const LW_LADDER = [0, 0.05, 0.09, 0.13, 0.15, 0.18, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50,
+  0.53, 0.60, 0.70, 0.80, 0.90, 1.00, 1.06, 1.20, 1.40, 1.58, 2.00, 2.11];
+const LW_DEFAULT = 0.25;                           /* LWDEFAULT */
+const PX_PER_MM = 96 / 25.4;                       /* the CSS reference pixel: 1in = 96px */
+/** nearest standard pen width, so the property panels only ever offer real ones */
+function lwSnap(mm) {
+  let best = LW_DEFAULT, bd = Infinity;
+  for (const v of LW_LADDER) { const d = Math.abs(v - mm); if (d < bd) { bd = d; best = v; } }
+  return best;
+}
