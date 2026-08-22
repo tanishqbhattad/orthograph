@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build the single-file artefact
+        run: node build.js
+
+      # orthograph.html is committed, because the one-file download is the
+      # whole pitch. A stale build has shipped from this repo before, so the
+      # build is re-run above and the result must match what was committed.
+      - name: Fail if the committed build is stale
+        run: git diff --exit-code orthograph.html
+
+      - name: Unit tests
+        run: node test/run.js
+
+      - name: Behavioural checks
+        run: node tools/verify.js
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate DXF output against ezdxf
+        run: |
+          pip install ezdxf
+          python tools/check_dxf.py test/out/fixture.dxf
