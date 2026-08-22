@@ -748,4 +748,123 @@ module.exports = ({ group, t, ok, eq, close, run, R, bootApp }) => {
     hideCycleList(); hideGripMenu(); hideQuickProps();
     V.w = 1200; V.h = 800; V.z = 0.1; V.px = 100; V.py = 700; V.rot = 0;
   `);
+
+  /* ============================================================
+     Findings from the first hostile review of this piece.
+
+     Two of the three were features that looked present and did
+     nothing when driven, and one silently destroyed data. Each
+     test below was checked to FAIL against the code as it stood
+     before the fix, so they pin the defect rather than merely
+     passing alongside it.
+     ============================================================ */
+  group('selection: defects found by review');
+
+  /* The worst of the three. gripDo() mutated the entity and begin() was called
+     afterwards, so the mut() inside it recorded nothing: Remove Vertex wrote an
+     empty patch and undo rolled back the PREVIOUS operation instead, losing the
+     vertex for good. */
+  t('removing a polyline vertex from the grip menu is undoable', () => {
+    const r = R(`${SETUP}
+      const pl = addEnt({t:'pline', pts:[[0,0],[500,800],[1000,0],[1500,800]], closed:false, layer:'0'});
+      const before = pl.pts.map(p => p.slice());
+      const h0 = HIST.past.length;
+      SEL.clear(); SEL.add(pl.id);
+      ST.gripHot = [{ id: pl.id, k: 'p1', p: [500,800] }];
+      ST.gripAction = 'delv';
+      startCmd('gripedit');
+      const after = DOC.ents.get(pl.id).pts.map(p => p.slice());
+      const pushed = HIST.past.length - h0;
+      undo();
+      const restored = DOC.ents.get(pl.id).pts.map(p => p.slice());
+      return { before, after, pushed, restored };`);
+    eq(r.after.length, 3, 'the vertex really was removed');
+    ok(r.pushed >= 1, 'the removal must push a history patch — it pushed ' + r.pushed);
+    eq(JSON.stringify(r.restored), JSON.stringify(r.before),
+      'undo must put the vertex back exactly: got ' + JSON.stringify(r.restored));
+  });
+
+  /* Add Vertex re-cloned the already-modified entity into c.orig, so undo left
+     the inserted vertex sitting in the polyline. */
+  t('adding a polyline vertex from the grip menu is undoable', () => {
+    const r = R(`${SETUP}
+      const pl = addEnt({t:'pline', pts:[[0,0],[1000,0],[1000,1000]], closed:false, layer:'0'});
+      const before = pl.pts.map(p => p.slice());
+      SEL.clear(); SEL.add(pl.id);
+      ST.gripHot = [{ id: pl.id, k: 'p0', p: [0,0] }];
+      ST.gripAction = 'addv';
+      startCmd('gripedit');
+      const grew = DOC.ents.get(pl.id).pts.length;
+      endCmd(true);
+      undo();
+      return { before, grew, restored: DOC.ents.get(pl.id).pts.map(p => p.slice()) };`);
+    eq(r.grew, 4, 'a vertex really was inserted');
+    eq(JSON.stringify(r.restored), JSON.stringify(r.before),
+      'undo must remove it again: got ' + JSON.stringify(r.restored));
+  });
+
+  /* selOption() implemented the whole grammar; dispatch() accepted only ALL and
+     rejected the rest, so W/C/WP/CP/F/P/L/R/A/U were unreachable while the
+     prompt went on advertising them. */
+  t('the selection grammar the prompt advertises is actually reachable', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line',a:[0,0],b:[1000,0],layer:'0'});
+      addEnt({t:'line',a:[0,500],b:[1000,500],layer:'0'});
+      const out = {};
+      for (const k of ['w','c','wp','cp','f']) {
+        SEL.clear(); ST.band = null; ST.pendOption = null;
+        startCmd('erase');
+        dispatch(k);
+        out[k] = ST.pendOption ? (ST.pendOption.kind + '/' + (ST.pendOption.sense || '')) : null;
+        endCmd(true);
+      }
+      SEL.clear(); startCmd('erase'); dispatch('all'); out.all = SEL.size; endCmd(true);
+      return out;`);
+    eq(r.w,  'rect/window',   'W must arm a window');
+    eq(r.c,  'rect/crossing', 'C must arm a crossing');
+    eq(r.wp, 'wpoly/',        'WP must arm a window polygon');
+    eq(r.cp, 'cpoly/',        'CP must arm a crossing polygon');
+    eq(r.f,  'fence/',        'F must arm a fence');
+    eq(r.all, 2,              'ALL still selects everything');
+  });
+
+  /* Five variables the renderer obeyed with no way for a user to reach them,
+     which makes them indistinguishable from hardcoded constants. */
+  t('the selection and grip variables are reachable and take effect', () => {
+    const r = R(`${SETUP}
+      const out = {};
+      for (const [name, v] of [['GRIPS',0],['GRIPSIZE',12],['GRIPOBJLIMIT',3],
+                               ['SELECTIONCYCLING',1],['PICKAUTO',0],
+                               ['SELECTIONAREAOPACITY',60],['PICKADD',0]]) {
+        out[name] = setvar(name, v) ? getvar(name) : 'UNKNOWN';
+      }
+      out.stGrips = ST.gripsOn; out.stLimit = ST.gripObjLimit; out.stPickAdd = ST.pickAdd;
+      return out;`);
+    eq(r.GRIPS, 0); eq(r.GRIPSIZE, 12); eq(r.GRIPOBJLIMIT, 3);
+    eq(r.SELECTIONCYCLING, 1); eq(r.PICKAUTO, 0);
+    eq(r.SELECTIONAREAOPACITY, 60); eq(r.PICKADD, 0);
+    eq(r.stGrips, 0, 'GRIPS must reach the flag the renderer reads');
+    eq(r.stLimit, 3); eq(r.stPickAdd, 0);
+  });
+
+  /* PICKADD was declared with a comment and read nowhere. */
+  t('PICKADD 0 replaces the selection, 2 accumulates', () => {
+    const r = R(`${SETUP}
+      const a = addEnt({t:'line',a:[0,0],b:[100,0],layer:'0'});
+      const b = addEnt({t:'line',a:[0,200],b:[100,200],layer:'0'});
+      const out = {};
+      ST.pickAdd = 2; ST.shift = false;
+      SEL.clear(); selApply([a.id]); selApply([b.id]); out.accumulate = SEL.size;
+      ST.pickAdd = 0;
+      SEL.clear(); selApply([a.id]); selApply([b.id]); out.replace = SEL.size;
+      out.replaceKept = SEL.has(b.id);
+      ST.shift = true;
+      SEL.clear(); selApply([a.id]); selApply([b.id]); out.shiftAdds = SEL.size;
+      ST.shift = false;
+      return out;`);
+    eq(r.accumulate, 2, 'PICKADD 2 accumulates');
+    eq(r.replace, 1, 'PICKADD 0 replaces');
+    eq(r.replaceKept, true, 'and what survives is the newest pick');
+    eq(r.shiftAdds, 2, 'Shift adds when PICKADD is 0');
+  });
 };

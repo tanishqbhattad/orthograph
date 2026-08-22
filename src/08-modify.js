@@ -812,17 +812,28 @@ defc('gripedit', {
        and hands back the grip the drag should carry on with */
     if (c.action !== 'stretch' && c.hot.length === 1) {
       const g = c.hot[0], e = DOC.ents.get(g.id);
+      /* The journal has to be open BEFORE gripDo mutates. It used to run first
+         and begin() second, which meant the mut() inside it recorded nothing:
+         Remove Vertex committed an empty patch, so undo rolled back whatever
+         operation came before it and the vertex was gone for good, and Add
+         Vertex re-cloned the already-modified entity into c.orig so undo left
+         the new vertex behind. Both were silent data loss. */
+      begin();
       const nk = gripDo(e, g.k, c.action);
       if (nk === null) {                    /* Remove Vertex: nothing left to drag */
-        begin(); commit('Remove vertex'); gripClearHot(); c.done = true; endCmd(); return;
+        commit('Remove vertex'); gripClearHot(); c.done = true; endCmd(); return;
       }
       if (nk !== g.k) {
-        begin(); c.live = true;             /* Add Vertex belongs to this edit */
+        c.live = true;                      /* Add Vertex belongs to this edit */
         g.k = nk;
         const gs = gripsOf(e).find(x => x.k === nk);
         if (gs) { g.p = gs.p.slice(); c.base = gs.p.slice(); }
         c.orig.set(g.id, clone(e));
         c.action = 'stretch';
+      } else {
+        /* the action did not apply to this grip — abandon the journal rather
+           than leave it open across the drag that follows */
+        rollback();
       }
     }
     if (!c.base) { c.done = true; endCmd(); return; }

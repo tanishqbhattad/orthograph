@@ -120,6 +120,37 @@ defvar('PICKBOX', {
   desc: 'Object selection target height, pixels',
   get: () => ST.pickBox, set(v) { ST.pickBox = clamp(Math.round(v), 1, 50); draw(); },
 });
+/* Selection and grips. Every one of these was already read by the renderer or
+   the pick path; none had a way in. A variable the code obeys but no user can
+   reach is indistinguishable from a hardcoded constant. */
+defvar('GRIPS', {
+  desc: 'Show grips on selected objects (0 hides them)',
+  get: () => ST.gripsOn ? 1 : 0, set(v) { ST.gripsOn = v ? 1 : 0; draw(); },
+});
+defvar('GRIPSIZE', {
+  desc: 'Grip box size, pixels',
+  get: () => ST.gripSize, set(v) { ST.gripSize = clamp(Math.round(v), 2, 20); draw(); },
+});
+defvar('GRIPOBJLIMIT', {
+  desc: 'Suppress grips once a selection exceeds this many objects',
+  get: () => ST.gripObjLimit, set(v) { ST.gripObjLimit = clamp(Math.round(v), 0, 32767); draw(); },
+});
+defvar('SELECTIONCYCLING', {
+  desc: 'Overlapping objects: 0 off, 1 badge, 2 badge and list',
+  get: () => ST.selCycling, set(v) { ST.selCycling = clamp(Math.round(v), 0, 2); draw(); },
+});
+defvar('PICKAUTO', {
+  desc: 'Press-drag makes a lasso (AutoCAD PICKAUTO bit 4)',
+  get: () => ST.lassoOn ? 1 : 0, set(v) { ST.lassoOn = v ? 1 : 0; },
+});
+defvar('SELECTIONAREAOPACITY', {
+  desc: 'Fill opacity of the selection window, per cent',
+  get: () => ST.selAreaOpacity, set(v) { ST.selAreaOpacity = clamp(Math.round(v), 0, 100); draw(); },
+});
+defvar('PICKADD', {
+  desc: '0 = a new pick replaces the set and Shift adds; 1/2 = picks accumulate',
+  get: () => ST.pickAdd, set(v) { ST.pickAdd = clamp(Math.round(v), 0, 2); },
+});
 defvar('APERTURE', {
   desc: 'Object snap target height, pixels',
   get: () => SNAP_R, set(v) { SNAP_R = clamp(Math.round(v), 1, 50); draw(); },
@@ -1780,7 +1811,15 @@ function dispatch(s) {
   const first = words[0];
   if (CMD) {
     if (CMD.phase === 'sel') {
-      if (/^all$/i.test(first)) { selectAll(); cliPrint(SEL.size + ' found'); return true; }
+      /* The whole selection grammar lives in selOption() — W, C, WP, CP, F,
+         ALL, P, L, R, A, U. This branch used to accept ALL and reject
+         everything else, which left a complete and correct implementation
+         permanently unreachable while the prompt went on advertising it. */
+      if (typeof selOption === 'function' && selOption(s)) {
+        cmdPreview(ST.cur || [0, 0]);
+        if (typeof renderPrompt === 'function') renderPrompt();
+        draw(); return true;
+      }
       cliPrint('Invalid selection.', 'err');
       return false;
     }

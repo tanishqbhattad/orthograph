@@ -1264,7 +1264,17 @@ const SELHIST = [];              /* one entry per pick step — the U option    
 let SELPREV = [];                /* the P option: the set a command last used */
 
 /** add or remove ids, recording the step so U can take it back */
+/* PICKADD, honoured rather than merely declared. 0 means each new pick
+   replaces the set and Shift adds to it; 1 and 2 mean picks accumulate and
+   Shift removes, which is the modern default. Without this the variable was a
+   comment with a number next to it — the renderer never read it and neither
+   did the pick path, so setting it changed nothing. */
 function selApply(ids, remove) {
+  if (!remove && (+ST.pickAdd === 0) && !ST.shift && SEL.size) {
+    /* replacing, not accumulating: remember the old set so P still works, and
+       drop the pick history because those steps are no longer undoable picks */
+    selRemember(); SEL.clear(); SELHIST.length = 0;
+  }
   const ch = [];
   for (const id of ids) {
     if (remove) { if (SEL.delete(id)) ch.push(id); }
