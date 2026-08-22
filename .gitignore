@@ -10,3 +10,6 @@ progress.html
 # browser — so it ships in the repo. It was ignored only while four parallel
 # worktrees were in flight, because every one of them regenerates it. If a
 # future merge conflicts on it, the resolution is always `node build.js`.
+
+# editor/agent scratch, not project config
+.claude/
