@@ -549,7 +549,7 @@ module.exports = ({ group, t, ok, eq, close, run, R, bootApp }) => {
     const r = S(MODE + `
       const e = addEnt({t:'line', a:[0,0], b:[1000,0], layer:'0'});
       hotGrip(e, 'b');
-      cmdPreview(CMD, [1000, 900]);            /* live drag */
+      cmdPreview([1000, 900]);                 /* live drag */
       const during = rnd(DOC.ents.get(e.id).b);
       endCmd();                                 /* what Esc does */
       const after = rnd(DOC.ents.get(e.id).b);
@@ -718,7 +718,10 @@ module.exports = ({ group, t, ok, eq, close, run, R, bootApp }) => {
   t('the quick card opens beside the cursor, not at the far end of the object', () => {
     const r = S(`
       const e = addEnt({t:'line', a:[-40000,0], b:[40000,0], layer:'0'});
-      ST.cur = [-38000, 0];
+      /* on canvas: screen x is -4000*0.1 + 600 = 200, so the card sits at 222
+         and is nowhere near either clamp. The object still spans the view, so
+         its bbox centre (screen x 600) stays far away from the cursor. */
+      ST.cur = [-4000, 0];
       SEL.clear(); SEL.add(e.id); QPmuted = null; buildProps();
       const near = parseFloat(QP.style.left);
       const s = w2s(ST.cur);
@@ -727,4 +730,22 @@ module.exports = ({ group, t, ok, eq, close, run, R, bootApp }) => {
     close(r.near, r.cursor + 22, 1, 'the card should sit just off the cursor');
     ok(Math.abs(r.near - r.mid) > 40, 'it must not fall back to the bbox centre');
   });
+
+  /* Hand the sandbox back the way it was found. The suites share one VM and
+     ui.js runs after this one; placeQuickProps positions the card from ST.cur
+     whenever it is set, so a cursor left parked here would clamp ui.js's card
+     to the same 8px before and after its pan and fail a test that has nothing
+     to do with selection. Leaking interaction state is not a detail — it is
+     the difference between a suite that tests something and one that breaks
+     its neighbours. The view goes back to what test/load.js set up. */
+  R(`
+    SEL.clear(); SELHIST.length = 0; SELPREV.length = 0;
+    endCmd(true); bandCancel(); gripClearHot();
+    ST.cur = null; ST.hot = null; ST.cycleList = null; ST.cycleIdx = 0;
+    ST.gripHover = null; ST.gripMenu = null; ST.bandPreview = null;
+    ST.gripBase = null; ST.gripAction = null; ST.selMode = 'add';
+    ST.pendOption = null; ST.selCycling = 2; QPmuted = null;
+    hideCycleList(); hideGripMenu(); hideQuickProps();
+    V.w = 1200; V.h = 800; V.z = 0.1; V.px = 100; V.py = 700; V.rot = 0;
+  `);
 };
