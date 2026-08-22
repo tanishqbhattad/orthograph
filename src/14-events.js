@@ -270,6 +270,7 @@ stage.addEventListener('pointermove', ev => {
   } else if (selPhase()) {
     const g = gripAt(p);
     gripHoverUpdate(g);
+    syncGripMenu();
     if (g) { ST.hot = null; ST.cycleList = null; }
     else pickHover(p, 8);
   }
@@ -502,6 +503,12 @@ window.addEventListener('keydown', ev => {
   }
   const K = ev.key.toLowerCase();
   if (ev.ctrlKey || ev.metaKey) {
+    /* Ctrl on its own is a grip modifier: it toggles Copy inside a grip edit,
+       and steps a multifunctional grip menu outside one */
+    if ((ev.key === 'Control' || ev.key === 'Meta') && !ev.repeat) {
+      if (gripCtrl()) { ev.preventDefault(); syncGripMenu(); }
+      return;
+    }
     if (K === 'z') { ev.preventDefault(); ev.shiftKey ? redo() : undo(); }
     else if (K === 'y') { ev.preventDefault(); redo(); }
     else if (K === 'a') { ev.preventDefault(); META.all(); }
@@ -517,6 +524,13 @@ window.addEventListener('keydown', ev => {
     ev.preventDefault();
     if (SEL.size) { begin(); selEnts().forEach(e => eraseEnt(e.id)); commit('Erase'); draw(); syncUI(); }
     return;
+  }
+  if (ev.key === ' ' && ev.shiftKey && selPhase() && ST.cycleList && ST.cycleList.length > 1) {
+    /* Shift+Space steps the rollover through the objects sharing the pick box */
+    ev.preventDefault();
+    cyclePick(1);
+    echo('Cycle ' + (ST.cycleIdx + 1) + '/' + ST.cycleList.length);
+    draw(); return;
   }
   if (ev.key === ' ') {
     ev.preventDefault();
