@@ -10,7 +10,65 @@ A3 is built but unmerged on `piece/A3`.
 
 ---
 
-## Phase 0 — Unblock. Do these first; they change everything downstream.
+## Phase 0 — DECIDED (21 Aug 2026)
+
+### 0.1 AutoCAD access — granted, but AutoCAD is broken
+
+Access was granted and AutoCAD 2024 launches, but it **will not open a drawing**:
+both `New` and the `+` tab do nothing while the process reports as responding.
+That is a broken startup path (usually a corrupt profile or a missing `acad.dwt`),
+not a hang. Until it is repaired — try **Reset Settings to Default** from the
+Start menu before reinstalling — **critics remain expertise-based and must say so
+in their verdict.** Revit 2024/2025 and Rhino 8 are untested and may still work
+for the Wave 3 model-semantics questions if it comes to that.
+
+### 0.2 Scope — Wave 1 to a professional standard, then ship. Waves 2–4 are out.
+
+Measured cost this session: **250–320k tokens per builder**, plus a critic of
+similar size, plus rework rounds. Four parallel builders exhausted the budget in
+about 25 minutes, and the cap has been hit three times. On a Pro plan, 21 pieces
+× (build + critique + rework) is not reachable — not close.
+
+So the scope is: **finish Wave 1 properly, clear the debt behind it, and ship it.**
+
+The reasoning is not only budget. The precision core *is* what separates a CAD
+tool from a toy: snapping, the command line, selection and the viewport are what
+a professional judges in the first sixty seconds. Waves 2–4 are not missing
+features — the app already draws, dimensions, hatches, and models walls, rooms
+and stairs. They are *unpolished* features. Finishing Wave 1 therefore yields a
+coherent product; starting Wave 2 would yield a wider unfinished one.
+
+**In scope:** Phase 1 (finish and critique all four Wave 1 pieces), Phase 2
+(the debt list), Phase 6 (release).
+**Out of scope for this cycle:** Phases 3, 4 and 5. They stay written down, in
+order, for whenever there is budget.
+
+### 0.3 File ownership — one writer at a time. This is the rule.
+
+The single largest cost of the last cycle was four builders independently
+rewriting `05-view.js` and `14-events.js`, then an integration that surfaced four
+breakages no individual branch had — including one that stopped the bundle from
+loading at all. Parallelism did not save time here; it moved the work into a
+harder place and made it more expensive.
+
+The policy, from now on:
+
+1. **Only one agent holds write access to `src/` at any moment.** No parallel
+   builders. This alone removes every merge conflict.
+2. **Critics are read-only.** They may run, drive and read the app, and read code
+   to explain what they observed, but they never edit. Any number may run at once,
+   and they may run alongside the single writer.
+3. **A piece is integrated by its own author, not by a third party.** A3's merge
+   was attempted by someone who had not written the code and it broke brace
+   structure in two files. The author knows the intent.
+4. **Merge master *into* the branch before finishing the work, not after.**
+   Integrating first means the piece is finished against what actually ships.
+5. **Documentation and release work happens in a separate worktree**, so it never
+   contends with the writer.
+
+---
+
+## Phase 0 (original) — Unblock. Do these first; they change everything downstream.
 
 | # | Task | Owner | Why it is first |
 |---|---|---|---|
