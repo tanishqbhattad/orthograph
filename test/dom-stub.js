@@ -48,6 +48,13 @@ class El {
   addEventListener(t, f) { (this._listeners[t] || (this._listeners[t] = [])).push(f); }
   removeEventListener() { }
   dispatch(t, ev) { (this._listeners[t] || []).forEach(f => f(ev)); }
+  /* the standard spelling, so tests can send real Event objects */
+  dispatchEvent(ev) {
+    /* the DOM sets target on dispatch; handlers here read ev.target.closest */
+    if (ev && ev.target == null) ev.target = this;
+    (this._listeners[ev && ev.type] || []).slice().forEach(f => f(ev));
+    return !(ev && ev.defaultPrevented);
+  }
   setPointerCapture() { } releasePointerCapture() { }
   getBoundingClientRect() { return { left: 0, top: 0, right: this.width || 1200, bottom: this.height || 800, width: this.width || 1200, height: this.height || 800 }; }
   querySelector() { return null; }
@@ -93,6 +100,24 @@ function install(g) {
       for (const f of (winListeners[ev.type] || []).slice()) f(ev);
       return !ev.defaultPrevented;
     },
+  };
+  /* and enough of PointerEvent, so pointer-driven behaviour (panning, band
+     selection, grip drags) is reachable headlessly instead of only in a
+     browser */
+  g.PointerEvent = class PointerEvent {
+    constructor(type, o) {
+      o = o || {};
+      this.type = type; this.button = o.button == null ? 0 : o.button;
+      this.buttons = o.buttons == null ? 1 : o.buttons;
+      this.clientX = o.clientX || 0; this.clientY = o.clientY || 0;
+      this.pointerId = o.pointerId == null ? 1 : o.pointerId;
+      this.altKey = !!o.altKey; this.shiftKey = !!o.shiftKey;
+      this.ctrlKey = !!o.ctrlKey; this.metaKey = !!o.metaKey;
+      this.bubbles = !!o.bubbles; this.cancelable = o.cancelable !== false;
+      this.defaultPrevented = false;
+    }
+    preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
+    stopPropagation() { }
   };
   /* enough of the KeyboardEvent shape for the app's handlers to read */
   g.KeyboardEvent = class KeyboardEvent {

@@ -454,4 +454,45 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.during, 'line', 'a transparent command must not claim the repeat slot');
     eq(r.after, 'line');
   });
+
+  /* Two spellings of an option hint are in use across this codebase, and the
+     parser only understood one. DRAWORDER used the other and lost the first
+     letter of every option it offered. */
+  t('an option hint keeps its first letter whichever spelling it uses', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line',a:[0,0],b:[100,0],layer:'0'});
+      SEL.clear(); [...DOC.ents.keys()].forEach(id => SEL.add(id));
+      startCmd('draworder');
+      const joined = { text: PROMPT.text, words: PROMPT.keys.map(k => k.word) };
+      endCmd(true);
+      startCmd('line'); cmdPoint([0,0]); cmdPoint([100,0]);
+      const spaced = PROMPT.text;
+      endCmd(true);
+      return { joined, spaced };`);
+    eq(r.joined.words.join('/'), 'Back/Above object/Under object',
+      'got ' + r.joined.words.join('/'));
+    ok(/\[Back\/Above object\/Under object\]/.test(r.joined.text), r.joined.text);
+    ok(/\[Undo\]/.test(r.spaced), 'the other spelling must be unaffected: ' + r.spaced);
+  });
+
+  /* ST.panReady was read in three places and set in none, so the spacebar pan
+     the source comment promised did nothing. It had been written correctly and
+     then placed below the Enter/Space handler, which returned before it ran. */
+  t('holding space arms a pan; tapping it still means Enter', () => {
+    const r = R(`${SETUP}
+      const st = document.getElementById('stage');
+      const before = [V.px, V.py];
+      window.dispatchEvent(new KeyboardEvent('keydown', { key:' ', bubbles:true, cancelable:true }));
+      const armed = !!ST.panReady;
+      st.dispatchEvent(new PointerEvent('pointerdown', { button:0, clientX:400, clientY:300, bubbles:true, pointerId:1 }));
+      st.dispatchEvent(new PointerEvent('pointermove', { button:0, clientX:520, clientY:360, bubbles:true, pointerId:1 }));
+      st.dispatchEvent(new PointerEvent('pointerup',   { button:0, clientX:520, clientY:360, bubbles:true, pointerId:1 }));
+      const moved = [Math.round(V.px - before[0]), Math.round(V.py - before[1])];
+      window.dispatchEvent(new KeyboardEvent('keyup', { key:' ', bubbles:true, cancelable:true }));
+      return { armed, moved, disarmed: !ST.panReady };`);
+    eq(r.armed, true, 'space must arm the pan');
+    eq(r.moved[0], 120, 'and the drag must move the view 1:1 — got ' + r.moved);
+    eq(r.moved[1], 60);
+    eq(r.disarmed, true, 'releasing space must disarm it');
+  });
 };

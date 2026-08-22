@@ -374,7 +374,15 @@ stage.addEventListener('dblclick', () => {
 stage.addEventListener('wheel', ev => {
   ev.preventDefault();
   const scr = localXY(ev);
-  const unit = ev.deltaMode === 1 ? 3 : ev.deltaMode === 2 ? 1 : 100;
+  /* One wheel detent is WHEEL_DELTA = 120 on Windows, and browsers pass that
+     straight through as deltaY. Dividing it by 100 made a single click 1.2
+     notches, so ZOOMFACTOR 60 actually delivered about 76% per click. Only the
+     exact-multiple-of-120 case is treated this way: trackpads send many small
+     arbitrary deltas and must keep their smooth 100-unit scaling, or scrolling
+     two fingers would jump the view. */
+  const px = Math.abs(ev.deltaY);
+  const unit = ev.deltaMode === 1 ? 3 : ev.deltaMode === 2 ? 1
+             : (px >= 120 && px % 120 === 0) ? 120 : 100;
   const notches = clamp(ev.deltaY / unit, -4, 4);
   if (!notches) return;
   zoomAt(scr[0], scr[1], wheelFactor(notches));
@@ -578,12 +586,27 @@ window.addEventListener('keydown', ev => {
     echo('Cycle ' + (ST.cycleIdx + 1) + '/' + ST.cycleList.length);
     draw(); return;
   }
-  /* Enter and Space both mean "again" at the Command prompt, and "done" inside
-     a command — the two keys a draughtsman's left hand never leaves. */
-  if (ev.key === 'Enter' || ev.key === ' ') {
+  /* Enter means "again" at the Command prompt and "done" inside a command —
+     the key a draughtsman's left hand never leaves. */
+  if (ev.key === 'Enter') {
     ev.preventDefault();
     if (CMD) return cmdEnter();
     repeatLast(); return;
+  }
+  /* Space is Enter too, but holding it arms a pan, so the Enter action waits
+     for the key to come back up and fires only if the view did not move. That
+     keeps both: tap to repeat, hold to drag the view. Middle-drag is the other
+     pan and is unavailable on a trackpad, which is why this one matters.
+
+     This block sat BELOW the Enter/Space handler once and was therefore
+     unreachable — the handler above returned on space before it ran — so
+     ST.panReady was read in three places and set in none. TEXT and friends
+     read a literal line, so space must reach them untouched. */
+  if (ev.key === ' ') {
+    if (typeof cmdTakesSpace === 'function' && cmdTakesSpace()) return;
+    ev.preventDefault();
+    if (!ev.repeat) { ST.panReady = true; ST.panDragged = false; navCursor(); }
+    return;
   }
   if (ev.key === 'Delete' || ev.key === 'Backspace') {
     ev.preventDefault();
@@ -605,6 +628,17 @@ window.addEventListener('keydown', ev => {
 });
 window.addEventListener('keyup', ev => {
   if (ev.key === 'Shift') ST.shift = false;
+  if (ev.key === ' ') {
+    const dragged = ST.panDragged;
+    ST.panReady = false; ST.panDragged = false; navCursor();
+    const tag = document.activeElement && document.activeElement.tagName;
+    /* a space that panned the view is not an Enter, and a space typed into a
+       field belongs to the field */
+    if (dragged || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (typeof cmdTakesSpace === 'function' && cmdTakesSpace()) return;
+    if (CMD) return cmdEnter();
+    repeatLast();
+  }
 });
 window.addEventListener('keydown', ev => { if (ev.key === 'Shift') ST.shift = true; });
 

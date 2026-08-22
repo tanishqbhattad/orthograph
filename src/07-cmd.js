@@ -448,7 +448,13 @@ function parsePrompt(s) {
     const k = em[1].trim();
     /* Enter/Esc/Shift are not keywords, they are keys */
     if (/^(enter|esc|escape|shift|tab|ctrl|del|delete)$/i.test(k)) { extra.push((k + ' ' + label).trim()); continue; }
-    keys.push({ word: kwWord(label || k, k), key: k.toUpperCase() });
+    /* Two spellings are in use. `<em>C</em> close` marks a key beside a
+       separate label; `<em>B</em>ack` marks the first LETTER of the word, with
+       the rest running straight on. Treating the second as the first dropped
+       the letter, so DRAWORDER prompted `[ack/bove object/nder object]`. */
+    const _e = p.indexOf('</em>');
+    const joined = _e >= 0 && /\S/.test(p.slice(_e + 5, _e + 6));
+    keys.push({ word: kwWord(joined ? k + label : (label || k), k), key: k.toUpperCase() });
   }
   return { raw, base, keys, extra: extra.filter(Boolean).join(' · ') };
 }
