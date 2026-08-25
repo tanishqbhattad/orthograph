@@ -95,4 +95,118 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(/viewBox="0 0 420 297"/.test(r.head), 'and a viewBox in the same units');
     ok(r.hasClip, 'a viewport must clip, or the model spills over the paper');
   });
+
+  group('sheets: the commands');
+
+  t('LAYOUT makes a sheet and opens it at a sensible scale', () => {
+    const r = R(`${SETUP}
+      /* an 8m x 5m building on A3 */
+      const c = [[0,0],[8000,0],[8000,5000],[0,5000]];
+      for (let i = 0; i < 4; i++)
+        addEnt({t:'wall', a:c[i], b:c[(i+1)%4], wt:'gen100', layer:'A-WALL'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0], vp = sh && sh.viewports[0];
+      const b = bboxAll([...DOC.ents.values()].filter(visible));
+      return { n: DOC.sheets.length, name: sh && sh.name, size: sh && sh.size,
+               paper: sh && [sh.w, sh.h], vps: sh && sh.viewports.length,
+               scale: vp && scaleLabel(vp.scale), current: DOC.curSheet === (sh && sh.id),
+               fits: vp ? ((b[2]-b[0]) * vp.scale <= vp.w && (b[3]-b[1]) * vp.scale <= vp.h) : false };`);
+    eq(r.n, 1); eq(r.name, 'A-101'); eq(r.size, 'A3');
+    eq(r.paper.join('x'), '420x297', 'landscape by default');
+    eq(r.vps, 1, 'and it opens with a viewport, not an empty page');
+    eq(r.current, true, 'the new layout becomes current');
+    eq(r.fits, true, 'the model must actually fit inside the viewport');
+    /* the rule is the LARGEST standard scale that still fits, so the sheet is
+       filled rather than a small drawing marooned in the middle of the paper.
+       8m x 5m inside a 400 x 237 viewport comes out 1:25 (320 x 200mm); 1:50
+       would use under a quarter of the page. */
+    eq(r.scale, '1:25', 'expected the largest scale that fits, got ' + r.scale);
+  });
+
+  /* the chosen scale must be a real one off the ruler, never a computed
+     fraction — "1:63.4" is not a drawing scale anyone will accept */
+  t('the fitted scale is always a standard one', () => {
+    const r = R(`${SETUP}
+      const out = [];
+      for (const size of [1000, 8000, 40000, 250000]) {
+        resetDoc();
+        addEnt({t:'line', a:[0,0], b:[size, size*0.6], layer:'0'});
+        cancelCmd();
+        dispatch('LAYOUT'); dispatch('N'); dispatch('S' + size);
+        const vp = DOC.sheets[DOC.sheets.length-1].viewports[0];
+        out.push({ size, label: scaleLabel(vp.scale),
+                   standard: SCALES.some(s => Math.abs(s.r - vp.scale) < 1e-12) });
+      }
+      return out;`);
+    for (const row of r)
+      eq(row.standard, true, row.size + 'mm chose ' + row.label + ', which is not on the ruler');
+  });
+
+  t('MSPACE and PSPACE move between model and paper', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('P1');
+      const onSheet = DOC.curSheet;
+      dispatch('MSPACE'); const model = DOC.curSheet;
+      dispatch('PSPACE'); const back = DOC.curSheet;
+      return { onSheet: onSheet != null, model, back: back === onSheet };`);
+    eq(r.onSheet, true); eq(r.model, null, 'MSPACE is model space');
+    eq(r.back, true, 'PSPACE returns to the layout you were on');
+  });
+
+  t('MVIEW refuses a viewport too small to see', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('P1');
+      const sh = DOC.sheets[0];
+      const before = sh.viewports.length;
+      startCmd('mview'); cmdPoint([20,20]); cmdPoint([22,22]);
+      const afterTiny = sh.viewports.length;
+      cmdPoint([20,20]); cmdPoint([200,150]);
+      const afterReal = sh.viewports.length;
+      endCmd(true);
+      return { before, afterTiny, afterReal,
+               rect: sh.viewports[1] && [sh.viewports[1].w, sh.viewports[1].h] };`);
+    eq(r.afterTiny, r.before, 'a 2mm viewport must be refused');
+    eq(r.afterReal, r.before + 1, 'a real one is accepted');
+    eq(r.rect.join('x'), '180x130', 'and it is the rectangle that was picked');
+  });
+
+  t('sheets survive a save and load', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0];
+      sh.title.project = 'Riverside'; sh.title.number = 'A-101';
+      const vp0 = { ...sh.viewports[0] };
+      const txt = saveNative();
+      resetDoc();
+      const none = (DOC.sheets || []).length;
+      loadNative(txt);
+      const back = DOC.sheets[0];
+      return { none, n: DOC.sheets.length, name: back && back.name,
+               project: back && back.title.project,
+               scaleSame: back && Math.abs(back.viewports[0].scale - vp0.scale) < 1e-12,
+               centreSame: back && dist(back.viewports[0].centre, vp0.centre) < 1e-9,
+               current: DOC.curSheet === back.id };`);
+    eq(r.none, 0, 'resetDoc clears paper space');
+    eq(r.n, 1); eq(r.name, 'A-101'); eq(r.project, 'Riverside');
+    eq(r.scaleSame, true, 'the scale must survive exactly — it is the drawing');
+    eq(r.centreSame, true); eq(r.current, true);
+  });
+
+  t('a file written before sheets existed still loads', () => {
+    const r = R(`${SETUP}
+      const old = JSON.stringify({ app:'orthograph', v:2, units:'mm',
+        layers:[newLayer('0')], cur:'0',
+        ents:[{id:1, t:'line', a:[0,0], b:[1000,0], layer:'0'}] });
+      loadNative(old);
+      return { sheets: (DOC.sheets||[]).length, cur: DOC.curSheet, ents: DOC.ents.size };`);
+    eq(r.sheets, 0, 'no paper space is not a broken document');
+    eq(r.cur, null); eq(r.ents, 1, 'and the drawing still loads');
+  });
 };
