@@ -228,6 +228,14 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     close(Math.hypot(r.am[0] - 5000, r.am[1]), 50 / Math.sin(half), 1e-6);
   });
 
+  /* Rewritten when MITRE_MAX dropped from 10 to 2 (AutoCAD's MITRELIMIT
+     default). The mitre length is (th/2)/sin(t/2), so at 10 a pair of brick
+     walls meeting at half a degree threw a 2.3 metre spike off the corner.
+     A 10° corner is now past the limit and clamps; the invariant these tests
+     exist to protect — both walls resolving the SAME point, so the corner
+     stays shut — is unchanged and still asserted. The second half pins that
+     ordinary corners are still mitred exactly, so this cannot be satisfied by
+     clamping everything. */
   t('a very acute corner still closes on a single shared point', () => {
     const r = R(SETUP + `
       const a=addEnt({t:'wall',a:[0,0],b:[5000,0],wt:'gen100',layer:'A-WALL'});
@@ -236,11 +244,27 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
                       wt:'gen100',layer:'A-WALL'});
       const EA=wallEndPoints(a,1), EB=wallEndPoints(b,0);
       return {d1:dist(EA.plus,[5000,0]), d2:dist(EA.minus,[5000,0]),
+              natural:50/Math.sin(rad(5)),
               same1:dist(EA.plus,EB.minus), same2:dist(EA.minus,EB.plus)};`);
-    close(r.d1, 50 / Math.sin(Math.PI / 36), 1e-6, 'exact 10° mitre, not a fudge');
-    close(r.d2, 50 / Math.sin(Math.PI / 36), 1e-6);
+    ok(r.natural > 570, 'a 10° corner really would run away unclamped');
+    close(r.d1, 200, 1e-6, 'clamped to twice the wall thickness');
+    close(r.d2, 200, 1e-6);
     close(r.same1, 0, 0, 'both walls resolve the identical corner point');
     close(r.same2, 0, 0);
+  });
+
+  /* the other side of the same rule */
+  t('an ordinary corner is still mitred exactly, not clamped', () => {
+    const r = R(SETUP + `
+      const a=addEnt({t:'wall',a:[0,0],b:[5000,0],wt:'gen100',layer:'A-WALL'});
+      const th=rad(120);                       /* a 60° interior corner */
+      const b=addEnt({t:'wall',a:[5000,0],b:[5000+5000*Math.cos(th),5000*Math.sin(th)],
+                      wt:'gen100',layer:'A-WALL'});
+      const EA=wallEndPoints(a,1), EB=wallEndPoints(b,0);
+      return {d:dist(EA.plus,[5000,0]), exact:50/Math.sin(rad(30)),
+              same:dist(EA.plus,EB.minus)};`);
+    close(r.d, r.exact, 1e-6, 'a 60° corner mitres exactly — no clamp anywhere near it');
+    close(r.same, 0, 0);
   });
 
   t('a spike is limited without opening a gap', () => {
@@ -253,7 +277,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       return {unclamped:50/Math.sin(rad(1)), d:dist(EA.plus,[5000,0]),
               same:dist(EA.plus,EB.minus), faces:wallShapes(a).filter(s=>s.role==='face').length};`);
     ok(r.unclamped > 2800, 'a 2° corner really would spike');
-    close(r.d, 1000, 1e-9, 'clamped to ten average thicknesses');
+    close(r.d, 200, 1e-9, 'clamped to twice the average thickness (MITRELIMIT 2)');
     close(r.same, 0, 0, 'the clamp is symmetric so the corner is still shut');
     ok(r.faces >= 1, 'the wall still draws');
   });

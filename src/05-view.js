@@ -282,7 +282,6 @@ const LTDEF = {
   divide: [12.7, 6.35, 0, 6.35, 0, 6.35],
 };
 const DASH_SOLID = [];
-const DASH = { solid: DASH_SOLID };                /* legacy handle */
 const LT_MIN_PX = 3.5;                             /* below this a pattern is only shimmer */
 const LT_MAX_PX = 40000;                           /* above this it is one dash anyway */
 const _dashC = new Map();
@@ -1060,7 +1059,7 @@ function drawSnap() {
   const r = Math.max(3, devRound(clamp(+ST.markerSize || 6, 2, 20)));
   const g = SNAP_GLYPH[s.k] || SNAP_GLYPH.near;
   ctx.save();
-  ctx.setLineDash(DASH.solid);
+  ctx.setLineDash(DASH_SOLID);
   ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
   /* a dark backing stroke keeps the glyph readable over bright geometry
      without ever filling it in */
@@ -1123,7 +1122,7 @@ function drawTrackPts() {
   if (!ST.otrack || !pts || !pts.length) return;
   const d = V.dpr || 1, lwDev = Math.max(1, Math.round(1.4 * d));
   ctx.save();
-  ctx.setLineDash(DASH.solid);
+  ctx.setLineDash(DASH_SOLID);
   ctx.strokeStyle = CO.snap + 'cc'; ctx.lineWidth = lwDev / d; ctx.lineCap = 'butt';
   const a = devRound(4);
   ctx.beginPath();

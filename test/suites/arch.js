@@ -414,4 +414,88 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     close(r.area, 5900 * 3900, 1, 'and they describe the real traced room');
     ok(r.seedKept && r.stillAuto, 'it stays an automatic room on reload');
   });
+
+  /* ============================================================
+     Phase 2 debt: things the drawing knew and did not say, and
+     input it trusted that it should not have.
+     ============================================================ */
+  group('rooms: an open room says so');
+
+  /* An unenclosed room kept its last good area and drew it in exactly the same
+     style as a measured one. In an AEC tool that number reaches schedules and
+     printed drawings looking entirely legitimate. */
+  t('a room whose walls open is drawn dashed and labelled', () => {
+    const r = R(`${SETUP}
+      const c = [[0,0],[6000,0],[6000,4000],[0,4000]];
+      for (let i = 0; i < 4; i++)
+        addEnt({t:'wall', a:c[i], b:c[(i+1)%4], wt:'gen100', layer:'A-WALL'});
+      const room = addEnt({t:'room', seed:[3000,2000], auto:true, name:'LIVING', layer:'A-AREA'});
+      const shut = { open: roomIsOpen(room),
+                     lt: (roomShapes(room)[0] || {}).lt,
+                     txt: roomShapes(room).filter(s => s.text != null).map(s => s.text) };
+      /* knock a wall out: the seed is no longer enclosed */
+      const w = [...DOC.ents.values()].find(e => e.t === 'wall');
+      begin(); eraseEnt(w.id); commit('open it');
+      const open = { open: roomIsOpen(room),
+                     lt: (roomShapes(room)[0] || {}).lt,
+                     txt: roomShapes(room).filter(s => s.text != null).map(s => s.text) };
+      return { shut, open };`);
+    eq(r.shut.open, false, 'a closed room is not flagged');
+    ok(!r.shut.lt, 'and is drawn with the ordinary linetype');
+    ok(!r.shut.txt.join(' ').includes('not enclosed'), 'and says nothing about enclosure');
+    eq(r.open.open, true, 'once the walls open it must know');
+    eq(r.open.lt, 'dashed', 'the outline must go dashed');
+    ok(r.open.txt.join(' ').includes('not enclosed'),
+      'and the tag must say so, got: ' + JSON.stringify(r.open.txt));
+  });
+
+  /* Reading a boundary still must not mutate — the flag lives beside the cache,
+     not on the entity. */
+  t('the open flag does not write to the entity', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'wall', a:[0,0], b:[6000,0], wt:'gen100', layer:'A-WALL'});
+      const room = addEnt({t:'room', seed:[3000,2000], auto:true, layer:'A-AREA'});
+      const before = JSON.stringify(room);
+      const v0 = DOCV, h0 = HIST.past.length;
+      for (let i = 0; i < 4; i++) roomIsOpen(room);
+      return { changed: JSON.stringify(room) !== before,
+               dv: DOCV - v0, dh: HIST.past.length - h0 };`);
+    eq(r.changed, false, 'the entity must be untouched');
+    eq(r.dv, 0); eq(r.dh, 0);
+  });
+
+  group('project file: untrusted input');
+
+  /* Only the properties panel guarded wall thickness, so a hand-edited or
+     corrupted .ocad could put a negative th into the document, where it
+     survives every later edit and crosses the faces over each other. */
+  t('a corrupt project file is repaired, not swallowed whole', () => {
+    const r = R(`${SETUP}
+      const bad = JSON.stringify({
+        app:'orthograph', v:2, units:'mm', layers:[newLayer('0')], cur:'0',
+        ents: [
+          { id:1, t:'wall', a:[0,0], b:[4000,0], th:-230, wt:'gen100', layer:'0' },
+          { id:2, t:'wall', a:[0,1000], b:[4000,1000], th:0, wt:'gen100', layer:'0' },
+          { id:3, t:'line', a:[0,0], b:[Infinity,0], layer:'0' },
+          { id:4, t:'circle', c:[0,0], r:-50, layer:'0' },
+          { id:5, t:'wall', a:[0,2000], b:[4000,2000], th:230, wt:'gen100', layer:'0' },
+        ],
+      });
+      loadNative(bad);
+      const ents = [...DOC.ents.values()];
+      const w1 = ents.find(e => e.id === 1), w5 = ents.find(e => e.id === 5);
+      return { n: ents.length,
+               negDropped: w1 ? w1.th == null : null,
+               negEffective: w1 ? wallT(w1) : null,
+               zeroDropped: (ents.find(e => e.id === 2) || {}).th == null,
+               infiniteGone: !ents.some(e => e.id === 3),
+               negRadiusGone: !ents.some(e => e.id === 4),
+               goodKept: w5 ? w5.th : null };`);
+    eq(r.negDropped, true, 'a negative thickness must not reach the document');
+    ok(r.negEffective > 0, 'and the wall falls back to its type: ' + r.negEffective);
+    eq(r.zeroDropped, true, 'nor a zero one');
+    eq(r.infiniteGone, true, 'a non-finite point poisons every bbox it reaches');
+    eq(r.negRadiusGone, true, 'a negative radius is not a circle');
+    eq(r.goodKept, 230, 'and a legitimate thickness is left alone');
+  });
 };

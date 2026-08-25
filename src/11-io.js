@@ -111,6 +111,33 @@ function saveNative() {
     ents: [...DOC.ents.values()].map(roomForSave),
   });
 }
+/* A project file is untrusted input like any other. Only the properties panel
+   guarded wall thickness, so a hand-edited or corrupted .ocad could put a
+   negative th into the document, where it survives every later edit and makes
+   faces cross over each other. Nothing here rejects a file — a drawing that
+   opens with one bad number repaired is worth far more than a refusal — but a
+   value that cannot mean anything is dropped so the type default takes over. */
+function sanitiseEnt(e) {
+  if (!e || typeof e !== 'object' || !e.t) return null;
+  const num = (v, min) => (typeof v === 'number' && isFinite(v) && v > (min || 0));
+  /* thickness, height and sill are all strictly positive when present at all;
+     null and undefined are meaningful (fall back to the type) and are kept */
+  for (const k of ['th', 'h', 'w']) if (e[k] != null && !num(e[k])) delete e[k];
+  if (e.sill != null && !(typeof e.sill === 'number' && isFinite(e.sill))) delete e.sill;
+  /* a point that is not finite poisons every bbox and index it reaches */
+  /* typeof is not redundant: isFinite(null) is true, and JSON cannot carry
+     Infinity, so a file written from a poisoned document arrives with nulls
+     where the bad numbers were. */
+  const okN = v => typeof v === 'number' && isFinite(v);
+  const okPt = p => Array.isArray(p) && p.length >= 2 && okN(p[0]) && okN(p[1]);
+  for (const k of ['a', 'b', 'c', 'p', 'seed']) if (e[k] != null && !okPt(e[k])) return null;
+  if (Array.isArray(e.pts)) {
+    e.pts = e.pts.filter(okPt);
+    if (e.pts.length < 2 && (e.t === 'pline' || e.t === 'spline')) return null;
+  }
+  if (e.r != null && !num(e.r)) return null;
+  return e;
+}
 function loadNative(txt) {
   const d = JSON.parse(txt);
   begin();
@@ -129,7 +156,7 @@ function loadNative(txt) {
   DOC.curLevel = d.curLevel || 0;
   DOC.ents.clear(); SEL.clear(); UID = 1;
   idxInvalidate();
-  (d.ents || []).forEach(e => addEnt(e));
+  (d.ents || []).forEach(e => { const c = sanitiseEnt(e); if (c) addEnt(c); });
   for (const [n, c] of ARCH_LAYERS) if (!hasLayer(n) && [...DOC.ents.values()].some(e => e.layer === n)) ensureLayer(n, c);
   const u = $('#unit'); if (u) u.value = DOC.units;
   commit('Opened project');
