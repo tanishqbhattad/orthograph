@@ -496,4 +496,96 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.moved[1], 60);
     eq(r.disarmed, true, 'releasing space must disarm it');
   });
+
+  /* ============================================================
+     The two subsystems that were fully built and wired to
+     nothing. Their builder was stopped by the usage cap before
+     it wrote these, so they are written here from the outside,
+     against the behaviour as driven in a browser.
+     ============================================================ */
+  group('command line: AutoComplete is wired, not just ranked');
+
+  /* acSuggest() ranked commands, aliases and system variables since the engine
+     was written, and its only appearance in the built file was its own
+     definition — zero callers, while AUTOCOMPLETEMODE cheerfully reported 15. */
+  t('typing offers a ranked, navigable list', () => {
+    const r = R(`${SETUP}
+      CLI.autoComplete = 15;
+      const inp = document.getElementById('cmd');
+      cancelCmd();
+      inp.value = ''; inp.dispatchEvent(new Event('input', { bubbles:true }));
+      inp.value = 'li'; inp.dispatchEvent(new Event('input', { bubbles:true }));
+      /* the stub's getElementById fabricates missing ids, so it can never
+         prove a thing exists — reach the list through its real parent */
+      const wrap = document.getElementById('cmdwrap');
+      const box = (wrap.children||[]).find(c => c.id === 'acList');
+      const rows = box ? [...(box.children||[])] : [];
+      /* the stub does not roll child text up into textContent, so the rendered
+         rows read empty here — assert against the model the list was built
+         from, and let the row count prove the DOM was actually populated */
+      const names = (AC.items || []).map(it => it.name);
+      /* arrow down writes the highlighted name into the field, as AutoCAD does */
+      inp.dispatchEvent(new KeyboardEvent('keydown', { key:'ArrowDown', bubbles:true, cancelable:true }));
+      const first = inp.value;
+      inp.dispatchEvent(new KeyboardEvent('keydown', { key:'ArrowDown', bubbles:true, cancelable:true }));
+      const second = inp.value;
+      inp.dispatchEvent(new KeyboardEvent('keydown', { key:'Tab', bubbles:true, cancelable:true }));
+      const accepted = inp.value;
+      const after = (wrap.children||[]).find(c => c.id === 'acList');
+      return { has: !!box, n: rows.length, names, first, second, accepted,
+               closed: !after || (after.children||[]).length === 0 };`);
+    ok(r.has, 'there must be a list element at all — this is the part that was missing');
+    ok(r.n >= 3, 'and it must have rows: ' + r.n);
+    ok(r.names.join(' ').includes('LINE'), 'LINE must be offered for "li": ' + r.names.join(','));
+    ok(r.first && r.first !== 'li', 'ArrowDown writes the highlighted name: ' + r.first);
+    ok(r.second !== r.first, 'a second ArrowDown moves on: ' + r.first + ' -> ' + r.second);
+    eq(r.accepted, r.second, 'Tab accepts whatever is highlighted');
+    ok(r.closed, 'and the list closes once accepted');
+  });
+
+  /* AUTOCOMPLETEMODE is a bitfield and every bit was inert. */
+  t('AUTOCOMPLETEMODE bits actually switch behaviour', () => {
+    const r = R(`${SETUP}
+      const inp = document.getElementById('cmd');
+      cancelCmd();
+      const run = mode => {
+        CLI.autoComplete = mode;
+        inp.value = ''; inp.dispatchEvent(new Event('input', { bubbles:true }));
+        inp.value = 'li'; inp.dispatchEvent(new Event('input', { bubbles:true }));
+        const wrap = document.getElementById('cmdwrap');
+        const box = (wrap.children||[]).find(c => c.id === 'acList');
+        return { field: inp.value, rows: box ? (box.children||[]).length : 0 };
+      };
+      const listOnly = run(2);        /* list, no inline append */
+      const off      = run(0);        /* neither */
+      CLI.autoComplete = 15;
+      return { listOnly, off };`);
+    ok(r.listOnly.rows >= 3, 'bit 2 shows the list: ' + r.listOnly.rows);
+    eq(r.listOnly.field, 'li', 'and with the append bit off the field is left alone');
+    eq(r.off.rows, 0, 'with every bit off there is no list');
+  });
+
+  group('drafting settings: the object snap tab');
+
+  /* The A1 review found this tab rendering the master toggle and Select all /
+     Clear all for a list of modes that was not there — so no individual osnap
+     could be turned on or off from the UI at all. */
+  t('every osnap mode has its own checkbox', () => {
+    const r = R(`${SETUP}
+      openOsnapSettings(2);
+      const rows = [...document.querySelectorAll('.osr')];
+      const inRow = n => (n.children||[]).some(c => c.tagName === 'INPUT'
+                       || (c.children||[]).some(g => g.tagName === 'INPUT'));
+      const boxCount = rows.filter(inRow).length;
+      /* same stub limitation: row text lives in child spans. The counts above
+         prove the DOM was built; the labels come from the model that built it */
+      const labels = snapMenuItems().map(m => m.label || m.name || '');
+      return { rows: rows.length, boxes: boxCount, labels,
+               modes: snapMenuItems().length };`);
+    eq(r.modes, 16, 'there are sixteen modes to offer');
+    ok(r.rows >= r.modes, 'and at least that many rows: ' + r.rows);
+    eq(r.boxes, r.rows, 'every row carries a real checkbox, got ' + r.boxes + ' of ' + r.rows);
+    for (const want of ['Endpoint', 'Midpoint', 'Centre', 'Quadrant', 'Perpendicular'])
+      ok(r.labels.some(l => l.includes(want)), want + ' must be listed');
+  });
 };

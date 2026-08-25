@@ -90,7 +90,36 @@ function install(g) {
     createElement: t => new El(t),
     getElementById: id => { if (!byId.has(id)) { const e = new El('div'); e.id = id; byId.set(id, e); } return byId.get(id); },
     querySelector: s => (s && s[0] === '#') ? doc.getElementById(s.slice(1)) : new El('div'),
-    querySelectorAll: () => [],
+    /* Walks the tree for #id, .class and tag selectors. It returned [] before,
+       which quietly made every DOM-structure assertion vacuously true: a test
+       could ask how many rows a dialog rendered, be told none, and pass. */
+    querySelectorAll: sel => {
+      const want = String(sel || '').trim().split(/\s*,\s*/).filter(Boolean);
+      if (!want.length) return [];
+      const hit = n => want.some(w => {
+        const parts = w.split(/\s+/);            /* only the last term is matched */
+        const q = parts[parts.length - 1];
+        if (q[0] === '.') return n._cls && n._cls.has(q.slice(1));
+        if (q[0] === '#') return n.id === q.slice(1);
+        return n.tagName === q.toUpperCase();
+      });
+      const out = [];
+      (function walk(n) {
+        if (!n) return;
+        if (n !== doc.body && hit(n)) out.push(n);
+        for (const c of (n.children || [])) walk(c);
+      })(doc.body);
+      /* elements created but never attached to body are still reachable by id,
+         so sweep those too rather than reporting a dialog as empty */
+      for (const n of byId.values()) {
+        (function walk(m) {
+          if (!m || out.includes(m)) return;
+          if (hit(m)) out.push(m);
+          for (const c of (m.children || [])) walk(c);
+        })(n);
+      }
+      return out;
+    },
     addEventListener: () => { },
     activeElement: null,
   };
@@ -138,6 +167,19 @@ function install(g) {
     preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
     stopPropagation() { }
     stopImmediatePropagation() { this._stopped = true; }
+  };
+  /* the base Event. Without it a test could send a key but not an input
+     event, which is how half the command line is actually driven. */
+  g.Event = class Event {
+    constructor(type, o) {
+      o = o || {};
+      this.type = type; this.bubbles = !!o.bubbles;
+      this.cancelable = !!o.cancelable; this.defaultPrevented = false;
+      this.target = null;
+    }
+    preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
+    stopPropagation() { }
+    stopImmediatePropagation() { }
   };
   /* enough of the KeyboardEvent shape for the app's handlers to read */
   g.KeyboardEvent = class KeyboardEvent {
