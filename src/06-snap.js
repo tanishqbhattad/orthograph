@@ -248,6 +248,118 @@ function activeModes() {
   return ST.osnap ? ST.osnapOn : SNAP_NONE;
 }
 
+/* ---------------- temporary override keys ----------------
+   AutoCAD's temporary overrides are HELD, not toggled: the mode applies for
+   exactly as long as the key is down and the running set comes back the moment
+   it is released. That is what makes them worth having — you take one endpoint
+   without ever leaving the running set you spent a minute setting up.
+
+   Both of AutoCAD's default sets are here, because which hand is free depends
+   on which hand is on the mouse:
+
+     E  P    endpoint            M  V    midpoint          C   centre
+     D  L    disable all snapping and tracking
+     A       object snap on/off  S       force object snap on
+     X       polar               Z  Q    object snap tracking
+
+   Each entry says what to do to ST; whatever it touches is saved and put back
+   on release, so an override can never leave the drafting settings altered. */
+const TEMP_OVERRIDE = {
+  e: { snap: 'end', label: 'Endpoint' },
+  p: { snap: 'end', label: 'Endpoint' },
+  m: { snap: 'mid', label: 'Midpoint' },
+  v: { snap: 'mid', label: 'Midpoint' },
+  c: { snap: 'cen', label: 'Centre' },
+  d: { snap: 'none', off: ['otrack', 'snapgrid', 'polar', 'ortho'], label: 'No snapping' },
+  l: { snap: 'none', off: ['otrack', 'snapgrid', 'polar', 'ortho'], label: 'No snapping' },
+  a: { toggle: 'osnap', label: 'Object snap' },
+  s: { on: 'osnap', label: 'Object snap on' },
+  x: { toggle: 'polar', label: 'Polar' },
+  z: { toggle: 'otrack', label: 'Object snap tracking' },
+  q: { toggle: 'otrack', label: 'Object snap tracking' },
+};
+let TEMP_HELD = null;              /* {k, o, saved} while a key is down */
+function tempOverrideKey(key) {
+  const k = String(key || '').toLowerCase();
+  return k.length === 1 && TEMP_OVERRIDE[k] ? k : null;
+}
+/** apply the override bound to `key`; returns its entry, or null */
+function tempOverrideDown(key) {
+  const k = tempOverrideKey(key);
+  if (!k) return null;
+  /* one at a time: a second key while one is held is ignored, not stacked */
+  if (TEMP_HELD) return TEMP_HELD.k === k ? TEMP_HELD.o : null;
+  const o = TEMP_OVERRIDE[k];
+  const saved = { osnapOne: ST.osnapOne, osnapOneShot: ST.osnapOneShot };
+  for (const f of (o.off || [])) { saved[f] = ST[f]; ST[f] = false; }
+  if (o.on) { saved[o.on] = ST[o.on]; ST[o.on] = true; }
+  /* polar and ortho exclude each other, so a toggle of either goes through the
+     one function that knows it */
+  if (o.toggle) {
+    /* both sides of the exclusion are saved, since turning polar on turns
+       ortho off and the release has to undo the whole of that */
+    saved.ortho = ST.ortho; saved.polar = ST.polar;
+    saved[o.toggle] = ST[o.toggle];
+    if (typeof draftToggle === 'function') draftToggle(o.toggle);
+    else ST[o.toggle] = !ST[o.toggle];
+  }
+  if (o.snap) setSnapOverride(o.snap, false);
+  TEMP_HELD = { k, o, saved };
+  if (typeof syncToggles === 'function') syncToggles();
+  return o;
+}
+/** release the held override, whatever it was. Returns true if one was up. */
+function tempOverrideUp(key) {
+  if (!TEMP_HELD) return false;
+  const k = key == null ? TEMP_HELD.k : tempOverrideKey(key);
+  /* releasing Shift ends the override too — the chord is gone either way */
+  if (key != null && k !== TEMP_HELD.k && String(key) !== 'Shift') return false;
+  const s = TEMP_HELD.saved;
+  for (const f of Object.keys(s)) ST[f] = s[f];
+  TEMP_HELD = null;
+  if (typeof syncToggles === 'function') syncToggles();
+  return true;
+}
+/** true when the drawing area, not a text field, should get the chord */
+function tempOverrideAllowed() {
+  if (typeof document === 'undefined' || !document.querySelector) return true;
+  const modal = document.querySelector('#modal');
+  if (modal && modal.classList && modal.classList.contains('show')) return false;
+  const a = document.activeElement, tag = a && a.tagName;
+  /* the command line is fair game — Shift means nothing to a command name —
+     but every other field is someone typing, and capitals are capitals there */
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return false;
+  if (tag === 'INPUT' && a.id !== 'cmd') return false;
+  /* TEXT, MTEXT and LEADER read a literal line through the command line */
+  if (typeof CMD !== 'undefined' && CMD && CMD.phase === 'run' &&
+    (CMD.def.key === 'text' || CMD.def.key === 'mtext' || CMD.def.key === 'leader')) return false;
+  return true;
+}
+/* Registered here rather than with the rest of the key handling because this
+   listener has to run BEFORE the one that appends every printable character to
+   the command line — 06 loads before 14, so it does. */
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('keydown', ev => {
+    if (!ev || !ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+    if (!tempOverrideKey(ev.key) || !tempOverrideAllowed()) return;
+    if (ev.repeat) { if (ev.preventDefault) ev.preventDefault(); return; }
+    const o = tempOverrideDown(ev.key);
+    if (!o) return;
+    if (ev.preventDefault) ev.preventDefault();
+    if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
+    if (typeof echo === 'function') echo(o.label + ' (hold)');
+    if (typeof draw === 'function') draw();
+  });
+  window.addEventListener('keyup', ev => {
+    if (!ev || !TEMP_HELD) return;
+    if (!tempOverrideUp(ev.key)) return;
+    if (typeof echo === 'function') echo('');
+    if (typeof draw === 'function') draw();
+  });
+  /* an override must not survive the window losing focus mid-chord */
+  window.addEventListener('blur', () => { if (tempOverrideUp()) { if (typeof draw === 'function') draw(); } });
+}
+
 /* ---------------- Tab cycling ---------------- */
 /** step through the overlapping candidates under the cursor; returns the chosen one */
 function cycleSnap(dir) {
@@ -451,8 +563,9 @@ function snapPoint(sx, sy, ref, now) {
     cands.push(c);
   }
 
+  let hits = null;
   if (osOn) {
-    const hits = nearEnts(raw, r);
+    hits = nearEnts(raw, r);
     const pool = hits.slice(0, SNAP_MAX_POINT);
     for (const h of pool) entSnaps(h.e, h.d, raw, ref, r, push, on);
     if (on.int || on.appint) pairIntersections(pool, raw, r, push, on);
@@ -468,6 +581,17 @@ function snapPoint(sx, sy, ref, now) {
      near the arc itself. Those entities never reach the pool above, so scan
      the carriers separately. */
   if (osOn && on.perp && ref) deferredPerp(raw, ref, r, push);
+
+  /* ---- an aimed override ----
+     PER and TAN are not proximity snaps. You point at an object and AutoCAD
+     works the answer out from the rubber band, wherever it lands: the tangency
+     point of a big circle is nowhere near the rim you were pointing at. The
+     collector above only keeps a candidate that falls inside the aperture, so
+     an override aimed at a rim produced nothing at all — 1151mm out, with
+     polar answering instead. While the override is up, the object under the
+     crosshair IS the answer. */
+  if (osOn && ref && (ST.osnapOne === 'perp' || ST.osnapOne === 'tan'))
+    aimedSnap(ST.osnapOne, hits, raw, ref, r, push);
 
   /* ---- parallel: a direction lifted off another object, offered as a ray
      out of the rubber-band reference point ---- */
@@ -509,8 +633,12 @@ function snapPoint(sx, sy, ref, now) {
   let out = best ? best.p.slice() : raw;
   ST.snapTip = best ? snapTipFor(best) : null;
 
-  /* ---- ortho / polar constrain relative to ref ---- */
-  if (ref && !best) {
+  /* ---- ortho / polar constrain relative to ref ----
+     An override is an instruction, not a preference. Asking for PER and being
+     handed a polar point instead is the wrong answer confidently given, so
+     while one is up neither constraint gets to speak. */
+  const overridden = !!ST.osnapOne && ST.osnapOne !== 'none';
+  if (ref && !best && !overridden) {
     const v = sub(out, ref);
     if (ST.ortho) {
       out = Math.abs(v[0]) >= Math.abs(v[1]) ? [ref[0] + v[0], ref[1]] : [ref[0], ref[1] + v[1]];
@@ -791,6 +919,63 @@ function roundPerpTan(e, ref, raw, dEnt, push, on) {
       push(p, onArc ? 'perp' : 'perpx', dist(raw, p));
     }
   }
+}
+
+/* ---------------- aimed overrides (PER, TAN) ----------------
+   The point one entity offers a held PER or TAN override, measured from the
+   rubber band's reference. Both modes have two answers — either side of the
+   circle, either direction along the normal — and the one nearest the
+   crosshair is the side you were pointing at, which is how AutoCAD picks. */
+function aimedPoint(e, kind, raw, ref) {
+  const out = [];
+  const round = (c, rr) => {
+    const D = dist(ref, c);
+    if (kind === 'tan') {
+      /* no tangent exists from inside the circle */
+      if (!(D > rr + 1e-9)) return;
+      const a0 = ang(c, ref), da = Math.acos(clamp(rr / D, -1, 1));
+      for (const s of [1, -1]) out.push([c[0] + rr * Math.cos(a0 + s * da), c[1] + rr * Math.sin(a0 + s * da)]);
+    } else if (D > 1e-9) {
+      const u = norm(sub(ref, c));
+      for (const s of [1, -1]) out.push([c[0] + u[0] * rr * s, c[1] + u[1] * rr * s]);
+    }
+  };
+  /* a straight edge has no tangent point of its own */
+  const seg = (a, b) => { if (kind === 'perp') { const f = perpFoot(a, b, ref); if (f) out.push(f.p); } };
+  if (e.t === 'circle' || e.t === 'arc') round(e.c, e.r);
+  else if (e.t === 'line') seg(e.a, e.b);
+  else if (e.t === 'xline' || e.t === 'ray') { const q = xlineSeg(e); seg(q[0], q[1]); }
+  else {
+    let ss; try { ss = shapes(e, 24); } catch (err) { ss = null; }
+    for (const s of (ss || [])) {
+      if (s.c && s.r != null) round(s.c, s.r);
+      else if (s.pts && s.pts.length > 1) {
+        const P = s.closed ? [...s.pts, s.pts[0]] : s.pts;
+        for (let i = 1; i < P.length; i++) seg(P[i - 1], P[i]);
+      }
+    }
+  }
+  let bp = null, bd = Infinity;
+  for (const p of out) {
+    if (!p || !isFinite(p[0]) || !isFinite(p[1])) continue;
+    const d = dist(raw, p);
+    if (d < bd) { bd = d; bp = p; }
+  }
+  return bp;
+}
+/** offer the aimed point of the nearest object actually under the aperture */
+function aimedSnap(kind, hits, raw, ref, r, push) {
+  for (const h of (hits || [])) {
+    /* you have to be pointing AT it: past the aperture nothing is aimed at */
+    if (!(h.d <= r)) break;
+    const p = aimedPoint(h.e, kind, raw, ref);
+    if (!p) continue;
+    /* ranked by how close the crosshair is to the OBJECT, and admitted however
+       far the resulting point lands — that is the whole of what "aimed" means */
+    push(p, kind, h.d, null, true);
+    return true;
+  }
+  return false;
 }
 
 /** Perpendicular feet onto carriers whose own geometry is out of reach.

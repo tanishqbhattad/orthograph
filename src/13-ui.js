@@ -363,8 +363,14 @@ function initDial() {
 }
 
 /* ---------- drawing settings (bottom bar) ---------- */
+/** The editable form of a length. It goes through fmt(), so a field is written
+    in the same notation the coordinate readout, the dimensions and the AutoSnap
+    tooltips use — an imperial drawing put 9.84252 in a property field and
+    9'-10 1/8" in the status bar, which is two answers to one question — and
+    asks only for more decimals than a readout needs. `raw` marks the counts and
+    pixel settings, which are not lengths and carry no unit at all. */
 function dispNum(v, raw) {
-  return raw ? +Number(v).toFixed(4) : +(Number(v) / (U[DOC.units] || 1)).toFixed(5);
+  return raw ? +Number(v).toFixed(4) : fmt(Number(v), DOC.units, 5);
 }
 function dsField(w, tag, val, label, on, raw) {
   const b = el('label', 'ds');
@@ -1233,7 +1239,10 @@ function openTypeManager() {
       render();
     });
   }
-  window.saveTypeTable = () => {
+  /* A function declaration, not a property hung on `window`: the dialog's own
+     save step is nobody else's business, and leaving it on the global object
+     meant every open of this dialog overwrote the last one's closure. */
+  function saveTypeTable() {
     const c = conf[cur], list = c.list();
     document.querySelectorAll('#tmbody tbody tr').forEach(tr => {
       const t = list[+tr.dataset.i]; if (!t) return;
@@ -1244,14 +1253,13 @@ function openTypeManager() {
         else t[k] = inp.value;
       });
     });
-  };
-  const saveTypeTable2 = window.saveTypeTable;
+  }
   document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
-    saveTypeTable2();
+    saveTypeTable();
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
     b.classList.add('on'); cur = b.dataset.t; render();
   });
-  $('#tmadd').onclick = () => { saveTypeTable2(); conf[cur].list().push(conf[cur].blank()); render(); };
+  $('#tmadd').onclick = () => { saveTypeTable(); conf[cur].list().push(conf[cur].blank()); render(); };
   render();
 }
 
@@ -1650,26 +1658,254 @@ function buildOsnapTab(w, W, redraw) {
   head.append(all, none);
   w.appendChild(head);
   chk(w, 'Object snap on (F3)', W.osnap, v => W.osnap = v);
+  /* The grid is appended BEFORE it is filled, and each row is built inside its
+     own try. Sixteen checkboxes are the whole point of this tab; a glyph that
+     will not draw — a canvas the browser refuses to read back, a renderer that
+     is not there yet — must cost that row its picture, never the tab its list.
+     A throw here left the master toggle and Select all sitting over nothing. */
   const grid = el('div', 'osgrid');
+  w.appendChild(grid);
   for (const s of SNAP_KINDS) {
     const r = el('label', 'osr' + (s.bit > 65535 ? ' ext' : ''));
     r.title = s.bit > 65535 ? s.label + ' — an Orthograph mode, no AutoCAD equivalent' : s.label;
     const i = el('input'); i.type = 'checkbox'; i.checked = !!W.on[s.k];
     i.onchange = () => { W.on[s.k] = i.checked ? 1 : 0; };
-    const u = snapGlyphURL(s.k, 20);
+    let u = ''; try { u = snapGlyphURL(s.k, 20); } catch (err) { u = ''; }
     const ic = u ? el('img', 'smg') : el('span', 'smg');
     if (u) ic.src = u;
     r.append(i, ic, el('span', '', esc(s.label)));
     grid.appendChild(r);
   }
-  w.appendChild(grid);
   grpRow(w, 'AutoSnap');
   addRow(w, 'Aperture px', W.aperture, v => W.aperture = clamp(Math.round(v), 1, 50), 1);
   addRow(w, 'Marker px', W.markerSize, v => W.markerSize = clamp(Math.round(v), 2, 20), 1);
   chk(w, 'Show the aperture box', W.apBox, v => W.apBox = v);
   w.appendChild(el('div', 'oshint',
-    'Shift + right-click for a one-shot override. Hold Shift+E endpoint, Shift+V midpoint, ' +
-    'Shift+C centre, Shift+D nothing. Tab cycles the candidates under the cursor.'));}
+    'Shift + right-click for a one-shot override. Hold Shift+E or Shift+P endpoint, ' +
+    'Shift+M or Shift+V midpoint, Shift+C centre, Shift+D or Shift+L nothing at all, ' +
+    'Shift+A object snap, Shift+X polar, Shift+Z tracking — for as long as the key is down. ' +
+    'Tab cycles the candidates under the cursor.'));
+}
+
+/* ============================================================
+   Prompt keywords you can click
+   ------------------------------------------------------------
+   The bracketed list is the command's entire vocabulary at that
+   moment, and AutoCAD has let you click it for fifteen years.
+   Here it was rendered as `[<em>C</em>lose/<em>U</em>ndo]`
+   under `pointer-events:none` — a list of things you may do,
+   printed on glass. Each word is now a real button, and it runs
+   runInput(key): the same single path the typed capital takes,
+   so the click and the letter can never come to disagree.
+   ============================================================ */
+/** one keyword, with the letters you may type instead marked the way AutoCAD
+    capitalises them */
+function kwLabelHTML(k) {
+  const w = k.word, i = w.toLowerCase().indexOf(String(k.key).toLowerCase());
+  if (i < 0) return '<em>' + esc(w) + '</em>';
+  return esc(w.slice(0, i)) + '<em>' + esc(w.slice(i, i + k.key.length)) + '</em>' + esc(w.slice(i + k.key.length));
+}
+function promptKeyPick(key) {
+  if (!key) return;
+  /* whatever is half-typed is not the answer to this prompt */
+  const inp = $('#cmd'); if (inp) inp.value = '';
+  if (typeof acReset === 'function') acReset();
+  if (typeof runInput === 'function') runInput(key);
+  if (inp && inp.focus) inp.focus();
+}
+/* the live keyword buttons, in prompt order. Built as elements and wired as
+   they are built rather than written as HTML and queried back, so there is
+   never a render that produced buttons nothing is listening to. */
+const PROMPT_KW = [];
+function renderPromptKeys() {
+  const n = $('#hint'); if (!n) return;
+  const p = PROMPT;
+  PROMPT_KW.length = 0;
+  clearNode(n);
+  if (!p.base && !p.keys.length) { n.style.display = 'none'; return; }
+  const txt = s => { n.appendChild(el('span', 'hx', esc(s))); };
+  const base = p.base.replace(/:\s*$/, '');
+  if (base) txt(base);
+  if (p.keys.length) {
+    txt(base ? ' or [' : '[');
+    p.keys.forEach((k, i) => {
+      if (i) txt('/');
+      const b = el('button', 'kw', kwLabelHTML(k));
+      b.type = 'button';
+      b.title = k.word + ' — or type ' + k.key;
+      b.dataset.k = k.key;
+      b.onclick = ev => {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        promptKeyPick(b.dataset.k);
+      };
+      n.appendChild(b);
+      PROMPT_KW.push(b);
+    });
+    txt(']:');
+  } else if (!/[.?!:]$/.test(base)) txt(':');
+  if (p.extra) txt(' · ' + p.extra);
+  n.style.display = '';
+}
+
+/* ============================================================
+   AutoComplete
+   ------------------------------------------------------------
+   acSuggest() has ranked commands, aliases and system variables
+   by prefix and recency since the command engine was written,
+   and in the built file its only appearance was its own
+   definition: zero callers. AUTOCOMPLETEMODE reported 15 and
+   not one of the four bits did anything.
+
+   This is the list, and the bits:
+      1  append the rest of the top match into the input
+      2  show the list
+      4  show a kind badge beside each row
+      8  include system variables
+     16  match mid-string as well as by prefix
+
+   It sits ABOVE the input because the command line is docked at
+   the bottom of the window, which is where AutoCAD puts it too,
+   and it answers the Command prompt only: inside a running
+   command the same letters are options and coordinates.
+   ============================================================ */
+const AC_MAX = 10;
+const AC = { el: null, rows: [], items: [], idx: -1, typed: '', echo: null };
+const AC_BADGE = { cmd: '⌘', var: '$', meta: '☰' };
+function acClose() {
+  if (AC.el) { AC.el.remove(); AC.el = null; }
+  AC.items = []; AC.rows = []; AC.idx = -1;
+  return false;
+}
+/** the field was cleared or answered: forget what we last wrote into it */
+function acReset() { AC.typed = ''; AC.echo = null; return acClose(); }
+function acOpen() { return !!AC.el; }
+/** the run of the name the typed text matched, marked so the eye can see why
+    the row is in the list at all */
+function acNameHTML(name, q) {
+  const i = name.toLowerCase().indexOf(String(q).toLowerCase());
+  if (i < 0 || !q) return esc(name);
+  return esc(name.slice(0, i)) + '<b>' + esc(name.slice(i, i + q.length)) + '</b>' + esc(name.slice(i + q.length));
+}
+function acDraw(q) {
+  const wrap = $('#cmdwrap'); if (!wrap) return;
+  if (!AC.el) { AC.el = el('div'); AC.el.id = 'acList'; wrap.appendChild(AC.el); }
+  const icons = !!(CLI.autoComplete & 4);
+  clearNode(AC.el);
+  AC.rows = AC.items.map((it, i) => {
+    const b = el('button', 'aci' + (i === AC.idx ? ' on' : ''));
+    b.type = 'button'; b.dataset.i = String(i);
+    if (icons) b.appendChild(el('span', 'ack', esc(AC_BADGE[it.kind] || '·')));
+    b.appendChild(el('span', 'acn', acNameHTML(it.name, q)));
+    if (it.alias) b.appendChild(el('span', 'aca', esc(it.alias)));
+    /* mousedown, not click: the input must not lose focus first, or the blur
+       handler tears the list down before the click can land on it */
+    b.onmousedown = ev => { if (ev && ev.preventDefault) ev.preventDefault(); };
+    b.onclick = () => acAccept(i, true);
+    AC.el.appendChild(b);
+    return b;
+  });
+}
+/** bit 1 — write the rest of the top match into the input and leave it
+    selected, so the next keystroke replaces it. The characters already typed
+    are left exactly as typed: yanking them into capitals under a moving cursor
+    is what makes an aggressive completer unusable. */
+function acAppend(inp, typed, name) {
+  if (!inp || name.length <= typed.length) return;
+  /* Only into the field that holds the caret. A selection in an unfocused
+     input is invisible, and the canvas key handler grows the command line with
+     `value += key` instead of replacing the selection — so completing a field
+     nobody is typing in turns the next keystroke into "lASTPOINTi". */
+  if (typeof document !== 'undefined' && document.activeElement && document.activeElement !== inp) return;
+  if (name.slice(0, typed.length).toLowerCase() !== typed.toLowerCase()) return;  /* a mid-string hit has nothing to append */
+  inp.value = typed + name.slice(typed.length);
+  AC.echo = inp.value;
+  if (typeof inp.setSelectionRange === 'function') inp.setSelectionRange(typed.length, inp.value.length);
+}
+/** rebuild from whatever is in the command line right now */
+function acRefresh(grow) {
+  const inp = $('#cmd'); if (!inp) return acReset();
+  if (typeof CMD !== 'undefined' && CMD) return acReset();
+  const text = String(inp.value || '');
+  /* one bare word, or it is not a command name being typed */
+  if (!text.trim() || /[\s,'"@#<]/.test(text)) return acReset();
+  const list = (typeof acSuggest === 'function') ? acSuggest(text, AC_MAX) : [];
+  if (!list.length) return acClose();
+  AC.items = list; AC.idx = -1; AC.typed = text;
+  if (CLI.autoComplete & 1) { if (grow) acAppend(inp, text, list[0].name); }
+  if (CLI.autoComplete & 2) acDraw(text); else if (AC.el) { AC.el.remove(); AC.el = null; }
+  return true;
+}
+/** read the field and re-rank. Called on every key, because the field is
+    filled two ways: typed into directly, and appended to by the canvas key
+    handler (`cmdIn.value += key`), which fires no input event at all. */
+function acSync() {
+  const inp = $('#cmd'); if (!inp) return;
+  const v = String(inp.value || '');
+  /* Text this list put in the field itself is not the user typing. Arrowing
+     down the list writes the highlighted name into the input, and re-querying
+     on that narrowed the list to the one row the highlight was sitting on —
+     three presses of Down and there was nothing left to arrow through. */
+  if (v === AC.echo) return;
+  const grow = v.length > AC.typed.length;
+  AC.typed = v;
+  acRefresh(grow);
+}
+function acMove(d) {
+  if (!AC.items.length) return false;
+  const n = AC.items.length;
+  AC.idx = AC.idx < 0 ? (d > 0 ? 0 : n - 1) : (((AC.idx + d) % n) + n) % n;
+  acDraw(AC.typed);
+  const inp = $('#cmd');
+  /* the highlighted row IS the text: AutoCAD writes it into the field as you
+     arrow, so Enter needs no special case. AC.typed stays the query. */
+  if (inp) { inp.value = AC.items[AC.idx].name; AC.echo = inp.value; }
+  return true;
+}
+/** take suggestion `i`; `run` executes it, Tab only completes the word */
+function acAccept(i, run) {
+  const it = AC.items[i < 0 ? 0 : i]; if (!it) return false;
+  const inp = $('#cmd'); if (!inp) return false;
+  inp.value = it.name;
+  AC.typed = it.name; AC.echo = it.name;
+  acClose();
+  if (inp.focus) inp.focus();
+  if (run && typeof runInput === 'function') { inp.value = ''; runInput(it.name); }
+  else if (typeof inp.setSelectionRange === 'function') inp.setSelectionRange(it.name.length, it.name.length);
+  return true;
+}
+/* Wired here rather than beside the rest of the command-line keys because this
+   handler has to run BEFORE the one that recalls history on Up and Down — 13
+   loads before 14, so it does, and stopImmediatePropagation keeps the arrows
+   for the list while it is open. */
+(function acWire() {
+  const inp = typeof $ === 'function' ? $('#cmd') : null;
+  if (!inp || !inp.addEventListener) return;
+  inp.addEventListener('input', () => acSync());
+  inp.addEventListener('blur', () => acClose());
+  inp.addEventListener('keydown', ev => {
+    if (!ev) return;
+    const stop = () => {
+      if (ev.preventDefault) ev.preventDefault();
+      if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
+    };
+    if (ev.key === 'Tab' && (AC.items.length || acRefresh(false))) { stop(); acAccept(AC.idx, false); return; }
+    if (!acOpen()) return;
+    if (ev.key === 'ArrowDown') { stop(); acMove(1); return; }
+    if (ev.key === 'ArrowUp') { stop(); acMove(-1); return; }
+    /* one Escape dismisses the list and keeps what you typed; the next one is
+       the Escape that cancels, which is the order AutoCAD uses */
+    if (ev.key === 'Escape') { stop(); acClose(); return; }
+    if (ev.key === 'Enter') { acClose(); return; }   /* the field already holds the answer */
+  });
+  /* keyup, not keydown: on the canvas path the character is appended by a
+     keydown handler that has not run yet when ours does */
+  if (typeof window !== 'undefined' && window.addEventListener)
+    window.addEventListener('keyup', ev => {
+      if (!ev || ev.key === 'Escape' || ev.key === 'Shift') return;
+      acSync();
+    });
+})();
 
 /* ============================================================
    The command transcript.

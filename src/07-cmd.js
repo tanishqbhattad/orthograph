@@ -417,9 +417,15 @@ function kwKey(word) {
   const caps = w.replace(/[^A-Z]/g, '');
   return caps || w.charAt(0).toUpperCase();
 }
+/* The markup a prompt may carry, and nothing else.
+   A bare /<\/?[a-zA-Z][^>]*>/ also ate the default in
+   "Enter new value for LWDISPLAY <ON>:" — <ON> looks exactly like a tag — so
+   every bool variable prompted with no default at all, while PICKBOX kept its
+   <8> only because a digit cannot start a tag name. */
+const PROMPT_TAG = /<\/?(?:em|b|i|u|s|strong|small|kbd|code|span)\b[^>]*>/gi;
 /** put `key` into `label` as the capitalised run AutoCAD would show */
 function kwWord(label, key) {
-  const l = String(label).replace(/<\/?[a-zA-Z][^>]*>/g, '').trim();
+  const l = String(label).replace(PROMPT_TAG, '').trim();
   if (!l) return String(key).toUpperCase();
   const i = l.toLowerCase().indexOf(String(key).toLowerCase());
   const w = i < 0 ? l : l.slice(0, i) + l.slice(i, i + key.length).toUpperCase() + l.slice(i + key.length);
@@ -439,12 +445,24 @@ function parsePrompt(s) {
   }
   /* legacy: "Next point · <em>C</em> close · <em>Enter</em> end" */
   const parts = raw.split('·');
-  const base = parts.shift().replace(/<\/?[a-zA-Z][^>]*>/g, '').trim();
   const keys = [], extra = [];
+  /* An option list written straight into the first segment is still an option
+     list: ZOOM writes its whole vocabulary that way and got none of it back,
+     so the command line read "…or All Centre Dynamic Extents…" with no
+     brackets, no separators and nothing to click. A key that runs *into*
+     lowercase letters (<em>A</em>ll) is unambiguous; a marked word followed by
+     a space or punctuation (<em>2x</em>, <em>Enter</em> — or press…) is prose
+     and stays in the base, which is why the test is this narrow. */
+  const base = parts.shift()
+    .replace(/<em>([A-Za-z]{1,2})<\/em>([a-z][A-Za-z-]*)/g, (all, k, tail) => {
+      keys.push({ word: kwWord(k + tail, k), key: k.toUpperCase() });
+      return '';
+    })
+    .replace(PROMPT_TAG, '').replace(/[\s,]*\bor\b[\s,]*$/i, '').replace(/\s+/g, ' ').trim();
   for (const p of parts) {
     const em = p.match(/<em>([^<]+)<\/em>/);
-    const label = p.replace(/<em>[^<]*<\/em>/, '').replace(/<\/?[a-zA-Z][^>]*>/g, '').trim();
-    if (!em) { extra.push(p.replace(/<\/?[a-zA-Z][^>]*>/g, '').trim()); continue; }
+    const label = p.replace(/<em>[^<]*<\/em>/, '').replace(PROMPT_TAG, '').trim();
+    if (!em) { extra.push(p.replace(PROMPT_TAG, '').trim()); continue; }
     const k = em[1].trim();
     /* Enter/Esc/Shift are not keywords, they are keys */
     if (/^(enter|esc|escape|shift|tab|ctrl|del|delete)$/i.test(k)) { extra.push((k + ' ' + label).trim()); continue; }
@@ -462,15 +480,22 @@ function parsePrompt(s) {
 function promptText(p) {
   if (!p.base && !p.keys.length) return 'Command:';
   let s = p.base || 'Specify option';
-  if (p.keys.length) s += (p.base ? ' or ' : '') + '[' + p.keys.map(k => k.word).join('/') + ']';
+  if (p.keys.length) s += (p.base ? ' or ' : ' ') + '[' + p.keys.map(k => k.word).join('/') + ']';
   return s.replace(/:\s*$/, '') + ':';
+}
+/** Draw the prompt. renderPromptKeys (13-ui) is the renderer that makes each
+    keyword a click target; renderPrompt (14-events) is the plain-text one it
+    supersedes. Every prompt goes through here so the two can never disagree. */
+function promptRender() {
+  if (typeof renderPromptKeys === 'function') return renderPromptKeys();
+  if (typeof renderPrompt === 'function') renderPrompt();
 }
 /** set the prompt that the command line, the tooltip and the HUD all show */
 function promptSet(s) {
   const p = parsePrompt(s);
   PROMPT.raw = p.raw; PROMPT.base = p.base; PROMPT.keys = p.keys; PROMPT.extra = p.extra;
   PROMPT.text = promptText(p);
-  if (typeof renderPrompt === 'function') renderPrompt();
+  promptRender();
   return PROMPT;
 }
 /** a typed word matched against the live keyword list; returns the key letters */
@@ -1836,7 +1861,7 @@ function dispatch(s) {
          permanently unreachable while the prompt went on advertising it. */
       if (typeof selOption === 'function' && selOption(s)) {
         cmdPreview(ST.cur || [0, 0]);
-        if (typeof renderPrompt === 'function') renderPrompt();
+        promptRender();
         draw(); return true;
       }
       cliPrint('Invalid selection.', 'err');
@@ -1848,7 +1873,7 @@ function dispatch(s) {
       draw(); return true;
     }
     cliPrint('Point or option keyword required.', 'err');
-    if (typeof renderPrompt === 'function') renderPrompt();
+    promptRender();
     return false;
   }
   const r = resolveWord(first);

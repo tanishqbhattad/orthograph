@@ -102,10 +102,19 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 .dyn input.act{border-color:var(--amber);color:var(--amber)}
 .dyn label{position:absolute;top:-13px;font-family:var(--mono);font-size:8.5px;
   color:var(--tx2);letter-spacing:.1em}
+/* The panel stays transparent to the mouse — it floats over the drawing and
+   must never eat a pick — but the keywords inside it are buttons, so they take
+   their events back. That pair is the whole trick. */
 #hint{position:absolute;left:12px;top:10px;font-family:var(--mono);font-size:11px;
   color:var(--tx1);background:#0b0e13cc;border:1px solid var(--bd);border-radius:5px;
   padding:5px 10px;pointer-events:none;max-width:58%}
 #hint em{color:var(--amber);font-style:normal}
+#hint .kw{pointer-events:auto;cursor:pointer;font:inherit;color:inherit;
+  padding:1px 3px;margin:0 -1px;border-radius:3px;vertical-align:baseline}
+#hint .kw:hover{background:var(--amber);color:#141821}
+#hint .kw:hover em{color:#141821;text-decoration:underline}
+#hint .kw:focus-visible{outline:1px solid var(--amber);outline-offset:1px}
+#hint .kwsep{opacity:.55}
 
 /* ---- navigation widget: fit + view rotation ---- */
 #nav{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;
@@ -227,7 +236,27 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 #cmdhist .cl.err{color:var(--red,#f85149)}
 #cmdhist .cl.cmd{color:var(--amber)}
 #cmdhist .cl.dim{color:var(--tx2)}
-#cmdwrap{display:flex;align-items:center;gap:8px;padding:0 11px;height:32px;flex:none}
+#cmdwrap{display:flex;align-items:center;gap:8px;padding:0 11px;height:32px;flex:none;
+  position:relative}
+/* AutoComplete. It hangs off the input rather than being measured onto the
+   page, so it tracks the command line through every resize; and it opens
+   upwards because the command line is docked at the bottom, which is exactly
+   where AutoCAD opens it too. */
+#acList{position:absolute;left:26px;right:11px;bottom:calc(100% + 3px);z-index:60;
+  max-height:236px;overflow-y:auto;background:var(--bg0);border:1px solid var(--bd2);
+  border-radius:6px;padding:3px;box-shadow:0 -8px 24px #00000077;scrollbar-width:thin}
+.aci{display:flex;align-items:center;gap:8px;width:100%;padding:4px 7px;border-radius:4px;
+  font-family:var(--mono);font-size:11.5px;color:var(--tx1);text-align:left;cursor:pointer}
+.aci:hover{background:var(--bg2)}
+.aci.on{background:var(--amber);color:#141821}
+.aci .ack{flex:none;width:16px;text-align:center;font-size:9.5px;color:var(--tx2);
+  border:1px solid var(--bd);border-radius:3px;line-height:14px}
+.aci.on .ack{color:#141821;border-color:#14182166}
+.aci .acn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aci .acn b{color:var(--amber);font-weight:600}
+.aci.on .acn b{color:#141821;text-decoration:underline}
+.aci .aca{flex:none;font-size:10px;color:var(--tx2)}
+.aci.on .aca{color:#141821cc}
 #caret{font-family:var(--mono);color:var(--amber);font-size:12px;flex:none}
 #cmd{flex:1;font-family:var(--mono);font-size:12px;min-width:0}
 #cmd::placeholder{color:var(--tx2)}

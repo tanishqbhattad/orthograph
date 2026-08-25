@@ -457,7 +457,8 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
 
   /* Two spellings of an option hint are in use across this codebase, and the
      parser only understood one. DRAWORDER used the other and lost the first
-     letter of every option it offered. */
+     letter of every option it offered — and then lost Front entirely, because
+     Front sits in the segment the parser treated as prose. */
   t('an option hint keeps its first letter whichever spelling it uses', () => {
     const r = R(`${SETUP}
       addEnt({t:'line',a:[0,0],b:[100,0],layer:'0'});
@@ -469,9 +470,9 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       const spaced = PROMPT.text;
       endCmd(true);
       return { joined, spaced };`);
-    eq(r.joined.words.join('/'), 'Back/Above object/Under object',
+    eq(r.joined.words.join('/'), 'Front/Back/Above object/Under object',
       'got ' + r.joined.words.join('/'));
-    ok(/\[Back\/Above object\/Under object\]/.test(r.joined.text), r.joined.text);
+    ok(/\[Front\/Back\/Above object\/Under object\]/.test(r.joined.text), r.joined.text);
     ok(/\[Undo\]/.test(r.spaced), 'the other spelling must be unaffected: ' + r.spaced);
   });
 

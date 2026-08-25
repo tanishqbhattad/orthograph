@@ -55,7 +55,12 @@ const int2hex = n => '#' + ((n >>> 0) & 0xffffff).toString(16).padStart(6, '0');
 /* ---------------- unit formatting ---------------- */
 /* internal working unit is always the millimetre */
 const U = { mm: 1, cm: 10, m: 1000, in: 25.4, ft: 304.8 };
-function fmt(v, u) {
+/** The one length formatter. `dp` overrides the decimal places a *readout*
+    wants, so an editable field can ask for more of them without inventing a
+    second notation: the property panels used to print decimal feet beside a
+    status bar printing 9'-10 1/8", which is two answers to the same question.
+    Feet are architectural whatever `dp` says — that is what the unit means. */
+function fmt(v, u, dp) {
   u = u || DOC.units;
   if (u === 'ft') {
     const neg = v < 0;
@@ -72,7 +77,7 @@ function fmt(v, u) {
     return (neg ? '-' : '') + ft + "'-" + Math.floor(rem) + fs + '"';
   }
   const k = v / U[u];
-  const dp = u === 'mm' ? 1 : u === 'cm' ? 2 : 3;
+  if (dp == null) dp = u === 'mm' ? 1 : u === 'cm' ? 2 : 3;
   return (+k.toFixed(dp)).toString() + (u === 'in' ? '"' : '');
 }
 function parseLen(s) {

@@ -222,7 +222,8 @@ module.exports = ({ group, t, ok, eq, close, run, R, bootApp }) => {
       return out;`);
     eq(r.grid, 250, 'grid step');
     eq(r.polar, 15, 'polar increment');
-    eq(r.redrawn, 250, 'a bad value is rejected and the field repaints');
+    /* an input's value is a string in every browser, so read it as one */
+    eq(String(r.redrawn), '250', 'a bad value is rejected and the field repaints');
   });
 
   t('the gear opens a settings popover with the document-level settings', () => {

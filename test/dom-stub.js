@@ -30,8 +30,9 @@ class El {
   constructor(tag) {
     this.tagName = (tag || 'div').toUpperCase();
     this.children = []; this.style = {}; this.dataset = {};
-    this._cls = new Set(); this.innerHTML = ''; this.textContent = ''; this.value = '';
+    this._cls = new Set(); this.innerHTML = ''; this.textContent = ''; this._value = '';
     this._listeners = {};
+    this._selStart = 0; this._selEnd = 0;
     this.classList = {
       add: (...c) => c.forEach(x => this._cls.add(x)),
       remove: (...c) => c.forEach(x => this._cls.delete(x)),
@@ -41,6 +42,14 @@ class El {
   }
   get className() { return [...this._cls].join(' '); }
   set className(v) { this._cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+  /* A real input.value is a DOMString whatever you assign to it. The stub kept
+     whatever type it was handed, so a formatter that started returning a string
+     looked like a behaviour change here and like nothing at all in a browser. */
+  get value() { return this._value; }
+  set value(v) { this._value = v == null ? '' : String(v); this._selStart = this._selEnd = this._value.length; }
+  get selectionStart() { return this._selStart; }
+  get selectionEnd() { return this._selEnd; }
+  setSelectionRange(a, b) { this._selStart = a | 0; this._selEnd = b | 0; }
   appendChild(c) { this.children.push(c); c.parentNode = this; return c; }
   append(...cs) { cs.forEach(c => this.appendChild(c)); }
   removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); }
@@ -52,7 +61,14 @@ class El {
   dispatchEvent(ev) {
     /* the DOM sets target on dispatch; handlers here read ev.target.closest */
     if (ev && ev.target == null) ev.target = this;
-    (this._listeners[ev && ev.type] || []).slice().forEach(f => f(ev));
+    /* stopImmediatePropagation stops the listeners registered AFTER the one
+       that called it. Ignoring it meant a handler that deliberately runs first
+       and swallows the key — which is how the command line takes the arrows
+       back from history recall — could not be tested at all. */
+    for (const f of (this._listeners[ev && ev.type] || []).slice()) {
+      if (ev && ev._stopped) break;
+      f(ev);
+    }
     return !(ev && ev.defaultPrevented);
   }
   setPointerCapture() { } releasePointerCapture() { }
@@ -97,7 +113,10 @@ function install(g) {
       const i = a.indexOf(f); if (i >= 0) a.splice(i, 1);
     },
     dispatchEvent(ev) {
-      for (const f of (winListeners[ev.type] || []).slice()) f(ev);
+      for (const f of (winListeners[ev.type] || []).slice()) {
+        if (ev._stopped) break;
+        f(ev);
+      }
       return !ev.defaultPrevented;
     },
   };
@@ -118,6 +137,7 @@ function install(g) {
     }
     preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
     stopPropagation() { }
+    stopImmediatePropagation() { this._stopped = true; }
   };
   /* enough of the KeyboardEvent shape for the app's handlers to read */
   g.KeyboardEvent = class KeyboardEvent {
@@ -132,6 +152,24 @@ function install(g) {
     }
     preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
     stopPropagation() { }
+    stopImmediatePropagation() { this._stopped = true; }
+  };
+  /* a click, for the buttons the command line and the prompt now put on
+     screen. `detail` and the coordinates are what a handler is allowed to
+     read; nothing in this app reads more. */
+  g.MouseEvent = class MouseEvent {
+    constructor(type, o) {
+      o = o || {};
+      this.type = type; this.button = o.button == null ? 0 : o.button;
+      this.clientX = o.clientX || 0; this.clientY = o.clientY || 0;
+      this.shiftKey = !!o.shiftKey; this.ctrlKey = !!o.ctrlKey;
+      this.altKey = !!o.altKey; this.metaKey = !!o.metaKey;
+      this.bubbles = !!o.bubbles; this.cancelable = o.cancelable !== false;
+      this.defaultPrevented = false;
+    }
+    preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
+    stopPropagation() { }
+    stopImmediatePropagation() { this._stopped = true; }
   };
   g.navigator = { maxTouchPoints: 0 };
   g.requestAnimationFrame = f => 0;
