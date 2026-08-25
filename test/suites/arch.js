@@ -498,4 +498,73 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.negRadiusGone, true, 'a negative radius is not a circle');
     eq(r.goodKept, 230, 'and a legitimate thickness is left alone');
   });
+
+  group('stairs: every grip is on the object');
+
+  /* a and b describe the FIRST flight only, so a turning stair had no grip on
+     its landing or its return flight — half the object was unreachable. */
+  t('a turning stair has grips on its landing and its return flight', () => {
+    const r = R(`${SETUP}
+      const out = {};
+      for (const kind of ['straight','L','U']) {
+        resetDoc();
+        const st = addEnt({t:'stair', kind, a:[0,0], b:[3000,0], w:1000,
+                           risers:17, tread:280, turn:1, layer:'A-FLOR'});
+        const P = stairPath(st);
+        const gs = GEOM.stair.grips(st);
+        /* every grip must lie on the stair: on a flight centreline or inside
+           the landing plate */
+        const onObject = gs.every(g => {
+          if (P.landing && pointInPoly(g.p, P.landing)) return true;
+          return P.legs.some(([a,b]) => {
+            const u = norm(sub(b,a)); const t = dot(sub(g.p,a), u);
+            if (t < -1 || t > dist(a,b) + 1) return false;
+            const foot = add(a, mul(u, t));
+            return dist(foot, g.p) <= (st.w/2) + 1;
+          });
+        });
+        out[kind] = { keys: gs.map(g => g.k).join(''), n: gs.length, onObject };
+      }
+      return out;`);
+    eq(r.straight.keys, 'amb', 'a straight stair keeps its three');
+    eq(r.L.keys, 'ambe', 'an L gains the return-flight head');
+    eq(r.U.keys, 'ambe', 'and so does a U');
+    eq(r.straight.onObject, true, 'straight: every grip on the object');
+    eq(r.L.onObject, true, 'L: every grip on the object');
+    eq(r.U.onObject, true, 'U: every grip on the object');
+  });
+
+  /* the new grip edits a parameter, not a point — dragging the head of the
+     return flight changes how many risers come after the landing */
+  t('dragging the return flight head changes the riser count', () => {
+    const r = R(`${SETUP}
+      const st = addEnt({t:'stair', kind:'L', a:[0,0], b:[3000,0], w:1000,
+                         risers:17, tread:280, turn:1, layer:'A-FLOR'});
+      const P0 = stairPath(st);
+      const leg = P0.legs[P0.legs.length-1];
+      const dir = norm(sub(leg[1], leg[0]));
+      const before = st.risers;
+      /* pull it 1400mm further out — five treads at 280 */
+      GEOM.stair.grip(st, 'e', add(leg[0], mul(dir, dist(leg[0],leg[1]) + 1400)));
+      const after = st.risers;
+      const P1 = stairPath(st);
+      return { before, after,
+               grew: dist(P1.legs[1][0], P1.legs[1][1]) > dist(leg[0], leg[1]) };`);
+    ok(r.after > r.before, 'the riser count must rise: ' + r.before + ' -> ' + r.after);
+    eq(r.grew, true, 'and the return flight must actually get longer');
+  });
+
+  /* the middle grip moves the whole stair from wherever it sits */
+  t('the middle grip moves a turning stair as one piece', () => {
+    const r = R(`${SETUP}
+      const st = addEnt({t:'stair', kind:'U', a:[0,0], b:[3000,0], w:1000,
+                         risers:17, tread:280, turn:1, layer:'A-FLOR'});
+      const g = GEOM.stair.grips(st).find(x => x.k === 'm');
+      const a0 = st.a.slice(), b0 = st.b.slice();
+      GEOM.stair.grip(st, 'm', [g.p[0] + 500, g.p[1] + 250]);
+      return { da: sub(st.a, a0), db: sub(st.b, b0) };`);
+    close(r.da[0], 500, 1e-9); close(r.da[1], 250, 1e-9);
+    close(r.db[0], 500, 1e-9, 'both ends move together, so the shape is unchanged');
+    close(r.db[1], 250, 1e-9);
+  });
 };

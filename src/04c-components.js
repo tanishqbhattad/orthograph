@@ -140,10 +140,44 @@ function stairShapes(s) {
 }
 GEOM.stair = {
   shapes: stairShapes,
-  grips: s => [{ p: s.a, k: 'a' }, { p: mid(s.a, s.b), k: 'm' }, { p: s.b, k: 'b' }],
+  /* A straight stair is fully described by its two ends. A turning one is not:
+     a and b describe the FIRST flight only, so with three grips half the object
+     — the landing and the return flight — could not be touched at all. The
+     turning form gets a grip on the landing, which is the middle of what you
+     see, and one on the true top of the last flight. */
+  grips(s) {
+    const P = stairPath(s);
+    if (!P || !P.landing) return [{ p: s.a.slice(), k: 'a' }, { p: mid(s.a, s.b), k: 'm' }, { p: s.b.slice(), k: 'b' }];
+    const top = P.legs[P.legs.length - 1][1];
+    return [
+      { p: s.a.slice(), k: 'a' },                  /* foot of the first flight */
+      { p: P.landCentre.slice(), k: 'm' },         /* the landing: moves the lot */
+      { p: s.b.slice(), k: 'b' },                  /* head of the first flight */
+      { p: top.slice(), k: 'e' },                  /* head of the last flight   */
+    ];
+  },
   grip(s, k, p) {
-    if (k === 'a') s.a = p; else if (k === 'b') s.b = p;
-    else { const d = sub(p, mid(s.a, s.b)); s.a = add(s.a, d); s.b = add(s.b, d); }
+    if (k === 'a') { s.a = p; return; }
+    if (k === 'b') { s.b = p; return; }
+    if (k === 'e') {
+      /* The top of the return flight is not a stored point — how far it runs is
+         decided by how many risers are left after the landing. So this grip
+         edits the riser count, and the geometry follows. */
+      const P = stairPath(s); if (!P) return;
+      const leg = P.legs[P.legs.length - 1];
+      const dir = norm(sub(leg[1], leg[0]));
+      if (!dir[0] && !dir[1]) return;
+      const t = P.C.tread || 280;
+      const len = Math.max(t, dot(sub(p, leg[0]), dir));
+      const r2 = Math.max(1, Math.round(len / t) + 1);
+      s.risers = P.C.r1 + r2;
+      return;
+    }
+    /* 'm' drags the whole stair by whichever point the middle grip sits on */
+    const P = stairPath(s);
+    const ref = (P && P.landing) ? P.landCentre : mid(s.a, s.b);
+    const d = sub(p, ref);
+    s.a = add(s.a, d); s.b = add(s.b, d);
   },
   xf(s, fn) { s.a = fn(s.a); s.b = fn(s.b); },
   area(s) {
