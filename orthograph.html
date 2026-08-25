@@ -787,7 +787,6 @@ const IDXdirty = new Set();
 const IDX_MAX_CELLS = 96;
 
 function idxInvalidate() { IDX = null; IDXok = false; IDXdirty.clear(); DOCV++; }
-const bumpIndex = idxInvalidate;                 /* legacy alias */
 const ikey = (i, j) => i + ',' + j;
 
 function buildIndex() {
@@ -1845,7 +1844,15 @@ const nk = v => Math.round(v / NTOL);
    thicknesses. Without it two walls meeting at half a degree fire a spike off
    into the next suburb; with it the corner still closes, because both walls of
    the pair clamp to the very same point. */
-const MITRE_MAX = 10;
+/* AutoCAD's MITRELIMIT default, and for the same reason. The mitre length at
+   an interior angle t is th/(2*sin(t/2)), which runs away as the corner
+   sharpens: at 10 a pair of 230mm brick walls meeting at half a degree threw a
+   2.3 METRE spike off the corner. At 2, every corner of 29 degrees or wider
+   still mitres exactly — which covers essentially all real plan geometry — and
+   anything sharper stops growing at twice the wall thickness instead of
+   leaving the building. Both walls of the pair clamp to the same point either
+   way, so the corner stays closed; it just stops being a weapon. */
+const MITRE_MAX = 2;
 const WALL_MIN_T = 10;                            /* thinnest wall a face grip may make */
 
 let WNODES = null, WNODESv = -1;
@@ -2665,10 +2672,44 @@ function stairShapes(s) {
 }
 GEOM.stair = {
   shapes: stairShapes,
-  grips: s => [{ p: s.a, k: 'a' }, { p: mid(s.a, s.b), k: 'm' }, { p: s.b, k: 'b' }],
+  /* A straight stair is fully described by its two ends. A turning one is not:
+     a and b describe the FIRST flight only, so with three grips half the object
+     — the landing and the return flight — could not be touched at all. The
+     turning form gets a grip on the landing, which is the middle of what you
+     see, and one on the true top of the last flight. */
+  grips(s) {
+    const P = stairPath(s);
+    if (!P || !P.landing) return [{ p: s.a.slice(), k: 'a' }, { p: mid(s.a, s.b), k: 'm' }, { p: s.b.slice(), k: 'b' }];
+    const top = P.legs[P.legs.length - 1][1];
+    return [
+      { p: s.a.slice(), k: 'a' },                  /* foot of the first flight */
+      { p: P.landCentre.slice(), k: 'm' },         /* the landing: moves the lot */
+      { p: s.b.slice(), k: 'b' },                  /* head of the first flight */
+      { p: top.slice(), k: 'e' },                  /* head of the last flight   */
+    ];
+  },
   grip(s, k, p) {
-    if (k === 'a') s.a = p; else if (k === 'b') s.b = p;
-    else { const d = sub(p, mid(s.a, s.b)); s.a = add(s.a, d); s.b = add(s.b, d); }
+    if (k === 'a') { s.a = p; return; }
+    if (k === 'b') { s.b = p; return; }
+    if (k === 'e') {
+      /* The top of the return flight is not a stored point — how far it runs is
+         decided by how many risers are left after the landing. So this grip
+         edits the riser count, and the geometry follows. */
+      const P = stairPath(s); if (!P) return;
+      const leg = P.legs[P.legs.length - 1];
+      const dir = norm(sub(leg[1], leg[0]));
+      if (!dir[0] && !dir[1]) return;
+      const t = P.C.tread || 280;
+      const len = Math.max(t, dot(sub(p, leg[0]), dir));
+      const r2 = Math.max(1, Math.round(len / t) + 1);
+      s.risers = P.C.r1 + r2;
+      return;
+    }
+    /* 'm' drags the whole stair by whichever point the middle grip sits on */
+    const P = stairPath(s);
+    const ref = (P && P.landing) ? P.landCentre : mid(s.a, s.b);
+    const d = sub(p, ref);
+    s.a = add(s.a, d); s.b = add(s.b, d);
   },
   xf(s, fn) { s.a = fn(s.a); s.b = fn(s.b); },
   area(s) {
@@ -2684,7 +2725,11 @@ GEOM.stair = {
 function roomShapes(r) {
   const pts = roomBoundary(r);
   if (!pts || pts.length < 3) return [];
-  const out = [{ pts, closed: true, role: 'room' }];
+  /* A room whose walls have opened is drawn dashed and says so, instead of
+     presenting a stale number in the same style as a measured one. The shape
+     list already carries a linetype, so this needs nothing of the renderer. */
+  const open = roomIsOpen(r);
+  const out = [{ pts, closed: true, role: 'room', lt: open ? 'dashed' : undefined }];
   const c = roomCentroid(r);
   const h = r.h || DOC.textH * 1.4;
   const a = polyArea(pts);
@@ -2692,6 +2737,7 @@ function roomShapes(r) {
   if (r.name) lines.push({ s: r.name, h });
   if (r.showArea !== false) lines.push({ s: roomAreaText(r, a), h: h * 0.75 });
   if (r.showArea !== false && roomAltText(r, a)) lines.push({ s: roomAltText(r, a), h: h * 0.62 });
+  if (open) lines.push({ s: 'not enclosed', h: h * 0.62 });
   let y = c[1] + (lines.length - 1) * h * 0.42;
   for (const ln of lines) {
     out.push({ text: ln.s, p: [c[0], y], h: ln.h, rot: 0, anchor: 'c', role: 'label' });
@@ -2965,6 +3011,16 @@ function roomTrace(seed, lvl) {
   if (!pointInPoly(seed, pts)) return null;
   return pts;
 }
+/** True when an automatic room's walls no longer enclose its seed, so the
+    outline being shown is the last good one rather than a description of what
+    is there now. An area that is silently stale is the dangerous case: it
+    reaches schedules and drawings looking exactly like a real one. */
+function roomIsOpen(r) {
+  if (!r || r.t !== 'room' || !r.auto || !r.seed) return false;
+  roomBoundary(r);                                 /* ensures the cache is warm */
+  const hit = _roomCache.get(r.id);
+  return !!(hit && hit.open);
+}
 /* cached per document version so dragging a wall stays cheap */
 const _roomCache = new Map();
 function roomBoundary(r) {
@@ -2973,7 +3029,17 @@ function roomBoundary(r) {
   if (hit && hit.v === DOCV) return hit.pts;
   let pts = null;
   try { pts = roomTrace(r.seed, r.lvl || 0); } catch (e) { pts = null; }
-  if (!pts) pts = r.pts;                           /* keep the last good shape */
+  /* A failed trace means the walls no longer close around the seed. The last
+     good shape is still the best thing to draw — a room that vanishes while
+     you drag a wall is worse than one that lingers — but it is no longer a
+     measurement of anything, and the drawing has to say so. */
+  const open = !pts;
+  /* The last good outline is kept in the cache beside the entity, never on it.
+     It used to be written through to r.pts, which is what corrupted undo; when
+     that write was removed the fallback went with it, and an automatic room
+     that had never been detached had nothing to fall back to at all. */
+  const good = open ? (hit && hit.good) || r.pts : pts;
+  if (!pts) pts = good;
   /* Deliberately does NOT write pts back onto the entity. It used to, "for
      save/export", which made a read mutate the document outside the journal
      and without mut(): straight after an undo, r.pts still held the traced
@@ -2983,7 +3049,7 @@ function roomBoundary(r) {
      all the rendering path ever needed. The one consumer that genuinely needs
      a materialised polygon is the .ocad writer, and it materialises its own
      copy at write time — see roomForSave() in 11-io.js. */
-  _roomCache.set(r.id, { v: DOCV, pts });
+  _roomCache.set(r.id, { v: DOCV, pts, open, good });
   return pts;
 }
 
@@ -3272,7 +3338,6 @@ const LTDEF = {
   divide: [12.7, 6.35, 0, 6.35, 0, 6.35],
 };
 const DASH_SOLID = [];
-const DASH = { solid: DASH_SOLID };                /* legacy handle */
 const LT_MIN_PX = 3.5;                             /* below this a pattern is only shimmer */
 const LT_MAX_PX = 40000;                           /* above this it is one dash anyway */
 const _dashC = new Map();
@@ -4050,7 +4115,7 @@ function drawSnap() {
   const r = Math.max(3, devRound(clamp(+ST.markerSize || 6, 2, 20)));
   const g = SNAP_GLYPH[s.k] || SNAP_GLYPH.near;
   ctx.save();
-  ctx.setLineDash(DASH.solid);
+  ctx.setLineDash(DASH_SOLID);
   ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
   /* a dark backing stroke keeps the glyph readable over bright geometry
      without ever filling it in */
@@ -4113,7 +4178,7 @@ function drawTrackPts() {
   if (!ST.otrack || !pts || !pts.length) return;
   const d = V.dpr || 1, lwDev = Math.max(1, Math.round(1.4 * d));
   ctx.save();
-  ctx.setLineDash(DASH.solid);
+  ctx.setLineDash(DASH_SOLID);
   ctx.strokeStyle = CO.snap + 'cc'; ctx.lineWidth = lwDev / d; ctx.lineCap = 'butt';
   const a = devRound(4);
   ctx.beginPath();
@@ -10990,6 +11055,33 @@ function saveNative() {
     ents: [...DOC.ents.values()].map(roomForSave),
   });
 }
+/* A project file is untrusted input like any other. Only the properties panel
+   guarded wall thickness, so a hand-edited or corrupted .ocad could put a
+   negative th into the document, where it survives every later edit and makes
+   faces cross over each other. Nothing here rejects a file — a drawing that
+   opens with one bad number repaired is worth far more than a refusal — but a
+   value that cannot mean anything is dropped so the type default takes over. */
+function sanitiseEnt(e) {
+  if (!e || typeof e !== 'object' || !e.t) return null;
+  const num = (v, min) => (typeof v === 'number' && isFinite(v) && v > (min || 0));
+  /* thickness, height and sill are all strictly positive when present at all;
+     null and undefined are meaningful (fall back to the type) and are kept */
+  for (const k of ['th', 'h', 'w']) if (e[k] != null && !num(e[k])) delete e[k];
+  if (e.sill != null && !(typeof e.sill === 'number' && isFinite(e.sill))) delete e.sill;
+  /* a point that is not finite poisons every bbox and index it reaches */
+  /* typeof is not redundant: isFinite(null) is true, and JSON cannot carry
+     Infinity, so a file written from a poisoned document arrives with nulls
+     where the bad numbers were. */
+  const okN = v => typeof v === 'number' && isFinite(v);
+  const okPt = p => Array.isArray(p) && p.length >= 2 && okN(p[0]) && okN(p[1]);
+  for (const k of ['a', 'b', 'c', 'p', 'seed']) if (e[k] != null && !okPt(e[k])) return null;
+  if (Array.isArray(e.pts)) {
+    e.pts = e.pts.filter(okPt);
+    if (e.pts.length < 2 && (e.t === 'pline' || e.t === 'spline')) return null;
+  }
+  if (e.r != null && !num(e.r)) return null;
+  return e;
+}
 function loadNative(txt) {
   const d = JSON.parse(txt);
   begin();
@@ -11008,7 +11100,7 @@ function loadNative(txt) {
   DOC.curLevel = d.curLevel || 0;
   DOC.ents.clear(); SEL.clear(); UID = 1;
   idxInvalidate();
-  (d.ents || []).forEach(e => addEnt(e));
+  (d.ents || []).forEach(e => { const c = sanitiseEnt(e); if (c) addEnt(c); });
   for (const [n, c] of ARCH_LAYERS) if (!hasLayer(n) && [...DOC.ents.values()].some(e => e.layer === n)) ensureLayer(n, c);
   const u = $('#unit'); if (u) u.value = DOC.units;
   commit('Opened project');

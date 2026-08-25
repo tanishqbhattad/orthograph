@@ -414,4 +414,157 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     close(r.area, 5900 * 3900, 1, 'and they describe the real traced room');
     ok(r.seedKept && r.stillAuto, 'it stays an automatic room on reload');
   });
+
+  /* ============================================================
+     Phase 2 debt: things the drawing knew and did not say, and
+     input it trusted that it should not have.
+     ============================================================ */
+  group('rooms: an open room says so');
+
+  /* An unenclosed room kept its last good area and drew it in exactly the same
+     style as a measured one. In an AEC tool that number reaches schedules and
+     printed drawings looking entirely legitimate. */
+  t('a room whose walls open is drawn dashed and labelled', () => {
+    const r = R(`${SETUP}
+      const c = [[0,0],[6000,0],[6000,4000],[0,4000]];
+      for (let i = 0; i < 4; i++)
+        addEnt({t:'wall', a:c[i], b:c[(i+1)%4], wt:'gen100', layer:'A-WALL'});
+      const room = addEnt({t:'room', seed:[3000,2000], auto:true, name:'LIVING', layer:'A-AREA'});
+      const shut = { open: roomIsOpen(room),
+                     lt: (roomShapes(room)[0] || {}).lt,
+                     txt: roomShapes(room).filter(s => s.text != null).map(s => s.text) };
+      /* knock a wall out: the seed is no longer enclosed */
+      const w = [...DOC.ents.values()].find(e => e.t === 'wall');
+      begin(); eraseEnt(w.id); commit('open it');
+      const open = { open: roomIsOpen(room),
+                     lt: (roomShapes(room)[0] || {}).lt,
+                     txt: roomShapes(room).filter(s => s.text != null).map(s => s.text) };
+      return { shut, open };`);
+    eq(r.shut.open, false, 'a closed room is not flagged');
+    ok(!r.shut.lt, 'and is drawn with the ordinary linetype');
+    ok(!r.shut.txt.join(' ').includes('not enclosed'), 'and says nothing about enclosure');
+    eq(r.open.open, true, 'once the walls open it must know');
+    eq(r.open.lt, 'dashed', 'the outline must go dashed');
+    ok(r.open.txt.join(' ').includes('not enclosed'),
+      'and the tag must say so, got: ' + JSON.stringify(r.open.txt));
+  });
+
+  /* Reading a boundary still must not mutate — the flag lives beside the cache,
+     not on the entity. */
+  t('the open flag does not write to the entity', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'wall', a:[0,0], b:[6000,0], wt:'gen100', layer:'A-WALL'});
+      const room = addEnt({t:'room', seed:[3000,2000], auto:true, layer:'A-AREA'});
+      const before = JSON.stringify(room);
+      const v0 = DOCV, h0 = HIST.past.length;
+      for (let i = 0; i < 4; i++) roomIsOpen(room);
+      return { changed: JSON.stringify(room) !== before,
+               dv: DOCV - v0, dh: HIST.past.length - h0 };`);
+    eq(r.changed, false, 'the entity must be untouched');
+    eq(r.dv, 0); eq(r.dh, 0);
+  });
+
+  group('project file: untrusted input');
+
+  /* Only the properties panel guarded wall thickness, so a hand-edited or
+     corrupted .ocad could put a negative th into the document, where it
+     survives every later edit and crosses the faces over each other. */
+  t('a corrupt project file is repaired, not swallowed whole', () => {
+    const r = R(`${SETUP}
+      const bad = JSON.stringify({
+        app:'orthograph', v:2, units:'mm', layers:[newLayer('0')], cur:'0',
+        ents: [
+          { id:1, t:'wall', a:[0,0], b:[4000,0], th:-230, wt:'gen100', layer:'0' },
+          { id:2, t:'wall', a:[0,1000], b:[4000,1000], th:0, wt:'gen100', layer:'0' },
+          { id:3, t:'line', a:[0,0], b:[Infinity,0], layer:'0' },
+          { id:4, t:'circle', c:[0,0], r:-50, layer:'0' },
+          { id:5, t:'wall', a:[0,2000], b:[4000,2000], th:230, wt:'gen100', layer:'0' },
+        ],
+      });
+      loadNative(bad);
+      const ents = [...DOC.ents.values()];
+      const w1 = ents.find(e => e.id === 1), w5 = ents.find(e => e.id === 5);
+      return { n: ents.length,
+               negDropped: w1 ? w1.th == null : null,
+               negEffective: w1 ? wallT(w1) : null,
+               zeroDropped: (ents.find(e => e.id === 2) || {}).th == null,
+               infiniteGone: !ents.some(e => e.id === 3),
+               negRadiusGone: !ents.some(e => e.id === 4),
+               goodKept: w5 ? w5.th : null };`);
+    eq(r.negDropped, true, 'a negative thickness must not reach the document');
+    ok(r.negEffective > 0, 'and the wall falls back to its type: ' + r.negEffective);
+    eq(r.zeroDropped, true, 'nor a zero one');
+    eq(r.infiniteGone, true, 'a non-finite point poisons every bbox it reaches');
+    eq(r.negRadiusGone, true, 'a negative radius is not a circle');
+    eq(r.goodKept, 230, 'and a legitimate thickness is left alone');
+  });
+
+  group('stairs: every grip is on the object');
+
+  /* a and b describe the FIRST flight only, so a turning stair had no grip on
+     its landing or its return flight — half the object was unreachable. */
+  t('a turning stair has grips on its landing and its return flight', () => {
+    const r = R(`${SETUP}
+      const out = {};
+      for (const kind of ['straight','L','U']) {
+        resetDoc();
+        const st = addEnt({t:'stair', kind, a:[0,0], b:[3000,0], w:1000,
+                           risers:17, tread:280, turn:1, layer:'A-FLOR'});
+        const P = stairPath(st);
+        const gs = GEOM.stair.grips(st);
+        /* every grip must lie on the stair: on a flight centreline or inside
+           the landing plate */
+        const onObject = gs.every(g => {
+          if (P.landing && pointInPoly(g.p, P.landing)) return true;
+          return P.legs.some(([a,b]) => {
+            const u = norm(sub(b,a)); const t = dot(sub(g.p,a), u);
+            if (t < -1 || t > dist(a,b) + 1) return false;
+            const foot = add(a, mul(u, t));
+            return dist(foot, g.p) <= (st.w/2) + 1;
+          });
+        });
+        out[kind] = { keys: gs.map(g => g.k).join(''), n: gs.length, onObject };
+      }
+      return out;`);
+    eq(r.straight.keys, 'amb', 'a straight stair keeps its three');
+    eq(r.L.keys, 'ambe', 'an L gains the return-flight head');
+    eq(r.U.keys, 'ambe', 'and so does a U');
+    eq(r.straight.onObject, true, 'straight: every grip on the object');
+    eq(r.L.onObject, true, 'L: every grip on the object');
+    eq(r.U.onObject, true, 'U: every grip on the object');
+  });
+
+  /* the new grip edits a parameter, not a point — dragging the head of the
+     return flight changes how many risers come after the landing */
+  t('dragging the return flight head changes the riser count', () => {
+    const r = R(`${SETUP}
+      const st = addEnt({t:'stair', kind:'L', a:[0,0], b:[3000,0], w:1000,
+                         risers:17, tread:280, turn:1, layer:'A-FLOR'});
+      const P0 = stairPath(st);
+      const leg = P0.legs[P0.legs.length-1];
+      const dir = norm(sub(leg[1], leg[0]));
+      const before = st.risers;
+      /* pull it 1400mm further out — five treads at 280 */
+      GEOM.stair.grip(st, 'e', add(leg[0], mul(dir, dist(leg[0],leg[1]) + 1400)));
+      const after = st.risers;
+      const P1 = stairPath(st);
+      return { before, after,
+               grew: dist(P1.legs[1][0], P1.legs[1][1]) > dist(leg[0], leg[1]) };`);
+    ok(r.after > r.before, 'the riser count must rise: ' + r.before + ' -> ' + r.after);
+    eq(r.grew, true, 'and the return flight must actually get longer');
+  });
+
+  /* the middle grip moves the whole stair from wherever it sits */
+  t('the middle grip moves a turning stair as one piece', () => {
+    const r = R(`${SETUP}
+      const st = addEnt({t:'stair', kind:'U', a:[0,0], b:[3000,0], w:1000,
+                         risers:17, tread:280, turn:1, layer:'A-FLOR'});
+      const g = GEOM.stair.grips(st).find(x => x.k === 'm');
+      const a0 = st.a.slice(), b0 = st.b.slice();
+      GEOM.stair.grip(st, 'm', [g.p[0] + 500, g.p[1] + 250]);
+      return { da: sub(st.a, a0), db: sub(st.b, b0) };`);
+    close(r.da[0], 500, 1e-9); close(r.da[1], 250, 1e-9);
+    close(r.db[0], 500, 1e-9, 'both ends move together, so the shape is unchanged');
+    close(r.db[1], 250, 1e-9);
+  });
 };

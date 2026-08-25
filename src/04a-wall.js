@@ -13,7 +13,15 @@ const nk = v => Math.round(v / NTOL);
    thicknesses. Without it two walls meeting at half a degree fire a spike off
    into the next suburb; with it the corner still closes, because both walls of
    the pair clamp to the very same point. */
-const MITRE_MAX = 10;
+/* AutoCAD's MITRELIMIT default, and for the same reason. The mitre length at
+   an interior angle t is th/(2*sin(t/2)), which runs away as the corner
+   sharpens: at 10 a pair of 230mm brick walls meeting at half a degree threw a
+   2.3 METRE spike off the corner. At 2, every corner of 29 degrees or wider
+   still mitres exactly — which covers essentially all real plan geometry — and
+   anything sharper stops growing at twice the wall thickness instead of
+   leaving the building. Both walls of the pair clamp to the same point either
+   way, so the corner stays closed; it just stops being a weapon. */
+const MITRE_MAX = 2;
 const WALL_MIN_T = 10;                            /* thinnest wall a face grip may make */
 
 let WNODES = null, WNODESv = -1;

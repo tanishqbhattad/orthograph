@@ -140,10 +140,44 @@ function stairShapes(s) {
 }
 GEOM.stair = {
   shapes: stairShapes,
-  grips: s => [{ p: s.a, k: 'a' }, { p: mid(s.a, s.b), k: 'm' }, { p: s.b, k: 'b' }],
+  /* A straight stair is fully described by its two ends. A turning one is not:
+     a and b describe the FIRST flight only, so with three grips half the object
+     — the landing and the return flight — could not be touched at all. The
+     turning form gets a grip on the landing, which is the middle of what you
+     see, and one on the true top of the last flight. */
+  grips(s) {
+    const P = stairPath(s);
+    if (!P || !P.landing) return [{ p: s.a.slice(), k: 'a' }, { p: mid(s.a, s.b), k: 'm' }, { p: s.b.slice(), k: 'b' }];
+    const top = P.legs[P.legs.length - 1][1];
+    return [
+      { p: s.a.slice(), k: 'a' },                  /* foot of the first flight */
+      { p: P.landCentre.slice(), k: 'm' },         /* the landing: moves the lot */
+      { p: s.b.slice(), k: 'b' },                  /* head of the first flight */
+      { p: top.slice(), k: 'e' },                  /* head of the last flight   */
+    ];
+  },
   grip(s, k, p) {
-    if (k === 'a') s.a = p; else if (k === 'b') s.b = p;
-    else { const d = sub(p, mid(s.a, s.b)); s.a = add(s.a, d); s.b = add(s.b, d); }
+    if (k === 'a') { s.a = p; return; }
+    if (k === 'b') { s.b = p; return; }
+    if (k === 'e') {
+      /* The top of the return flight is not a stored point — how far it runs is
+         decided by how many risers are left after the landing. So this grip
+         edits the riser count, and the geometry follows. */
+      const P = stairPath(s); if (!P) return;
+      const leg = P.legs[P.legs.length - 1];
+      const dir = norm(sub(leg[1], leg[0]));
+      if (!dir[0] && !dir[1]) return;
+      const t = P.C.tread || 280;
+      const len = Math.max(t, dot(sub(p, leg[0]), dir));
+      const r2 = Math.max(1, Math.round(len / t) + 1);
+      s.risers = P.C.r1 + r2;
+      return;
+    }
+    /* 'm' drags the whole stair by whichever point the middle grip sits on */
+    const P = stairPath(s);
+    const ref = (P && P.landing) ? P.landCentre : mid(s.a, s.b);
+    const d = sub(p, ref);
+    s.a = add(s.a, d); s.b = add(s.b, d);
   },
   xf(s, fn) { s.a = fn(s.a); s.b = fn(s.b); },
   area(s) {
@@ -159,7 +193,11 @@ GEOM.stair = {
 function roomShapes(r) {
   const pts = roomBoundary(r);
   if (!pts || pts.length < 3) return [];
-  const out = [{ pts, closed: true, role: 'room' }];
+  /* A room whose walls have opened is drawn dashed and says so, instead of
+     presenting a stale number in the same style as a measured one. The shape
+     list already carries a linetype, so this needs nothing of the renderer. */
+  const open = roomIsOpen(r);
+  const out = [{ pts, closed: true, role: 'room', lt: open ? 'dashed' : undefined }];
   const c = roomCentroid(r);
   const h = r.h || DOC.textH * 1.4;
   const a = polyArea(pts);
@@ -167,6 +205,7 @@ function roomShapes(r) {
   if (r.name) lines.push({ s: r.name, h });
   if (r.showArea !== false) lines.push({ s: roomAreaText(r, a), h: h * 0.75 });
   if (r.showArea !== false && roomAltText(r, a)) lines.push({ s: roomAltText(r, a), h: h * 0.62 });
+  if (open) lines.push({ s: 'not enclosed', h: h * 0.62 });
   let y = c[1] + (lines.length - 1) * h * 0.42;
   for (const ln of lines) {
     out.push({ text: ln.s, p: [c[0], y], h: ln.h, rot: 0, anchor: 'c', role: 'label' });
@@ -440,6 +479,16 @@ function roomTrace(seed, lvl) {
   if (!pointInPoly(seed, pts)) return null;
   return pts;
 }
+/** True when an automatic room's walls no longer enclose its seed, so the
+    outline being shown is the last good one rather than a description of what
+    is there now. An area that is silently stale is the dangerous case: it
+    reaches schedules and drawings looking exactly like a real one. */
+function roomIsOpen(r) {
+  if (!r || r.t !== 'room' || !r.auto || !r.seed) return false;
+  roomBoundary(r);                                 /* ensures the cache is warm */
+  const hit = _roomCache.get(r.id);
+  return !!(hit && hit.open);
+}
 /* cached per document version so dragging a wall stays cheap */
 const _roomCache = new Map();
 function roomBoundary(r) {
@@ -448,7 +497,17 @@ function roomBoundary(r) {
   if (hit && hit.v === DOCV) return hit.pts;
   let pts = null;
   try { pts = roomTrace(r.seed, r.lvl || 0); } catch (e) { pts = null; }
-  if (!pts) pts = r.pts;                           /* keep the last good shape */
+  /* A failed trace means the walls no longer close around the seed. The last
+     good shape is still the best thing to draw — a room that vanishes while
+     you drag a wall is worse than one that lingers — but it is no longer a
+     measurement of anything, and the drawing has to say so. */
+  const open = !pts;
+  /* The last good outline is kept in the cache beside the entity, never on it.
+     It used to be written through to r.pts, which is what corrupted undo; when
+     that write was removed the fallback went with it, and an automatic room
+     that had never been detached had nothing to fall back to at all. */
+  const good = open ? (hit && hit.good) || r.pts : pts;
+  if (!pts) pts = good;
   /* Deliberately does NOT write pts back onto the entity. It used to, "for
      save/export", which made a read mutate the document outside the journal
      and without mut(): straight after an undo, r.pts still held the traced
@@ -458,6 +517,6 @@ function roomBoundary(r) {
      all the rendering path ever needed. The one consumer that genuinely needs
      a materialised polygon is the .ocad writer, and it materialises its own
      copy at write time — see roomForSave() in 11-io.js. */
-  _roomCache.set(r.id, { v: DOCV, pts });
+  _roomCache.set(r.id, { v: DOCV, pts, open, good });
   return pts;
 }

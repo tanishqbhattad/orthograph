@@ -130,7 +130,6 @@ const IDXdirty = new Set();
 const IDX_MAX_CELLS = 96;
 
 function idxInvalidate() { IDX = null; IDXok = false; IDXdirty.clear(); DOCV++; }
-const bumpIndex = idxInvalidate;                 /* legacy alias */
 const ikey = (i, j) => i + ',' + j;
 
 function buildIndex() {
