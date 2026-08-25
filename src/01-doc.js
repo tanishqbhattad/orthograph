@@ -19,6 +19,11 @@ const DOC = {
   winTypes: null,
   levels: null,
   curLevel: 0,
+  /* Sheets are paper space: a list of layouts, each holding viewports that
+     look onto the one model. curSheet null means model space, which is what
+     every command has always drawn into. */
+  sheets: null,
+  curSheet: null,
   wallHatch: true,        /* draw a poche fill inside walls */
   areaUnits: 'auto',      /* room tag units: auto | m2 | ft2 | sqmm | sqin */
   altArea: false,         /* show a second area unit under the first */
@@ -109,6 +114,7 @@ function resetDoc() {
   DOC.ents.clear(); DOC.cur = '0'; UID = 1;
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
+  DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1;
   idxInvalidate(); HIST.past.length = 0; HIST.future.length = 0;
 }
 
@@ -219,6 +225,56 @@ function touch(e) {
 function mut(e) { touch(e); if (e && e.id != null) { IDXdirty.add(e); markDirty(e.id); DOCV++; } return e; }
 function touchLayers() { if (JN.on && !JN.layers) JN.layers = clone(DOC.layers); }
 
+/* ---------------- sheets (paper space) ----------------
+   A sheet is a piece of paper with viewports cut into it. A viewport is a
+   window onto model space: a rectangle ON THE PAPER, in millimetres, plus the
+   model point at its centre and the scale it looks through. Everything about
+   plotting falls out of those three numbers, which is why they are stored and
+   nothing else is. */
+let SHEET_UID = 1;
+function newSheet(name, size, landscape) {
+  const [w, h] = paperSize(size || 'A3', landscape !== false);
+  return {
+    id: SHEET_UID++,
+    name: name || 'Sheet ' + SHEET_UID,
+    size: size || 'A3', landscape: landscape !== false,
+    w, h,
+    margin: 10,                                    /* unprintable edge, mm */
+    title: { show: true, w: 170, h: 40,            /* block sits bottom-right */
+             project: '', drawing: '', number: '', rev: '', date: '', by: '' },
+    viewports: [],
+  };
+}
+/** A viewport covering most of the sheet, which is what you want the moment
+    you make one. The caller supplies the model centre and scale. */
+function newViewport(sh, centre, scale) {
+  const m = sh.margin, tb = sh.title && sh.title.show ? sh.title.h : 0;
+  return {
+    id: SHEET_UID++,
+    x: m, y: m, w: sh.w - m * 2, h: sh.h - m * 2 - tb,
+    centre: (centre || [0, 0]).slice(),
+    scale: scale || 1 / 100,
+    rot: 0,
+    locked: false,
+  };
+}
+function curSheet() {
+  if (DOC.curSheet == null) return null;
+  return (DOC.sheets || []).find(s => s.id === DOC.curSheet) || null;
+}
+/** paper mm -> model mm for a viewport, and back. Every plot, pick and zoom in
+    paper space goes through these two, so they are the only place the scale
+    convention lives. */
+function vpToModel(vp, px, py) {
+  const s = vp.scale || 1;
+  return [vp.centre[0] + (px - (vp.x + vp.w / 2)) / s,
+          vp.centre[1] - (py - (vp.y + vp.h / 2)) / s];
+}
+function vpToPaper(vp, wx, wy) {
+  const s = vp.scale || 1;
+  return [(wx - vp.centre[0]) * s + vp.x + vp.w / 2,
+          (vp.centre[1] - wy) * s + vp.y + vp.h / 2];
+}
 function addEnt(e) {
   e.id = e.id || UID++;
   if (e.id >= UID) UID = e.id + 1;

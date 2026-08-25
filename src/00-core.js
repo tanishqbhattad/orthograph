@@ -127,3 +127,37 @@ function lwSnap(mm) {
   for (const v of LW_LADDER) { const d = Math.abs(v - mm); if (d < bd) { bd = d; best = v; } }
   return best;
 }
+
+/* ---------------- paper ----------------
+   Sheet sizes in millimetres, portrait (width, height). A sheet is the only
+   place in this program where a millimetre means a millimetre on a physical
+   object rather than a millimetre of building, so these are the numbers that
+   decide whether a plot comes out at the scale it claims. */
+const PAPER = {
+  A0: [841, 1189], A1: [594, 841], A2: [420, 594], A3: [297, 420], A4: [210, 297],
+  ANSI_E: [864, 1118], ANSI_D: [559, 864], ANSI_C: [432, 559], ANSI_B: [279, 432], ANSI_A: [216, 279],
+  ARCH_E: [914, 1219], ARCH_D: [610, 914], ARCH_C: [457, 610], ARCH_B: [305, 457],
+};
+/** paper extent in mm for a size name and orientation */
+function paperSize(name, landscape) {
+  const p = PAPER[name] || PAPER.A3;
+  return landscape ? [p[1], p[0]] : [p[0], p[1]];
+}
+/* The drawing scales an architect actually uses. Stored as a ratio — paper mm
+   per model mm — because that is what every transform needs; the label is what
+   goes in the title block. */
+const SCALES = [
+  { label: '1:1', r: 1 }, { label: '1:2', r: 1 / 2 }, { label: '1:5', r: 1 / 5 },
+  { label: '1:10', r: 1 / 10 }, { label: '1:20', r: 1 / 20 }, { label: '1:25', r: 1 / 25 },
+  { label: '1:50', r: 1 / 50 }, { label: '1:100', r: 1 / 100 }, { label: '1:200', r: 1 / 200 },
+  { label: '1:500', r: 1 / 500 }, { label: '1:1000', r: 1 / 1000 },
+];
+/** the label for a ratio, falling back to a computed 1:n so a custom scale
+    still prints something honest rather than nothing */
+function scaleLabel(r) {
+  const hit = SCALES.find(s => Math.abs(s.r - r) < 1e-12);
+  if (hit) return hit.label;
+  if (!(r > 0)) return '—';
+  return r >= 1 ? (+r.toFixed(4)) + ':1' : '1:' + (+(1 / r).toFixed(4));
+}
+

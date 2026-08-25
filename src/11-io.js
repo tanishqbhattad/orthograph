@@ -1,15 +1,18 @@
 /* ============================================================
    ORTHOGRAPH — 11 SVG, PNG and the native project file
    ============================================================ */
-function exportSVG() {
-  const b = bboxAll([...DOC.ents.values()].filter(visible)) || [0, 0, 100, 100];
-  const pad = Math.max((b[2] - b[0]), (b[3] - b[1])) * .04 + 5;
-  const x0 = b[0] - pad, y0 = b[1] - pad, w = b[2] - b[0] + pad * 2, h = b[3] - b[1] + pad * 2;
+/* The entity layer of an SVG, in world millimetres with y already negated.
+   Shared by the model-space export and by every viewport on a sheet, so a
+   plotted sheet and an exported drawing can never drift apart.
+
+   lwMul scales the stroke widths. Inside a viewport the whole group is scaled
+   by the drawing scale, and a lineweight is a *plot* width — 0.35mm of ink on
+   the paper whether the drawing is 1:50 or 1:500 — so the widths are divided
+   by the scale here in order to survive being multiplied by it there. */
+function svgEntityBody(lwMul) {
+  const K = lwMul || 1;
+  const out = [];
   const T2 = p => `${(+p[0].toFixed(4))},${(+(-p[1]).toFixed(4))}`;
-  const out = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${(+x0.toFixed(3))} ${(+(-(y0 + h)).toFixed(3))} ${(+w.toFixed(3))} ${(+h.toFixed(3))}" width="${Math.round(w)}" height="${Math.round(h)}">`,
-    `<rect x="${x0}" y="${-(y0 + h)}" width="${w}" height="${h}" fill="#ffffff"/>`,
-  ];
   const dashMap = { dashed: '4,2.5', hidden: '2.5,1.8', center: '8,2,2,2', dashdot: '6,2,1,2' };
   const ink = c => (c.toLowerCase() === '#ffffff' || c.toLowerCase() === '#d7dee8' || c.toLowerCase() === '#e8e8e8') ? '#111111' : c;
   const strokeOf = (col, lw, lt) =>
@@ -34,7 +37,7 @@ function exportSVG() {
   ordered.sort((a, x) => ((a.t === 'hatch' || a.t === 'room') ? 0 : 1) - ((x.t === 'hatch' || x.t === 'room') ? 0 : 1));
   for (const e of ordered) {
     const col = ink(entColor(e));
-    const lw = Math.max(entLw(e), 0.13);
+    const lw = Math.max(entLw(e), 0.13) * K;
     const lt = entLt(e);
     if (e.t === 'hatch') {
       for (const L of (e.loops || [])) {
@@ -57,8 +60,111 @@ function exportSVG() {
     }
     for (const s of shapes(e, 96)) emitShape(s, col, lw, lt);
   }
+  return out;
+}
+function exportSVG() {
+  const b = bboxAll([...DOC.ents.values()].filter(visible)) || [0, 0, 100, 100];
+  const pad = Math.max((b[2] - b[0]), (b[3] - b[1])) * .04 + 5;
+  const x0 = b[0] - pad, y0 = b[1] - pad, w = b[2] - b[0] + pad * 2, h = b[3] - b[1] + pad * 2;
+  const out = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${(+x0.toFixed(3))} ${(+(-(y0 + h)).toFixed(3))} ${(+w.toFixed(3))} ${(+h.toFixed(3))}" width="${Math.round(w)}" height="${Math.round(h)}">`,
+    `<rect x="${x0}" y="${-(y0 + h)}" width="${w}" height="${h}" fill="#ffffff"/>`,
+  ];
+  out.push(...svgEntityBody(1));
   out.push('</svg>');
   return out.join('\n');
+}
+
+/* ---------------- plotting a sheet ----------------
+   The output is an SVG whose width and height are declared in MILLIMETRES and
+   whose viewBox is the paper in the same units. That pairing is what makes a
+   plot true to scale: one user unit is one millimetre of paper, so a viewport
+   scaled by 1/50 puts a 5000mm wall down as exactly 100mm of ink. Anything
+   that reasons in pixels instead will be close and wrong, which on a drawing
+   an architect issues is worse than being obviously broken. */
+function sheetSVG(sh) {
+  if (!sh) return '';
+  const R4 = n => +(+n).toFixed(4);
+  const out = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${sh.w}mm" height="${sh.h}mm" ` +
+      `viewBox="0 0 ${sh.w} ${sh.h}">`,
+    `<rect x="0" y="0" width="${sh.w}" height="${sh.h}" fill="#ffffff"/>`,
+  ];
+  const vps = sh.viewports || [];
+  if (vps.length) {
+    out.push('<defs>');
+    for (const vp of vps)
+      out.push(`<clipPath id="vpc${vp.id}"><rect x="${R4(vp.x)}" y="${R4(vp.y)}" ` +
+               `width="${R4(vp.w)}" height="${R4(vp.h)}"/></clipPath>`);
+    out.push('</defs>');
+  }
+  for (const vp of vps) {
+    const sc = vp.scale || 1;
+    const cx = vp.x + vp.w / 2, cy = vp.y + vp.h / 2;
+    /* body coordinates are (wx, -wy); this lands them on the paper. The order
+       reads backwards: the rightmost transform applies first. */
+    const xf = `translate(${R4(cx)} ${R4(cy)})` +
+               (vp.rot ? ` rotate(${R4(-deg(vp.rot))})` : '') +
+               ` scale(${R4(sc)}) translate(${R4(-vp.centre[0])} ${R4(vp.centre[1])})`;
+    out.push(`<g clip-path="url(#vpc${vp.id})"><g transform="${xf}">`);
+    /* the viewport border is deliberately not drawn: in AutoCAD it lives on a
+       non-plotting layer, and a box printed round every view looks amateur */
+    out.push(...svgEntityBody(1 / sc));
+    out.push('</g></g>');
+  }
+  out.push(...titleBlockSVG(sh));
+  out.push('</svg>');
+  return out.join('\n');
+}
+/* The title block. Bottom-right, inside the margin, which is where every
+   drawing office in the world looks for it. */
+function titleBlockSVG(sh) {
+  const T = sh.title;
+  if (!T || T.show === false) return [];
+  const m = sh.margin, w = T.w, h = T.h;
+  const x = sh.w - m - w, y = sh.h - m - h;
+  const ink = '#111111', hair = 0.18, rule = 0.35;
+  const o = [`<g font-family="Inter,Helvetica,sans-serif" fill="${ink}">`,
+    `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${ink}" stroke-width="${rule}"/>`];
+  /* the scale a sheet is drawn at is a property of its viewports, so it is
+     reported rather than typed — a title block that can disagree with the
+     drawing is a liability */
+  const scales = [...new Set((sh.viewports || []).map(v => scaleLabel(v.scale)))];
+  const rows = [
+    ['PROJECT', T.project || ''],
+    ['DRAWING', T.drawing || ''],
+    ['SCALE', scales.length === 1 ? scales[0] : (scales.length ? 'As shown' : '—')],
+    ['DATE', T.date || ''],
+  ];
+  const rh = h / (rows.length + 1);
+  rows.forEach((r, i) => {
+    const ry = y + i * rh;
+    if (i) o.push(`<line x1="${x}" y1="${ry}" x2="${x + w}" y2="${ry}" stroke="${ink}" stroke-width="${hair}"/>`);
+    o.push(`<text x="${x + 2.5}" y="${ry + rh * 0.42}" font-size="2.1" letter-spacing="0.35" fill="#555555">${esc(r[0])}</text>`);
+    o.push(`<text x="${x + 2.5}" y="${ry + rh * 0.85}" font-size="3.4">${esc(r[1])}</text>`);
+  });
+  /* the sheet number gets its own cell, big, at the corner */
+  const ny = y + rows.length * rh;
+  o.push(`<line x1="${x}" y1="${ny}" x2="${x + w}" y2="${ny}" stroke="${ink}" stroke-width="${hair}"/>`);
+  o.push(`<text x="${x + 2.5}" y="${ny + rh * 0.42}" font-size="2.1" letter-spacing="0.35" fill="#555555">SHEET</text>`);
+  o.push(`<text x="${x + 2.5}" y="${ny + rh * 0.9}" font-size="5.2" font-weight="600">${esc(T.number || sh.name || '')}</text>`);
+  if (T.rev) o.push(`<text x="${x + w - 2.5}" y="${ny + rh * 0.9}" font-size="4" text-anchor="end">${esc('Rev ' + T.rev)}</text>`);
+  o.push('</g>');
+  return o;
+}
+/** hand the sheet to the browser's print pipeline, which is how a page becomes
+    a PDF without carrying a PDF writer around */
+function plotSheet(sh) {
+  const svg = sheetSVG(sh || curSheet());
+  if (!svg) return null;
+  const html = `<!doctype html><meta charset="utf-8"><title>${esc((sh || curSheet()).name)}</title>` +
+    `<style>@page{size:${sh.w}mm ${sh.h}mm;margin:0}html,body{margin:0;padding:0}` +
+    `svg{display:block}</style>${svg}`;
+  if (typeof window !== 'undefined' && window.open) {
+    const w = window.open('', '_blank');
+    if (w && w.document) { w.document.write(html); w.document.close(); w.focus(); w.print(); }
+  }
+  return html;
 }
 
 function exportPNG(maxPx) {
@@ -108,6 +214,7 @@ function saveNative() {
     layers: DOC.layers, cur: DOC.cur, blocks: DOC.blocks || {},
     wallTypes: DOC.wallTypes, doorTypes: DOC.doorTypes, winTypes: DOC.winTypes,
     levels: DOC.levels, curLevel: DOC.curLevel,
+    sheets: DOC.sheets || [], curSheet: DOC.curSheet,
     ents: [...DOC.ents.values()].map(roomForSave),
   });
 }
@@ -154,6 +261,12 @@ function loadNative(txt) {
   DOC.winTypes = d.winTypes || stdWinTypes();
   DOC.levels = d.levels || stdLevels();
   DOC.curLevel = d.curLevel || 0;
+  /* Sheets postdate version 2, so an older file simply has none — that is a
+     document with no paper space, not a broken one. */
+  DOC.sheets = Array.isArray(d.sheets) ? d.sheets.filter(sh => sh && sh.w > 0 && sh.h > 0) : [];
+  DOC.curSheet = DOC.sheets.some(sh => sh.id === d.curSheet) ? d.curSheet : null;
+  SHEET_UID = Math.max(1, ...DOC.sheets.map(sh => (sh.id || 0) + 1),
+    ...DOC.sheets.flatMap(sh => (sh.viewports || []).map(v => (v.id || 0) + 1)));
   DOC.ents.clear(); SEL.clear(); UID = 1;
   idxInvalidate();
   (d.ents || []).forEach(e => { const c = sanitiseEnt(e); if (c) addEnt(c); });
