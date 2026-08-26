@@ -358,4 +358,95 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     close(r.backTop, 2500, 1e-9, 'and U put it back, got ' + r.backTop);
     eq(r.running, true, 'without dropping out of TRIM');
   });
+
+  group('B2 — FILLET and CHAMFER modes');
+
+  const CORNER = `
+    addEnt({t:'line', a:[0,0], b:[2000,0], layer:'0'});
+    addEnt({t:'line', a:[2000,0], b:[2000,2000], layer:'0'});
+    cancelCmd();
+  `;
+
+  t('a fillet trims both objects back to the arc', () => {
+    const r = R(`${SETUP}${CORNER}
+      VS.trimmode = 1;
+      startCmd('fillet'); dispatch('300');
+      cmdPoint([1000,0]); cmdPoint([2000,1000]);
+      const lines = [...DOC.ents.values()].filter(e => e.t === 'line');
+      const arcs = [...DOC.ents.values()].filter(e => e.t === 'arc');
+      endCmd(true);
+      return { lens: lines.map(e => +dist(e.a,e.b).toFixed(6)).sort((a,b)=>a-b),
+               arcs: arcs.length, r: arcs[0] && +arcs[0].r.toFixed(6) };`);
+    eq(r.arcs, 1, 'one arc is added');
+    close(r.r, 300, 1e-6, 'of the radius asked for');
+    eq(r.lens.join(','), '1700,1700', 'and both lines stop at the tangent points');
+  });
+
+  /* TRIMMODE 0 is how you fillet something whose full length you still need. */
+  t('TRIMMODE off adds the arc and leaves the lines alone', () => {
+    const r = R(`${SETUP}${CORNER}
+      VS.trimmode = 1;
+      startCmd('fillet'); dispatch('300'); dispatch('T');
+      const mode = VS.trimmode;
+      cmdPoint([1000,0]); cmdPoint([2000,1000]);
+      const lines = [...DOC.ents.values()].filter(e => e.t === 'line');
+      const arcs = [...DOC.ents.values()].filter(e => e.t === 'arc');
+      endCmd(true);
+      VS.trimmode = 1;
+      return { mode, lens: lines.map(e => +dist(e.a,e.b).toFixed(6)).sort((a,b)=>a-b),
+               arcs: arcs.length };`);
+    eq(r.mode, 0, 'T turns trimming off');
+    eq(r.arcs, 1, 'the arc is still made');
+    eq(r.lens.join(','), '2000,2000', 'but neither line is cut');
+  });
+
+  t('a fillet of radius zero makes a sharp corner and no arc', () => {
+    const r = R(`${SETUP}
+      VS.trimmode = 1;
+      addEnt({t:'line', a:[0,0], b:[1500,0], layer:'0'});
+      addEnt({t:'line', a:[2000,500], b:[2000,2000], layer:'0'});
+      cancelCmd();
+      startCmd('fillet'); dispatch('0');
+      cmdPoint([700,0]); cmdPoint([2000,1200]);
+      const lines = [...DOC.ents.values()].filter(e => e.t === 'line');
+      const arcs = [...DOC.ents.values()].filter(e => e.t === 'arc');
+      endCmd(true);
+      /* both should now reach the corner at 2000,0 */
+      const reach = lines.map(e =>
+        Math.min(dist(e.a, [2000,0]), dist(e.b, [2000,0]))).sort((a,b)=>a-b);
+      return { arcs: arcs.length, reach };`);
+    eq(r.arcs, 0, 'radius zero is a corner, not an arc');
+    ok(r.reach.every(v => v < 1e-6),
+      'and both lines are taken to the corner, nearest ends at ' + r.reach.join(','));
+  });
+
+  /* A chamfer is dimensioned as a distance and an angle more often than as two
+     distances, and the Angle method simply was not there. */
+  t('CHAMFER by the angle method uses distance and angle', () => {
+    const r = R(`${SETUP}${CORNER}
+      VS.trimmode = 1;
+      startCmd('chamfer'); dispatch('A'); dispatch('400'); dispatch('30');
+      cmdPoint([1000,0]); cmdPoint([2000,1000]);
+      const lines = [...DOC.ents.values()].filter(e => e.t === 'line');
+      const diag = lines.find(e =>
+        Math.abs(e.a[0]-e.b[0]) > 1 && Math.abs(e.a[1]-e.b[1]) > 1);
+      endCmd(true);
+      return { diag: diag ? +dist(diag.a, diag.b).toFixed(6) : null,
+               want: +Math.hypot(400, 400*Math.tan(rad(30))).toFixed(6),
+               n: lines.length };`);
+    eq(r.n, 3, 'two lines and the chamfer between them');
+    close(r.diag, r.want, 1e-6,
+      'the chamfer is hypot(d, d tan a), got ' + r.diag + ' want ' + r.want);
+  });
+
+  t('an angle outside 0 to 90 is refused without changing anything', () => {
+    const r = R(`${SETUP}${CORNER}
+      startCmd('chamfer'); dispatch('A'); dispatch('400');
+      const before = DOC.chamD;
+      dispatch('120');
+      const after = DOC.chamD;
+      endCmd(true);
+      return { before, after, same: before === after };`);
+    eq(r.same, true, 'a nonsense angle must not quietly set a chamfer');
+  });
 };

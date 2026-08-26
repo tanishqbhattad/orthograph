@@ -387,10 +387,20 @@ defc('lengthen', {
   },
 });
 defc('fillet', {
-  group: 'modify', hint: 'Type a radius, then pick two objects · <em>P</em> polyline',
+  group: 'modify', hint: 'Type a radius, then pick two objects · <em>P</em> polyline · <em>T</em> trim',
   init: c => { c.r = DOC.filletR ?? 0; c.a = null; hint('Radius ' + fmt(c.r) + ' — type a new one or pick the first object'); },
   text(c, s) {
-    if (/^p$/i.test(s)) { c.polyMode = true; hint('Pick a polyline to fillet every corner'); return true; }
+    const k = String(s).trim().toLowerCase();
+    if (k === 'p') { c.polyMode = true; hint('Pick a polyline to fillet every corner'); return true; }
+    /* TRIMMODE is shared with CHAMFER, as it is in AutoCAD: turn it off and the
+       arc is added while the two objects are left exactly as they were, which
+       is how you fillet something you still need the full length of. */
+    if (k === 't' || k === 'trim') {
+      VS.trimmode = VS.trimmode ? 0 : 1;
+      echo(VS.trimmode ? 'Objects will be trimmed to the fillet'
+                       : 'Objects will be left uncut');
+      return true;
+    }
     const v = parseLen(s);
     if (!isNaN(v) && v >= 0) { c.r = DOC.filletR = v; hint('Pick the first object'); return true; }
     return false;
@@ -408,7 +418,7 @@ defc('fillet', {
     const f = filletCurves(c.a, c.ap, e, p, c.r);
     if (!f) { echo('No fillet of that radius fits'); c.a = null; SEL.clear(); return; }
     begin();
-    pullEnd(c.a, f.P, f.t1); pullEnd(e, f.P, f.t2);
+    if (VS.trimmode) { pullEnd(c.a, f.P, f.t1); pullEnd(e, f.P, f.t2); }
     if (c.r > 0 && f.arc) addEnt(Object.assign(f.arc, { layer: c.a.layer, color: c.a.color, lt: c.a.lt }));
     commit('Fillet');
     c.a = null; SEL.clear(); hint('Pick the first object');
@@ -440,9 +450,33 @@ function filletPolyline(e, r) {
   return out;
 }
 defc('chamfer', {
-  group: 'modify', hint: 'Type a distance, then pick two lines',
-  init: c => { c.d = DOC.chamD ?? 0; c.d2 = null; c.a = null; hint('Distance ' + fmt(c.d) + ' — type a new one or pick the first line'); },
+  group: 'modify', hint: 'Distance, then pick two lines · <em>A</em> angle · <em>T</em> trim',
+  init: c => { c.d = DOC.chamD ?? 0; c.d2 = null; c.a = null; c.ang = null;
+               hint('Distance ' + fmt(c.d) + ' — type a new one or pick the first line'); },
   text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (k === 't' || k === 'trim') {
+      VS.trimmode = VS.trimmode ? 0 : 1;
+      echo(VS.trimmode ? 'Lines will be trimmed to the chamfer'
+                       : 'Lines will be left uncut');
+      return true;
+    }
+    /* The Angle method: a distance along the first line and an angle from it,
+       which is how a chamfer is dimensioned on a drawing more often than as
+       two distances. */
+    if (k === 'a') { c.awaitAngle = true; hint('Distance along the first line'); return true; }
+    if (c.awaitAngle) {
+      if (c.angD == null) { const v = parseLen(s); if (isNaN(v) || v < 0) return false;
+        c.angD = v; hint('Angle from the first line, in degrees'); return true; }
+      const t = parseFloat(s);
+      if (isNaN(t) || t <= 0 || t >= 90) { echo('An angle between 0 and 90'); return true; }
+      c.d = DOC.chamD = c.angD;
+      c.d2 = c.angD * Math.tan(rad(t));
+      c.ang = t; c.awaitAngle = false; c.angD = null;
+      echo('Chamfer ' + fmt(c.d) + ' at ' + t + ' degrees');
+      hint('Pick the first line');
+      return true;
+    }
     const m = s.match(/^([\d.]+[a-z'"]*)[,x]([\d.]+[a-z'"]*)$/i);
     if (m) { c.d = parseLen(m[1]); c.d2 = parseLen(m[2]); DOC.chamD = c.d; hint('Pick the first line'); return true; }
     const v = parseLen(s);
@@ -460,7 +494,7 @@ defc('chamfer', {
     const u1 = dirFrom(P, c.a, c.ap), u2 = dirFrom(P, e, p);
     const t1 = add(P, mul(u1, c.d)), t2 = add(P, mul(u2, c.d2 != null ? c.d2 : c.d));
     begin();
-    pullEnd(c.a, P, t1); pullEnd(e, P, t2);
+    if (VS.trimmode) { pullEnd(c.a, P, t1); pullEnd(e, P, t2); }
     if (c.d > 0) addEnt({ t: 'line', a: t1, b: t2, layer: c.a.layer, color: c.a.color, lt: c.a.lt });
     commit('Chamfer'); c.a = null; SEL.clear(); hint('Pick the first line');
   },

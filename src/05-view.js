@@ -16,6 +16,7 @@ const V = { z: 1, px: 0, py: 0, w: 0, h: 0, dpr: 1, rot: 0, kx: 1, ky: 1 };
 const VS = {
   ltScale: 1,             /* LTSCALE — multiplies every dash pattern           */
   mirrtext: 0,            /* MIRRTEXT — 0 keeps mirrored text readable         */
+  trimmode: 1,            /* TRIMMODE — 0 leaves the originals uncut           */
   gridMajor: 5,           /* GRIDMAJOR — minor lines between two major ones    */
   gridSub: true,          /* adaptive subdivision below the nominal spacing    */
   zoomFactor: 60,         /* ZOOMFACTOR — wheel step, per AutoCAD's 3..100     */
