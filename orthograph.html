@@ -4372,6 +4372,10 @@ function drawBand() {
 const UCS_ARM = 34, UCS_PAD = 26;
 function drawUcsIcon() {
   if (!VS.ucsIcon) return;
+  /* On a sheet the axes shown belong to the paper, not the model — AutoCAD
+     swaps its icon for a paper-space one there. Drawing the world axes over a
+     drawing sheet says something untrue about what the view is. */
+  if (typeof curSheet === 'function' && curSheet()) return;
   /* screen direction of world +X and +Y. Canvas y points down, so +Y comes
      out negative — get this wrong and the icon points into the floor. */
   const cr = Math.cos(-V.rot), sr = Math.sin(-V.rot);
@@ -4452,19 +4456,11 @@ function drawOrder(list, mode, ref) {
 let _raf = 0;
 const BACK = [], MAIN = [], TOP = [];
 function draw() { if (!_raf) _raf = requestAnimationFrame(paint); }
-function paint() {
-  _raf = 0;
-  shapeCacheSync();
-  HALO = null;
-  deviceMetrics();
-  dashSync();
-  clipSync();
-  ctx.setTransform(V.kx, 0, 0, V.ky, 0, 0);
-  ctx.globalAlpha = 1; ctx.lineDashOffset = 0;
-  ctx.fillStyle = CO.bg; ctx.fillRect(0, 0, V.w, V.h);
-  frameLayers();
-  rotCS();
-  drawGrid();
+/** Every visible entity in the current view, bucketed by draw order and drawn.
+    Pulled out of paint() so a paper-space viewport can point it at the model
+    through a different transform, rather than growing a second drawing path
+    that would drift from this one inside a release. */
+function drawEntitiesInView() {
   const wb = viewWorldBox(40);
   const list = query(wb[0], wb[1], wb[2], wb[3]);
   /* butt caps are what a plotter does: dashes end square and a face line
@@ -4481,6 +4477,144 @@ function paint() {
   for (let i = 0; i < BACK.length; i++) drawEnt(BACK[i]);
   for (let i = 0; i < MAIN.length; i++) drawEnt(MAIN[i]);
   for (let i = 0; i < TOP.length; i++) drawEnt(TOP[i]);
+  BACK.length = 0; MAIN.length = 0; TOP.length = 0;
+}
+
+/* ============================================================
+   paper space
+   ------------------------------------------------------------
+   On a sheet the canvas shows the PAPER, so the world the view transform works
+   in is millimetres of paper, y up from the bottom-left corner. A viewport is
+   then a uniform scale plus an offset away from that — exactly the shape w2s
+   already has — so the renderer is pointed at the model by swapping V and put
+   back afterwards. One drawing path, two spaces.
+   ============================================================ */
+/** sheet coordinates (y down from the top edge) -> paper world (y up) */
+function sheetWorld(sh, x, y) { return [x, sh.h - y]; }
+/** the V that makes w2s draw MODEL space through this viewport */
+function vpViewState(sh, vp) {
+  const s = vp.scale || 1;
+  const ax = vp.x + vp.w / 2, ay = sh.h - vp.y - vp.h / 2;
+  return {
+    z: s * V.z,
+    px: (ax - vp.centre[0] * s) * V.z + V.px,
+    py: (vp.centre[1] * s - ay) * V.z + V.py,
+  };
+}
+/** screen rect of a viewport, for clipping */
+function vpScreenRect(sh, vp) {
+  const a = w2s(sheetWorld(sh, vp.x, vp.y));
+  const b = w2s(sheetWorld(sh, vp.x + vp.w, vp.y + vp.h));
+  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]),
+          Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])];
+}
+function fitSheet() {
+  const sh = curSheet(); if (!sh) return;
+  V.rot = 0;                                       /* a sheet is never rotated */
+  const pad = 28;
+  const z = Math.min((V.w - pad * 2) / sh.w, (V.h - pad * 2) / sh.h);
+  V.z = z > 0 ? z : 1;
+  V.px = (V.w - sh.w * V.z) / 2;
+  V.py = (V.h - sh.h * V.z) / 2 + sh.h * V.z;      /* paper world y points up */
+}
+function drawSheet(sh) {
+  const P = (x, y) => w2s(sheetWorld(sh, x, y));
+  const tl = P(0, 0), br = P(sh.w, sh.h);
+  const x = tl[0], y = tl[1], w = br[0] - tl[0], h = br[1] - tl[1];
+  /* the paper, with a drop shadow: the one place in this program where a
+     skeuomorph earns its keep, because it says "this is a physical page" */
+  ctx.save();
+  ctx.shadowColor = '#0009'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 4;
+  ctx.fillStyle = '#f7f7f4';
+  ctx.fillRect(x, y, w, h);
+  ctx.restore();
+  /* the printable margin, dashed, as every layout tool shows it */
+  ctx.save();
+  ctx.strokeStyle = '#c9c9c2'; ctx.lineWidth = HAIR; ctx.setLineDash([4, 4]);
+  const m0 = P(sh.margin, sh.margin), m1 = P(sh.w - sh.margin, sh.h - sh.margin);
+  ctx.strokeRect(m0[0], m0[1], m1[0] - m0[0], m1[1] - m0[1]);
+  ctx.restore();
+
+  for (const vp of (sh.viewports || [])) {
+    const r = vpScreenRect(sh, vp);
+    if (r[2] < 1 || r[3] < 1) continue;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(r[0], r[1], r[2], r[3]); ctx.clip();
+    const keep = { z: V.z, px: V.px, py: V.py };
+    Object.assign(V, vpViewState(sh, vp));
+    try { drawEntitiesInView(); } catch (err) { /* one bad viewport must not take the page down */ }
+    Object.assign(V, keep);
+    ctx.restore();
+    /* the frame is screen furniture: it marks the window while you work and is
+       deliberately absent from the plot, exactly like a non-plotting layer */
+    ctx.save();
+    ctx.strokeStyle = vp.id === sh.activeVp ? CO.sel : '#b9b9b2';
+    ctx.lineWidth = HAIR; ctx.setLineDash(DASH_SOLID);
+    ctx.strokeRect(r[0], r[1], r[2], r[3]);
+    ctx.restore();
+  }
+  drawTitleBlock(sh, P);
+}
+function drawTitleBlock(sh, P) {
+  const T = sh.title; if (!T || T.show === false) return;
+  const a = P(sh.w - sh.margin - T.w, sh.h - sh.margin - T.h);
+  const b = P(sh.w - sh.margin, sh.h - sh.margin);
+  const x = a[0], y = a[1], w = b[0] - a[0], h = b[1] - a[1];
+  if (w < 8 || h < 6) return;                      /* too small to read */
+  ctx.save();
+  ctx.strokeStyle = '#3a3a34'; ctx.lineWidth = Math.max(HAIR, 1);
+  ctx.setLineDash(DASH_SOLID);
+  ctx.strokeRect(x, y, w, h);
+  /* the scale comes from the viewports, never from a typed field: a title
+     block that can disagree with the drawing it labels is a liability */
+  const scales = [...new Set((sh.viewports || []).map(v => scaleLabel(v.scale)))];
+  const rows = [['PROJECT', T.project || ''], ['DRAWING', T.drawing || ''],
+    ['SCALE', scales.length === 1 ? scales[0] : (scales.length ? 'As shown' : '—')],
+    ['DATE', T.date || ''], ['SHEET', T.number || sh.name || '']];
+  const rh = h / rows.length;
+  ctx.textBaseline = 'alphabetic';
+  rows.forEach((rw, i) => {
+    const ry = y + i * rh;
+    if (i) {
+      ctx.strokeStyle = '#8a8a82'; ctx.lineWidth = HAIR;
+      ctx.beginPath(); ctx.moveTo(x, ry); ctx.lineTo(x + w, ry); ctx.stroke();
+    }
+    /* When the block is small on screen there is not room for a caption AND a
+       value. Drop the caption and keep the value: an empty-looking title block
+       reads as broken, where a small one reads as small. */
+    if (rh < 4.5) return;
+    const tight = rh < 11;
+    if (tight) {
+      ctx.fillStyle = '#1b1b16';
+      ctx.font = '500 ' + Math.max(5, Math.min(11, rh * 0.62)).toFixed(1) + "px Inter,sans-serif";
+      ctx.fillText(String(rw[1] || rw[0]), x + rh * 0.22, ry + rh * 0.74);
+      return;
+    }
+    ctx.fillStyle = '#6b6b63';
+    ctx.font = '500 ' + Math.max(6, Math.min(9, rh * 0.28)).toFixed(1) + "px 'JetBrains Mono',monospace";
+    ctx.fillText(rw[0], x + rh * 0.18, ry + rh * 0.42);
+    ctx.fillStyle = '#1b1b16';
+    ctx.font = '500 ' + Math.max(7, Math.min(15, rh * 0.44)).toFixed(1) + "px Inter,sans-serif";
+    ctx.fillText(String(rw[1]), x + rh * 0.18, ry + rh * 0.88);
+  });
+  ctx.restore();
+}
+
+function paint() {
+  _raf = 0;
+  shapeCacheSync();
+  HALO = null;
+  deviceMetrics();
+  dashSync();
+  clipSync();
+  ctx.setTransform(V.kx, 0, 0, V.ky, 0, 0);
+  ctx.globalAlpha = 1; ctx.lineDashOffset = 0;
+  ctx.fillStyle = CO.bg; ctx.fillRect(0, 0, V.w, V.h);
+  frameLayers();
+  rotCS();
+  /* a sheet replaces the grid and the model: what you are looking at is paper */
+  const _sheet = (typeof curSheet === 'function') ? curSheet() : null;
+  if (_sheet) { drawSheet(_sheet); } else { drawGrid(); drawEntitiesInView(); }
   /* what the in-flight window would take, highlighted while it is still in
      flight — the box teaches you what it is about to do */
   if (ST.bandPreview && ST.bandPreview.size && ST.bandPreview.size <= HALO_MAX)
