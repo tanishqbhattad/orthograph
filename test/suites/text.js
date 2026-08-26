@@ -1,0 +1,158 @@
+'use strict';
+/* ============================================================
+   B4 — mtext is one object with a width
+
+   MTEXT used to add one `text` entity per line and forget they
+   belonged together: editing meant editing each line, moving one
+   left the rest behind, and there was no width to wrap to.
+   ============================================================ */
+const SETUP = `
+  resetDoc();
+  DOC.units = 'mm'; V.w = 1200; V.h = 800; V.z = 1; V.px = 0; V.py = 800; V.rot = 0;
+  VS.mirrtext = 0;
+  const MT = (o) => addEnt(Object.assign({ t:'mtext', p:[0,0], h:200, w:2000,
+    rot:0, anchor:'l', layer:'0', s:'The quick brown fox jumps over the lazy dog' }, o || {}));
+`;
+module.exports = ({ group, t, ok, eq, close, R }) => {
+
+  group('one paragraph, one entity');
+
+  t('a wrapped paragraph is a single object', () => {
+    const r = R(`${SETUP}
+      begin(); const m = MT(); commit('m');
+      const lines = mtextLines(m).map(x => x.text);
+      return { ents: DOC.ents.size, lines, n: lines.length };`);
+    eq(r.ents, 1, 'one entity, not one per line');
+    eq(r.n, 3, 'wrapped to the column, got ' + r.n + ' lines');
+    eq(r.lines[0], 'The quick brown');
+    ok(r.lines.every(l => l.length <= 16), 'no line overruns the column: ' + r.lines.join(' | '));
+  });
+
+  t('moving it takes the whole paragraph', () => {
+    const r = R(`${SETUP}
+      begin(); const m = MT(); commit('m');
+      begin(); xf(m, T.move([1000, 500])); commit('mv');
+      const rows = mtextLines(m);
+      return { ents: DOC.ents.size, first: rows[0].p.map(Math.round),
+               spacingKept: Math.round(rows[0].p[1] - rows[1].p[1]) };`);
+    eq(r.ents, 1);
+    eq(r.first.join(','), '1000,500', 'the insertion point moved');
+    eq(r.spacingKept, 310, 'and the lines kept their spacing');
+  });
+
+  t('scaling scales the column, so the wrap survives', () => {
+    const r = R(`${SETUP}
+      begin(); const m = MT(); commit('m');
+      const before = mtextLines(m).length;
+      begin(); xf(m, T.scale([0,0], 2)); commit('sc');
+      return { before, after: mtextLines(m).length, h: m.h, w: m.w };`);
+    eq(r.h, 400, 'the text doubles');
+    eq(r.w, 4000, 'and so does the column');
+    eq(r.after, r.before, 'so it still breaks in the same places');
+  });
+
+  t('no width means no wrapping', () => {
+    const r = R(`${SETUP}
+      begin(); const m = MT({ w: 0 }); commit('m');
+      return { lines: mtextLines(m).map(x => x.text) };`);
+    eq(r.lines.length, 1, 'one line');
+    eq(r.lines[0], 'The quick brown fox jumps over the lazy dog');
+  });
+
+  t('typed line breaks are kept, and blank lines with them', () => {
+    const r = R(`${SETUP}
+      begin();
+      const m = MT({ w: 0, s: 'GENERAL NOTES' + String.fromCharCode(10) +
+                              String.fromCharCode(10) + 'Do not scale.' });
+      commit('m');
+      return { lines: mtextLines(m).map(x => x.text) };`);
+    eq(r.lines.length, 3, 'the blank line is a line');
+    eq(r.lines[0], 'GENERAL NOTES');
+    eq(r.lines[1], '');
+    eq(r.lines[2], 'Do not scale.');
+  });
+
+  /* A word longer than the column has to go somewhere. Letting it overflow the
+     box silently is worse than breaking it, because the box is what the person
+     drew to say where the text may go. */
+  t('a word too long for the column is broken, not left to overflow', () => {
+    const r = R(`${SETUP}
+      begin(); const m = MT({ w: 1000, s: 'Antidisestablishmentarianism' }); commit('m');
+      const lines = mtextLines(m).map(x => x.text);
+      return { lines, longest: Math.max(...lines.map(l => l.length)),
+               per: Math.floor(1000 / (200 * 0.62)),
+               rejoined: lines.join('') };`);
+    ok(r.lines.length > 1, 'it is broken across lines');
+    ok(r.longest <= r.per, 'and no piece is wider than the column');
+    eq(r.rejoined, 'Antidisestablishmentarianism', 'without losing a letter');
+  });
+
+  group('mtext behaves like the rest of the drawing');
+
+  t('it has a bounding box, so it fits and selects', () => {
+    const r = R(`${SETUP}
+      begin(); const m = MT(); commit('m');
+      const b = bbox(m).map(Math.round);
+      return { b, w: b[2] - b[0], tall: b[3] - b[1] > 200 };`);
+    eq(r.w, 2000, 'as wide as its column');
+    eq(r.tall, true, 'and taller than one line');
+  });
+
+  t('mirroring keeps it readable, like single-line text', () => {
+    const r = R(`${SETUP}
+      begin(); const m = MT({ w: 0, s: 'KITCHEN' }); commit('m');
+      const c = xf(clone(m), T.mirror([3000,0],[3000,1000]));
+      return { deg: deg(c.rot), anchor: c.anchor, x: Math.round(c.p[0]), w: c.w };`);
+    close(r.deg, 0, 1e-9, 'still the right way up, got ' + r.deg);
+    eq(r.anchor, 'r', 'with the anchor flipped so it sits where it did');
+    eq(r.x, 6000);
+  });
+
+  t('it exports one text element per wrapped line', () => {
+    const r = R(`${SETUP}
+      begin(); MT(); commit('m');
+      const svg = exportSVG();
+      const texts = (svg.match(/<text[^>]*>/g) || []).length;
+      return { texts, hasFox: /fox/.test(svg) };`);
+    eq(r.texts, 3, 'three lines, three elements');
+    eq(r.hasFox, true, 'and the words are actually in the file');
+  });
+
+  /* It drew perfectly and could not be selected: text is picked by its BOX,
+     and mtext was falling through to a distance test that only knew about its
+     insertion point. A paragraph you cannot click on is not an object. */
+  t('a paragraph can be clicked anywhere inside it', () => {
+    const r = R(`${SETUP}
+      begin(); const m = MT(); commit('m');
+      const b = bbox(m);
+      const mid = [(b[0]+b[2])/2, (b[1]+b[3])/2];
+      const inside = pickAt(mid, 5);
+      const onLastLine = pickAt([b[0] + 50, b[1] + 50], 5);
+      const wellOutside = pickAt([b[2] + 5000, b[3] + 5000], 5);
+      return { inside: !!inside && inside.id === m.id,
+               last: !!onLastLine && onLastLine.id === m.id,
+               outside: wellOutside === null,
+               dInside: entDist(mid, m),
+               dOutside: Math.round(entDist([b[2] + 1000, (b[1]+b[3])/2], m)) };`);
+    eq(r.inside, true, 'clicking in the middle of the paragraph selects it');
+    eq(r.last, true, 'and so does clicking on the last line');
+    eq(r.outside, true, 'clicking well away from it selects nothing');
+    eq(r.dInside, 0, 'inside the box is distance zero');
+    eq(r.dOutside, 1000, 'and outside it measures to the box, got ' + r.dOutside);
+  });
+
+  t('a window selection judges it by its box, not one corner', () => {
+    const r = R(`${SETUP}
+      begin(); const m = MT(); commit('m');
+      const b = bbox(m);
+      /* a window that only just clips the top-left corner must NOT take it */
+      const clip = entInPoly(m, [[b[0]-10,b[1+2]-10],[b[0]+10,b[3]-10],
+                                 [b[0]+10,b[3]+10],[b[0]-10,b[3]+10]]);
+      /* one that contains the whole box must */
+      const whole = entInPoly(m, [[b[0]-10,b[1]-10],[b[2]+10,b[1]-10],
+                                  [b[2]+10,b[3]+10],[b[0]-10,b[3]+10]]);
+      return { clip, whole };`);
+    eq(r.clip, false, 'clipping a corner is not enclosing the paragraph');
+    eq(r.whole, true, 'enclosing the whole box is');
+  });
+};

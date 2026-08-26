@@ -95,6 +95,17 @@ function bbox(e) {
   const g = GEOM[e.t];
   if (g && g.bbox) { const b = g.bbox(e); if (b) return b; }
   if (e.t === 'circle') { acc([e.c[0] - e.r, e.c[1] - e.r]); acc([e.c[0] + e.r, e.c[1] + e.r]); }
+  else if (e.t === 'mtext') {
+    const rows = mtextLines(e);
+    const h = e.h || 2.5;
+    const c = Math.cos(e.rot || 0), sn = Math.sin(e.rot || 0);
+    for (const r of rows) {
+      const w = e.w > 0 ? e.w : r.text.length * h * MT_CHAR;
+      const ox = r.anchor === 'c' ? -w / 2 : r.anchor === 'r' ? -w : 0;
+      [[ox, 0], [ox + w, 0], [ox + w, h], [ox, h]].forEach(q =>
+        acc([r.p[0] + q[0] * c - q[1] * sn, r.p[1] + q[0] * sn + q[1] * c]));
+    }
+  }
   else if (e.t === 'text') {
     const w = e.s.length * e.h * 0.62, h = e.h;
     const c = Math.cos(e.rot || 0), s = Math.sin(e.rot || 0);
@@ -103,6 +114,51 @@ function bbox(e) {
   } else poly(e, 40).forEach(acc);
   if (x0 === Infinity) { x0 = y0 = x1 = y1 = 0; }
   return [x0, y0, x1, y1];
+}
+/* ============================================================
+   mtext — one object with a width, not a pile of lines
+   ------------------------------------------------------------
+   MTEXT used to add one `text` entity per line and forget they
+   belonged together: editing meant editing each line, moving one
+   left the rest behind, and there was no width to wrap to. It is
+   now a single entity that owns its text and wraps it, so the
+   thing on screen and the thing you can select are the same
+   thing.
+   ============================================================ */
+const MT_CHAR = 0.62;              /* a glyph's width, in text heights */
+const MT_LEAD = 1.55;              /* line spacing, likewise           */
+/** wrap a string to a width given in drawing units */
+function mtextWrap(str, h, w) {
+  const paras = String(str == null ? '' : str).split(/\r?\n/);
+  if (!(w > 0)) return paras;
+  const per = Math.max(1, Math.floor(w / (h * MT_CHAR)));
+  const out = [];
+  for (const para of paras) {
+    if (!para.length) { out.push(''); continue; }
+    let line = '';
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      if (!line.length) { line = word; continue; }
+      if ((line + ' ' + word).length <= per) { line += ' ' + word; continue; }
+      out.push(line); line = word;
+    }
+    /* a single word longer than the column is broken rather than left to
+       overflow the box it was given */
+    while (line.length > per) { out.push(line.slice(0, per)); line = line.slice(per); }
+    out.push(line);
+  }
+  return out;
+}
+/** the laid-out lines of an mtext, in world space */
+function mtextLines(e) {
+  const h = e.h || 2.5;
+  const lead = h * MT_LEAD;
+  const rows = mtextWrap(e.s, h, e.w);
+  const c = Math.cos(e.rot || 0), sn = Math.sin(e.rot || 0);
+  return rows.map((text, i) => {
+    const dy = -i * lead;
+    return { text, h, rot: e.rot || 0, anchor: e.anchor || 'l',
+             p: [e.p[0] - dy * sn, e.p[1] + dy * c] };
+  });
 }
 function bboxAll(list) {
   let b = [Infinity, Infinity, -Infinity, -Infinity];
@@ -155,6 +211,16 @@ function entDist(p, e) {
       else if (s.p) d = Math.min(d, dist(p, s.p));
     }
     return d;
+  }
+  /* Text is picked by its BOX, not by its insertion point. A paragraph whose
+     only pickable point is its top-left corner is one you cannot click on,
+     which is how mtext arrived: it drew perfectly and could not be selected. */
+  if (e.t === 'text' || e.t === 'mtext') {
+    const b = bbox(e);
+    if (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) return 0;
+    const dx = Math.max(b[0] - p[0], 0, p[0] - b[2]);
+    const dy = Math.max(b[1] - p[1], 0, p[1] - b[3]);
+    return Math.hypot(dx, dy);
   }
   switch (e.t) {
     case 'line': return segDist(p, e.a, e.b);
@@ -210,6 +276,29 @@ function xf(e, fn) {
     case 'line': E.a = fn(E.a); E.b = fn(E.b); break;
     case 'pline': case 'spline': E.pts = E.pts.map(fn); break;
     case 'point': E.p = fn(E.p); break;
+    case 'mtext': {
+      /* the same readable-text rule as a single line, plus the column width,
+         which scales with the text so a wrapped paragraph keeps its shape */
+      const c0 = Math.cos(E.rot || 0), s0 = Math.sin(E.rot || 0);
+      const p2 = fn(E.p);
+      const q = fn(add(E.p, [c0, s0]));
+      const u = fn(add(E.p, [-s0, c0]));
+      const k = dist(p2, q);
+      E.h *= k;
+      if (E.w > 0) E.w *= k;
+      let r = ang(p2, q);
+      const bx = q[0] - p2[0], by = q[1] - p2[1];
+      const ux = u[0] - p2[0], uy = u[1] - p2[1];
+      if ((bx * uy - by * ux) < 0 && !(typeof VS !== 'undefined' && VS.mirrtext)) {
+        if (Math.cos(r) < -1e-12) {
+          r += Math.PI;
+          E.anchor = E.anchor === 'r' ? 'l' : E.anchor === 'l' || !E.anchor ? 'r' : E.anchor;
+        }
+      }
+      r = Math.atan2(Math.sin(r), Math.cos(r));
+      E.rot = Math.abs(r) < 1e-12 ? 0 : r;
+      E.p = p2; break;
+    }
     case 'text': {
       /* Text is the one thing that must survive a mirror still readable.
          AutoCAD calls this MIRRTEXT and has defaulted it to 0 — keep it

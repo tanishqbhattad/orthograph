@@ -1145,21 +1145,48 @@ defc('text', {
 defc('mtext', {
   hint: 'Specify first corner:', group: 'annotate', init: c => { c.pts = []; },
   point(c, p) {
-    c.pts = [p];
-    modal(`<h3>Multiline text</h3>
-      <div class="row"><label>Text</label><textarea class="f" id="mtx" rows="5" style="resize:vertical"></textarea></div>
-      <div class="row"><label>Height</label><input class="f" id="mth" value="${+(DOC.textH / U[DOC.units]).toFixed(4)}"></div>`, () => {
-      const raw = $('#mtx').value.replace(/\r/g, ''); if (!raw.trim()) return endCmd();
-      const h = parseLen($('#mth').value) || DOC.textH;
-      begin();
-      raw.split('\n').forEach((ln, i) => {
-        if (!ln.trim()) return;
-        addEnt({ t: 'text', p: [p[0], p[1] - i * h * 1.55], s: ln, h, rot: 0, anchor: 'l', layer: annoLayer('TEXT') });
-      });
-      commit('Text'); endCmd();
-    });
+    /* Two corners give the column width, which is the whole point of MTEXT:
+       the text wraps to the box you drew rather than running off the sheet.
+       Clicking the same spot twice means no width, i.e. do not wrap. */
+    c.pts.push(p);
+    if (c.pts.length < 2) { hint('Opposite corner — the width the text wraps to:'); return; }
+    const a = c.pts[0], b = c.pts[1];
+    const w = Math.abs(b[0] - a[0]);
+    mtextDialog([Math.min(a[0], b[0]), Math.max(a[1], b[1])], w > 1e-6 ? w : 0);
+  },
+  preview(c, p) {
+    if (c.pts.length !== 1) return null;
+    const a = c.pts[0];
+    return [pv({ t: 'pline', closed: true, lt: 'dashed',
+      pts: [a, [p[0], a[1]], p, [a[0], p[1]]] })];
   },
 });
+function mtextDialog(p, w, existing) {
+  const cur = existing ? existing.s : '';
+  const hv = existing ? existing.h : DOC.textH;
+  const wv = existing ? (existing.w || 0) : w;
+  modal('<h3>Multiline text</h3>' +
+    '<div class="row"><label>Text</label><textarea class="f" id="mtx" rows="5" style="resize:vertical">' +
+      esc(cur) + '</textarea></div>' +
+    '<div class="row"><label>Height</label><input class="f" id="mth" value="' +
+      (+(hv / U[DOC.units]).toFixed(4)) + '"></div>' +
+    '<div class="row"><label>Width</label><input class="f" id="mtw" value="' +
+      (+(wv / U[DOC.units]).toFixed(4)) + '"></div>', () => {
+    const raw = $('#mtx').value;
+    const h = parseLen($('#mth').value) || DOC.textH;
+    const ww = parseLen($('#mtw').value) || 0;
+    if (existing) {
+      begin(); mut(existing);
+      existing.s = raw; existing.h = h; existing.w = ww > 0 ? ww : 0;
+      commit('Text'); draw(); return;
+    }
+    if (!raw.trim()) return endCmd();
+    begin();
+    addEnt({ t: 'mtext', p: p.slice(), s: raw, h, w: ww > 0 ? ww : 0,
+             rot: 0, anchor: 'l', layer: annoLayer('TEXT') });
+    commit('Text'); endCmd();
+  });
+}
 function annoLayer(n) { return hasLayer(n) ? n : DOC.cur; }
 function dimLayer() { return annoLayer('DIMENSIONS'); }
 

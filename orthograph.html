@@ -1247,6 +1247,17 @@ function bbox(e) {
   const g = GEOM[e.t];
   if (g && g.bbox) { const b = g.bbox(e); if (b) return b; }
   if (e.t === 'circle') { acc([e.c[0] - e.r, e.c[1] - e.r]); acc([e.c[0] + e.r, e.c[1] + e.r]); }
+  else if (e.t === 'mtext') {
+    const rows = mtextLines(e);
+    const h = e.h || 2.5;
+    const c = Math.cos(e.rot || 0), sn = Math.sin(e.rot || 0);
+    for (const r of rows) {
+      const w = e.w > 0 ? e.w : r.text.length * h * MT_CHAR;
+      const ox = r.anchor === 'c' ? -w / 2 : r.anchor === 'r' ? -w : 0;
+      [[ox, 0], [ox + w, 0], [ox + w, h], [ox, h]].forEach(q =>
+        acc([r.p[0] + q[0] * c - q[1] * sn, r.p[1] + q[0] * sn + q[1] * c]));
+    }
+  }
   else if (e.t === 'text') {
     const w = e.s.length * e.h * 0.62, h = e.h;
     const c = Math.cos(e.rot || 0), s = Math.sin(e.rot || 0);
@@ -1255,6 +1266,51 @@ function bbox(e) {
   } else poly(e, 40).forEach(acc);
   if (x0 === Infinity) { x0 = y0 = x1 = y1 = 0; }
   return [x0, y0, x1, y1];
+}
+/* ============================================================
+   mtext — one object with a width, not a pile of lines
+   ------------------------------------------------------------
+   MTEXT used to add one `text` entity per line and forget they
+   belonged together: editing meant editing each line, moving one
+   left the rest behind, and there was no width to wrap to. It is
+   now a single entity that owns its text and wraps it, so the
+   thing on screen and the thing you can select are the same
+   thing.
+   ============================================================ */
+const MT_CHAR = 0.62;              /* a glyph's width, in text heights */
+const MT_LEAD = 1.55;              /* line spacing, likewise           */
+/** wrap a string to a width given in drawing units */
+function mtextWrap(str, h, w) {
+  const paras = String(str == null ? '' : str).split(/\r?\n/);
+  if (!(w > 0)) return paras;
+  const per = Math.max(1, Math.floor(w / (h * MT_CHAR)));
+  const out = [];
+  for (const para of paras) {
+    if (!para.length) { out.push(''); continue; }
+    let line = '';
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      if (!line.length) { line = word; continue; }
+      if ((line + ' ' + word).length <= per) { line += ' ' + word; continue; }
+      out.push(line); line = word;
+    }
+    /* a single word longer than the column is broken rather than left to
+       overflow the box it was given */
+    while (line.length > per) { out.push(line.slice(0, per)); line = line.slice(per); }
+    out.push(line);
+  }
+  return out;
+}
+/** the laid-out lines of an mtext, in world space */
+function mtextLines(e) {
+  const h = e.h || 2.5;
+  const lead = h * MT_LEAD;
+  const rows = mtextWrap(e.s, h, e.w);
+  const c = Math.cos(e.rot || 0), sn = Math.sin(e.rot || 0);
+  return rows.map((text, i) => {
+    const dy = -i * lead;
+    return { text, h, rot: e.rot || 0, anchor: e.anchor || 'l',
+             p: [e.p[0] - dy * sn, e.p[1] + dy * c] };
+  });
 }
 function bboxAll(list) {
   let b = [Infinity, Infinity, -Infinity, -Infinity];
@@ -1307,6 +1363,16 @@ function entDist(p, e) {
       else if (s.p) d = Math.min(d, dist(p, s.p));
     }
     return d;
+  }
+  /* Text is picked by its BOX, not by its insertion point. A paragraph whose
+     only pickable point is its top-left corner is one you cannot click on,
+     which is how mtext arrived: it drew perfectly and could not be selected. */
+  if (e.t === 'text' || e.t === 'mtext') {
+    const b = bbox(e);
+    if (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) return 0;
+    const dx = Math.max(b[0] - p[0], 0, p[0] - b[2]);
+    const dy = Math.max(b[1] - p[1], 0, p[1] - b[3]);
+    return Math.hypot(dx, dy);
   }
   switch (e.t) {
     case 'line': return segDist(p, e.a, e.b);
@@ -1362,6 +1428,29 @@ function xf(e, fn) {
     case 'line': E.a = fn(E.a); E.b = fn(E.b); break;
     case 'pline': case 'spline': E.pts = E.pts.map(fn); break;
     case 'point': E.p = fn(E.p); break;
+    case 'mtext': {
+      /* the same readable-text rule as a single line, plus the column width,
+         which scales with the text so a wrapped paragraph keeps its shape */
+      const c0 = Math.cos(E.rot || 0), s0 = Math.sin(E.rot || 0);
+      const p2 = fn(E.p);
+      const q = fn(add(E.p, [c0, s0]));
+      const u = fn(add(E.p, [-s0, c0]));
+      const k = dist(p2, q);
+      E.h *= k;
+      if (E.w > 0) E.w *= k;
+      let r = ang(p2, q);
+      const bx = q[0] - p2[0], by = q[1] - p2[1];
+      const ux = u[0] - p2[0], uy = u[1] - p2[1];
+      if ((bx * uy - by * ux) < 0 && !(typeof VS !== 'undefined' && VS.mirrtext)) {
+        if (Math.cos(r) < -1e-12) {
+          r += Math.PI;
+          E.anchor = E.anchor === 'r' ? 'l' : E.anchor === 'l' || !E.anchor ? 'r' : E.anchor;
+        }
+      }
+      r = Math.atan2(Math.sin(r), Math.cos(r));
+      E.rot = Math.abs(r) < 1e-12 ? 0 : r;
+      E.p = p2; break;
+    }
     case 'text': {
       /* Text is the one thing that must survive a mirror still readable.
          AutoCAD calls this MIRRTEXT and has defaulted it to 0 — keep it
@@ -4210,6 +4299,10 @@ function drawEnt(e, mode) {
   const col = S ? (S.col || lift(fcol(e), S.lift)) : fcol(e);
   if (e.t === 'dim') return drawDim(e, col, mode);
   if (e.t === 'text') return drawTextAt(e.s, e.p, e.h, e.rot, e.anchor, col);
+  if (e.t === 'mtext') {
+    for (const r of mtextLines(e)) drawTextAt(r.text, r.p, r.h, r.rot, r.anchor, col);
+    return;
+  }
   /* Hatch is registered in GEOM, so it MUST be tested before the GEOM branch.
      It was tested after, which made drawHatch unreachable: every hatch fell
      through to the generic shape path, drew its loops as outlines and never
@@ -5653,7 +5746,7 @@ function nearEnts(raw, r) {
   }
   const reach = r * 2.4, hits = [];
   for (const e of pool) {
-    if (!e || e.t === 'text' || !visible(e)) continue;
+    if (!e || e.t === 'text' || e.t === 'mtext' || !visible(e)) continue;
     let d; try { d = entDist(raw, e); } catch (err) { continue; }
     if (!(d < reach)) continue;
     hits.push({ e, d });
@@ -5665,6 +5758,10 @@ function nearEnts(raw, r) {
 /* ---------------- per-entity snap points ---------------- */
 function entSnaps(e, dEnt, raw, ref, r, push, on) {
   on = on || activeModes();
+  if (e.t === 'mtext') {
+    if (on.ins || on.end) push(e.p, on.ins ? 'ins' : 'end', null, null, false, { id: e.id, at: 'p' });
+    return;
+  }
   switch (e.t) {
     case 'line': {
       /* meta names the geometry a snap came from. Nothing needed it until
@@ -6310,7 +6407,7 @@ function pickGrip(p) { return gripAt(p); }
     its poly() is one insertion point, which would enclose a whole
     paragraph the moment its corner crept inside the window. */
 function selPts(e) {
-  if (e.t === 'text') {
+  if (e.t === 'text' || e.t === 'mtext') {
     let b; try { b = bbox(e); } catch (err) { return []; }
     return [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]];
   }
@@ -8171,21 +8268,48 @@ defc('text', {
 defc('mtext', {
   hint: 'Specify first corner:', group: 'annotate', init: c => { c.pts = []; },
   point(c, p) {
-    c.pts = [p];
-    modal(`<h3>Multiline text</h3>
-      <div class="row"><label>Text</label><textarea class="f" id="mtx" rows="5" style="resize:vertical"></textarea></div>
-      <div class="row"><label>Height</label><input class="f" id="mth" value="${+(DOC.textH / U[DOC.units]).toFixed(4)}"></div>`, () => {
-      const raw = $('#mtx').value.replace(/\r/g, ''); if (!raw.trim()) return endCmd();
-      const h = parseLen($('#mth').value) || DOC.textH;
-      begin();
-      raw.split('\n').forEach((ln, i) => {
-        if (!ln.trim()) return;
-        addEnt({ t: 'text', p: [p[0], p[1] - i * h * 1.55], s: ln, h, rot: 0, anchor: 'l', layer: annoLayer('TEXT') });
-      });
-      commit('Text'); endCmd();
-    });
+    /* Two corners give the column width, which is the whole point of MTEXT:
+       the text wraps to the box you drew rather than running off the sheet.
+       Clicking the same spot twice means no width, i.e. do not wrap. */
+    c.pts.push(p);
+    if (c.pts.length < 2) { hint('Opposite corner — the width the text wraps to:'); return; }
+    const a = c.pts[0], b = c.pts[1];
+    const w = Math.abs(b[0] - a[0]);
+    mtextDialog([Math.min(a[0], b[0]), Math.max(a[1], b[1])], w > 1e-6 ? w : 0);
+  },
+  preview(c, p) {
+    if (c.pts.length !== 1) return null;
+    const a = c.pts[0];
+    return [pv({ t: 'pline', closed: true, lt: 'dashed',
+      pts: [a, [p[0], a[1]], p, [a[0], p[1]]] })];
   },
 });
+function mtextDialog(p, w, existing) {
+  const cur = existing ? existing.s : '';
+  const hv = existing ? existing.h : DOC.textH;
+  const wv = existing ? (existing.w || 0) : w;
+  modal('<h3>Multiline text</h3>' +
+    '<div class="row"><label>Text</label><textarea class="f" id="mtx" rows="5" style="resize:vertical">' +
+      esc(cur) + '</textarea></div>' +
+    '<div class="row"><label>Height</label><input class="f" id="mth" value="' +
+      (+(hv / U[DOC.units]).toFixed(4)) + '"></div>' +
+    '<div class="row"><label>Width</label><input class="f" id="mtw" value="' +
+      (+(wv / U[DOC.units]).toFixed(4)) + '"></div>', () => {
+    const raw = $('#mtx').value;
+    const h = parseLen($('#mth').value) || DOC.textH;
+    const ww = parseLen($('#mtw').value) || 0;
+    if (existing) {
+      begin(); mut(existing);
+      existing.s = raw; existing.h = h; existing.w = ww > 0 ? ww : 0;
+      commit('Text'); draw(); return;
+    }
+    if (!raw.trim()) return endCmd();
+    begin();
+    addEnt({ t: 'mtext', p: p.slice(), s: raw, h, w: ww > 0 ? ww : 0,
+             rot: 0, anchor: 'l', layer: annoLayer('TEXT') });
+    commit('Text'); endCmd();
+  });
+}
 function annoLayer(n) { return hasLayer(n) ? n : DOC.cur; }
 function dimLayer() { return annoLayer('DIMENSIONS'); }
 
@@ -12542,6 +12666,11 @@ function svgEntityBody(lwMul) {
       continue;
     }
     if (e.t === 'text') { emitShape({ text: e.s, p: e.p, h: e.h, rot: e.rot, anchor: e.anchor }, col, lw, lt); continue; }
+    if (e.t === 'mtext') {
+      for (const r of mtextLines(e))
+        emitShape({ text: r.text, p: r.p, h: r.h, rot: r.rot, anchor: r.anchor }, col, lw, lt);
+      continue;
+    }
     if (e.t === 'point') {
       const r = DOC.textH * 0.4;
       out.push(`<path d="M${e.p[0] - r},${-e.p[1]}L${e.p[0] + r},${-e.p[1]}M${e.p[0]},${-e.p[1] - r}L${e.p[0]},${-e.p[1] + r}" ${strokeOf(col, lw, '')}/>`);
@@ -16170,7 +16299,11 @@ stage.addEventListener('dblclick', ev => {
   const e = pickAt(p, 9);
   if (!e) return;
   SEL.clear(); SEL.add(e.id); syncUI();
-  if (e.t === 'text') {
+  if (e.t === 'mtext') {
+    /* one object, so one dialog — the whole paragraph, its height and the
+       width it wraps to */
+    mtextDialog(e.p, e.w || 0, e);
+  } else if (e.t === 'text') {
     modal('<h3>Edit text</h3><div class="row"><label>Text</label><input class="f" id="tx" value="' + esc(e.s) + '"></div>',
       () => { begin(); mut(e); e.s = $('#tx').value; commit('Text'); draw(); buildProps(); });
   } else if (e.t === 'room') {

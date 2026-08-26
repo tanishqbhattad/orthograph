@@ -879,6 +879,10 @@ function drawEnt(e, mode) {
   const col = S ? (S.col || lift(fcol(e), S.lift)) : fcol(e);
   if (e.t === 'dim') return drawDim(e, col, mode);
   if (e.t === 'text') return drawTextAt(e.s, e.p, e.h, e.rot, e.anchor, col);
+  if (e.t === 'mtext') {
+    for (const r of mtextLines(e)) drawTextAt(r.text, r.p, r.h, r.rot, r.anchor, col);
+    return;
+  }
   /* Hatch is registered in GEOM, so it MUST be tested before the GEOM branch.
      It was tested after, which made drawHatch unreachable: every hatch fell
      through to the generic shape path, drew its loops as outlines and never

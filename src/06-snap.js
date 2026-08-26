@@ -737,7 +737,7 @@ function nearEnts(raw, r) {
   }
   const reach = r * 2.4, hits = [];
   for (const e of pool) {
-    if (!e || e.t === 'text' || !visible(e)) continue;
+    if (!e || e.t === 'text' || e.t === 'mtext' || !visible(e)) continue;
     let d; try { d = entDist(raw, e); } catch (err) { continue; }
     if (!(d < reach)) continue;
     hits.push({ e, d });
@@ -749,6 +749,10 @@ function nearEnts(raw, r) {
 /* ---------------- per-entity snap points ---------------- */
 function entSnaps(e, dEnt, raw, ref, r, push, on) {
   on = on || activeModes();
+  if (e.t === 'mtext') {
+    if (on.ins || on.end) push(e.p, on.ins ? 'ins' : 'end', null, null, false, { id: e.id, at: 'p' });
+    return;
+  }
   switch (e.t) {
     case 'line': {
       /* meta names the geometry a snap came from. Nothing needed it until
@@ -1394,7 +1398,7 @@ function pickGrip(p) { return gripAt(p); }
     its poly() is one insertion point, which would enclose a whole
     paragraph the moment its corner crept inside the window. */
 function selPts(e) {
-  if (e.t === 'text') {
+  if (e.t === 'text' || e.t === 'mtext') {
     let b; try { b = bbox(e); } catch (err) { return []; }
     return [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]];
   }

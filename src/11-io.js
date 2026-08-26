@@ -58,6 +58,11 @@ function svgEntityBody(lwMul) {
       continue;
     }
     if (e.t === 'text') { emitShape({ text: e.s, p: e.p, h: e.h, rot: e.rot, anchor: e.anchor }, col, lw, lt); continue; }
+    if (e.t === 'mtext') {
+      for (const r of mtextLines(e))
+        emitShape({ text: r.text, p: r.p, h: r.h, rot: r.rot, anchor: r.anchor }, col, lw, lt);
+      continue;
+    }
     if (e.t === 'point') {
       const r = DOC.textH * 0.4;
       out.push(`<path d="M${e.p[0] - r},${-e.p[1]}L${e.p[0] + r},${-e.p[1]}M${e.p[0]},${-e.p[1] - r}L${e.p[0]},${-e.p[1] + r}" ${strokeOf(col, lw, '')}/>`);

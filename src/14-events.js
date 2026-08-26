@@ -414,7 +414,11 @@ stage.addEventListener('dblclick', ev => {
   const e = pickAt(p, 9);
   if (!e) return;
   SEL.clear(); SEL.add(e.id); syncUI();
-  if (e.t === 'text') {
+  if (e.t === 'mtext') {
+    /* one object, so one dialog — the whole paragraph, its height and the
+       width it wraps to */
+    mtextDialog(e.p, e.w || 0, e);
+  } else if (e.t === 'text') {
     modal('<h3>Edit text</h3><div class="row"><label>Text</label><input class="f" id="tx" value="' + esc(e.s) + '"></div>',
       () => { begin(); mut(e); e.s = $('#tx').value; commit('Text'); draw(); buildProps(); });
   } else if (e.t === 'room') {
