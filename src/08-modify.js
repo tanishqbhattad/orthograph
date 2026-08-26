@@ -9,8 +9,20 @@ function eraseEnt(id) {
 }
 
 defc('move', {
-  needSel: true, group: 'modify', hint: 'Base point', init: c => c.pts = [],
+  needSel: true, group: 'modify', hint: 'Base point · <em>D</em> displacement',
+  init: c => { c.pts = []; c.disp = false; },
+  /* Displacement is the version you want when you already know the vector
+     rather than two points on the drawing: MOVE, D, 0,-1200. */
+  text(c, s) {
+    if (!c.pts.length && /^d$/i.test(String(s).trim())) {
+      c.disp = true; hint('Displacement — type <em>dx,dy</em>'); return true;
+    }
+    return false;
+  },
   point(c, p) {
+    if (c.disp) {
+      begin(); selEnts().forEach(e => xf(e, T.move(p))); commit('Move'); endCmd(); return;
+    }
     c.pts.push(p);
     if (c.pts.length === 2) {
       const d = sub(c.pts[1], c.pts[0]);
@@ -25,8 +37,21 @@ defc('move', {
   },
 });
 defc('copy', {
-  needSel: true, group: 'modify', hint: 'Base point', init: c => c.pts = [],
+  needSel: true, group: 'modify', hint: 'Base point · <em>D</em> displacement',
+  init: c => { c.pts = []; c.disp = false; },
+  text(c, s) {
+    if (!c.pts.length && /^d$/i.test(String(s).trim())) {
+      c.disp = true; c.src = selEnts().map(clone);
+      hint('Displacement — type <em>dx,dy</em>'); return true;
+    }
+    return false;
+  },
   point(c, p) {
+    if (c.disp) {
+      begin();
+      (c.src || []).forEach(e => { const n = clone(e); delete n.id; addEnt(xf(n, T.move(p))); });
+      commit('Copy'); endCmd(); return;
+    }
     if (!c.pts.length) { c.pts.push(p); c.src = selEnts().map(clone); hint('Place a copy · repeats until <em>Enter</em>'); return; }
     const d = sub(p, c.pts[0]);
     begin(); c.src.forEach(e => { const n = clone(e); delete n.id; addEnt(xf(n, T.move(d))); }); commit('Copy');
@@ -141,10 +166,25 @@ defc('mirror', {
   },
 });
 defc('offset', {
-  group: 'modify', hint: 'Offset distance · <em>T</em> through point', init: c => { c.d = null; c.e = null; c.thru = false; },
+  group: 'modify',
+  hint: 'Offset distance · <em>T</em> through · <em>M</em> multiple · <em>E</em> erase source · <em>L</em> layer',
+  init: c => { c.d = null; c.e = null; c.thru = false;
+               c.multiple = false; c.erase = false; c.layerCur = false; },
   text(c, s) {
-    if (/^t$/i.test(s)) { c.thru = true; c.d = 0; hint('Select the object to offset'); return true; }
-    if (c.d === null) { const v = parseLen(s); if (!isNaN(v) && v > 0) { c.d = v; hint('Select the object to offset'); return true; } }
+    const k = String(s).trim().toLowerCase();
+    if (k === 't') { c.thru = true; c.d = 0; hint('Select the object to offset'); return true; }
+    /* Multiple keeps offsetting from the object just made, which is how a run
+       of parallel lines actually gets drawn. */
+    if (k === 'm') { c.multiple = !c.multiple;
+      echo(c.multiple ? 'Multiple: each offset continues from the last' : 'Multiple off'); return true; }
+    if (k === 'e') { c.erase = !c.erase;
+      echo(c.erase ? 'The source will be erased' : 'The source will be kept'); return true; }
+    if (k === 'l') { c.layerCur = !c.layerCur;
+      echo(c.layerCur ? 'Offsets go on the current layer' : 'Offsets keep the source layer'); return true; }
+    if (c.d === null || c.thru === false) {
+      const v = parseLen(s);
+      if (!isNaN(v) && v > 0) { c.d = v; c.thru = false; hint('Select the object to offset'); return true; }
+    }
     return false;
   },
   point(c, p) {
@@ -152,18 +192,44 @@ defc('offset', {
     if (!c.e) {
       const e = pickAt(p, 10, x => !GEOM[x.t] && x.t !== 'dim' && x.t !== 'text');
       if (!e) return;
-      c.e = e; SEL.clear(); SEL.add(e.id); hint(c.thru ? 'Through point' : 'Side to offset'); return;
+      c.e = e; SEL.clear(); SEL.add(e.id);
+      hint(c.thru ? 'Through point' : 'Side to offset');
+      return;
     }
     const d = c.thru ? entDist(p, c.e) : c.d;
     const n = offsetEnt(c.e, d, offsetSide(c.e, p));
-    if (n) { begin(); addEnt(Object.assign(n, { layer: c.e.layer, color: c.e.color, lt: c.e.lt, lw: c.e.lw })); commit('Offset'); }
-    c.e = null; SEL.clear(); hint('Select the object to offset');
+    if (!n) { c.e = null; SEL.clear(); hint('Select the object to offset'); return; }
+    begin();
+    /* Layer: AutoCAD's OFFSETLAYER chooses between the source's layer and the
+       current one. Everything else about appearance follows the source, since
+       an offset is meant to be the same kind of line as what it came from. */
+    const meta = c.layerCur
+      ? { layer: DOC.cur, color: c.e.color, lt: c.e.lt, lw: c.e.lw }
+      : { layer: c.e.layer, color: c.e.color, lt: c.e.lt, lw: c.e.lw };
+    const made = addEnt(Object.assign(n, meta));
+    const src = c.e;
+    if (c.erase) { eraseEnt(src.id); }
+    commit('Offset');
+    SEL.clear();
+    if (c.multiple && made) {
+      /* continue from what was just made, so a second click steps out again */
+      c.e = made; SEL.add(made.id);
+      hint('Side to offset again · <em>Enter</em> to stop');
+    } else {
+      c.e = null;
+      hint('Select the object to offset');
+    }
+  },
+  enter(c) {
+    /* Enter finishes a multiple run, or ends the command when idle */
+    if (c.multiple && c.e) { c.e = null; SEL.clear(); hint('Select the object to offset'); return; }
+    endCmd();
   },
   preview(c, p) {
     if (!c.e || c.d === null) return null;
     const d = c.thru ? entDist(p, c.e) : c.d;
     const n = offsetEnt(c.e, d, offsetSide(c.e, p));
-    return n ? [Object.assign(n, { layer: c.e.layer })] : null;
+    return n ? [Object.assign(n, { layer: c.layerCur ? DOC.cur : c.e.layer })] : null;
   },
   done() { SEL.clear(); },
 });

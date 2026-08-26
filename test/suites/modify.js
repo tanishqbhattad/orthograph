@@ -145,4 +145,110 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.n, 1, 'plain SCALE must not either');
     close(r.len, 2000, 1e-9);
   });
+
+  group('OFFSET has the options it is actually used with');
+
+  /* Multiple is how a run of parallel lines gets drawn: each click steps out
+     again from the object just made, not from the original. */
+  t('OFFSET Multiple steps out from the last one each time', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'});
+      cancelCmd();
+      startCmd('offset');
+      dispatch('500'); dispatch('M');
+      cmdPoint([2500, 0]);
+      cmdPoint([2500, 200]);
+      cmdPoint([2500, 700]);
+      cmdPoint([2500, 1200]);
+      const running = !!CMD;
+      endCmd(true);
+      return { ys: [...DOC.ents.values()].map(e => e.a[1]).sort((a,b) => a-b), running };`);
+    eq(r.ys.join(','), '0,500,1000,1500', 'got ' + r.ys.join(','));
+    eq(r.running, true, 'and the command stays up for the next one');
+  });
+
+  t('OFFSET without Multiple goes back to picking a fresh object', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'});
+      cancelCmd();
+      startCmd('offset');
+      dispatch('500');
+      cmdPoint([2500, 0]);
+      cmdPoint([2500, 200]);
+      /* the same two clicks again would chain in Multiple; here they must
+         offset the ORIGINAL a second time, landing on top of the first */
+      cmdPoint([2500, 0]);
+      cmdPoint([2500, 200]);
+      endCmd(true);
+      return { ys: [...DOC.ents.values()].map(e => e.a[1]).sort((a,b) => a-b) };`);
+    eq(r.ys.join(','), '0,500,500', 'each offset is taken from the object picked');
+  });
+
+  t('OFFSET Erase removes the source, Layer chooses where it lands', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'});
+      const srcId = [...DOC.ents.values()][0].id;
+      cancelCmd();
+      startCmd('offset'); dispatch('300'); dispatch('E');
+      cmdPoint([2500,0]); cmdPoint([2500,100]);
+      endCmd(true);
+      const erased = { n: DOC.ents.size, gone: !DOC.ents.get(srcId) };
+
+      resetDoc();
+      DOC.layers.push(newLayer('A-WALL'));
+      addEnt({t:'line', a:[0,0], b:[5000,0], layer:'A-WALL'});
+      DOC.cur = '0';
+      cancelCmd();
+      startCmd('offset'); dispatch('300'); dispatch('L');
+      cmdPoint([2500,0]); cmdPoint([2500,100]);
+      endCmd(true);
+      const onCur = [...DOC.ents.values()].find(e => e.a[1] !== 0);
+
+      resetDoc();
+      DOC.layers.push(newLayer('A-WALL'));
+      addEnt({t:'line', a:[0,0], b:[5000,0], layer:'A-WALL'});
+      DOC.cur = '0';
+      cancelCmd();
+      startCmd('offset'); dispatch('300');
+      cmdPoint([2500,0]); cmdPoint([2500,100]);
+      endCmd(true);
+      const onSrc = [...DOC.ents.values()].find(e => e.a[1] !== 0);
+
+      return { erased, cur: onCur && onCur.layer, src: onSrc && onSrc.layer };`);
+    eq(r.erased.n, 1, 'Erase leaves only the offset');
+    eq(r.erased.gone, true, 'and the source is really gone');
+    eq(r.cur, '0', 'Layer puts the offset on the current layer');
+    eq(r.src, 'A-WALL', 'and by default it keeps the source layer');
+  });
+
+  group('MOVE and COPY take a displacement');
+
+  t('MOVE D takes a vector rather than two points', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[1000,1000], b:[2000,1000], layer:'0'});
+      const e = [...DOC.ents.values()][0];
+      SEL.clear(); SEL.add(e.id);
+      cancelCmd();
+      startCmd('move'); dispatch('D'); cmdPoint([0, -1200]);
+      const m = DOC.ents.get(e.id);
+      return { n: DOC.ents.size, a: m.a.slice(), b: m.b.slice() };`);
+    eq(r.n, 1, 'MOVE must not leave a copy');
+    eq(r.a.join(','), '1000,-200', 'the whole displacement is applied, got ' + r.a.join(','));
+    eq(r.b.join(','), '2000,-200');
+  });
+
+  t('COPY D leaves the original and places one copy', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[1000,0], layer:'0'});
+      const e = [...DOC.ents.values()][0];
+      SEL.clear(); SEL.add(e.id);
+      cancelCmd();
+      startCmd('copy'); dispatch('D'); cmdPoint([0, 2500]);
+      const orig = DOC.ents.get(e.id);
+      const made = [...DOC.ents.values()].find(x => x.id !== e.id);
+      return { n: DOC.ents.size, origY: orig.a[1], copyY: made && made.a[1] };`);
+    eq(r.n, 2, 'one copy, not a run of them');
+    eq(r.origY, 0, 'the original stays put');
+    eq(r.copyY, 2500, 'and the copy lands at the displacement');
+  });
 };
