@@ -131,3 +131,97 @@ defc('mview', {
     draw();
   },
 });
+
+/* ============================================================
+   Working inside a viewport
+   ------------------------------------------------------------
+   Double-click into a viewport and you are looking at the model
+   through that window: panning and zooming move the MODEL behind
+   the paper rather than moving the paper on the screen. Double-
+   click outside, or press Escape, and you are back on the page.
+   This is exactly AutoCAD's model/paper toggle, and it is the
+   difference between a sheet you can compose and a sheet whose
+   views are fixed wherever they happened to land.
+   ============================================================ */
+/** the viewport under a point given in PAPER millimetres, topmost first */
+function vpAt(sh, px, py) {
+  const list = (sh && sh.viewports) || [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const v = list[i];
+    if (px >= v.x && px <= v.x + v.w && py >= v.y && py <= v.y + v.h) return v;
+  }
+  return null;
+}
+/** screen -> paper millimetres (paper world is y up; a sheet counts y down) */
+function s2paper(sh, sx, sy) {
+  const w = s2w(sx, sy);
+  return [w[0], sh.h - w[1]];
+}
+/** screen -> model millimetres, seen through a viewport */
+function s2vpModel(sh, vp, sx, sy) {
+  const p = s2paper(sh, sx, sy);
+  return vpToModel(vp, p[0], p[1]);
+}
+function activeVp() {
+  const sh = curSheet(); if (!sh) return null;
+  return (sh.viewports || []).find(v => v.id === sh.activeVp) || null;
+}
+function setActiveVp(sh, id) {
+  if (!sh) return;
+  const was = sh.activeVp;
+  sh.activeVp = id || null;
+  if (was !== sh.activeVp) {
+    cliPrint(sh.activeVp ? 'In the viewport — pan and zoom move the model. Esc to leave.'
+                         : 'On the page.');
+    if (typeof syncViewUI === 'function') syncViewUI();
+    draw();
+  }
+}
+/** Zoom the MODEL inside a viewport, holding still whatever is under the
+    cursor — the same contract zoomAt keeps on the page. The scale stops being
+    a standard one, which is honest: the title block will say so until it is
+    set back to a scale off the ruler. */
+function vpZoomAt(sh, vp, sx, sy, f) {
+  const before = s2vpModel(sh, vp, sx, sy);
+  const ns = clamp(vp.scale * f, 1 / 500000, 100);
+  if (!(ns > 0) || ns === vp.scale) return;
+  vp.scale = ns;
+  const after = s2vpModel(sh, vp, sx, sy);
+  vp.centre[0] += before[0] - after[0];
+  vp.centre[1] += before[1] - after[1];
+  draw();
+  if (typeof syncViewUI === 'function') syncViewUI();
+}
+/** Pan the model inside a viewport by a screen delta. The paper does not move:
+    a drag of n pixels slides the model by n pixels' worth of model, which is
+    what "looking through a window" has to mean. */
+function vpPanBy(sh, vp, dxScr, dyScr) {
+  const k = (vp.scale || 1) * (V.z || 1);
+  if (!(k > 0)) return;
+  vp.centre[0] -= dxScr / k;
+  vp.centre[1] += dyScr / k;
+}
+/** set a viewport to an exact scale off the ruler, keeping its centre */
+defc('vpscale', {
+  key: 'vpscale', group: 'view',
+  hint: 'Scale for this viewport — type <em>50</em> for 1:50, or a ratio',
+  init(c) {
+    const vp = activeVp() || ((curSheet() || {}).viewports || [])[0];
+    if (!vp) { cliPrint('No viewport. Make one with MVIEW.', 'err'); c.done = true; endCmd(true); return; }
+    c.data = { vp };
+    cliPrint('This viewport is at ' + scaleLabel(vp.scale));
+  },
+  text(c, s) {
+    const raw = String(s).trim();
+    let r = null;
+    const m = /^1\s*[:/]\s*([0-9.]+)$/.exec(raw);
+    if (m) r = 1 / parseFloat(m[1]);
+    else if (/^[0-9.]+$/.test(raw)) { const n = parseFloat(raw); r = n > 1 ? 1 / n : n; }
+    else { const hit = SCALES.find(x => x.label === raw); if (hit) r = hit.r; }
+    if (!(r > 0)) { cliPrint('Type a scale like 50, 1:50 or 0.02.', 'err'); return true; }
+    begin(); c.data.vp.scale = r; commit('Viewport scale');
+    cliPrint('Viewport set to ' + scaleLabel(r));
+    draw();
+    return true;
+  },
+});

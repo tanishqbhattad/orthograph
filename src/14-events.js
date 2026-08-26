@@ -219,7 +219,9 @@ stage.addEventListener('pointerdown', ev => {
      PAN command. The right button is AutoCAD's shortcut menu, not a pan. */
   if (ev.button === 1 || (ev.button === 0 && (ev.altKey || ST.panReady || ST.panCmd))) {
     cancelAnim();
-    ST.panning = { x: scr[0], y: scr[1], px: V.px, py: V.py };
+    const _pv = (typeof activeVp === 'function') ? activeVp() : null;
+    ST.panning = { x: scr[0], y: scr[1], px: V.px, py: V.py,
+                   vpc: _pv ? _pv.centre.slice() : null };
     ST.panDragged = false; navCursor(); return;
   }
   /* ZOOM real time: drag up to magnify, anchored where the drag started */
@@ -267,6 +269,17 @@ stage.addEventListener('pointermove', ev => {
     return;
   }
   if (ST.panning) {
+    const _av = (typeof activeVp === 'function') ? activeVp() : null;
+    if (_av && ST.panning.vpc) {
+      /* the paper stays put; the model slides behind it, so a drag of n pixels
+         moves n pixels' worth of model — which is what a window has to mean */
+      const k = (_av.scale || 1) * (V.z || 1);
+      if (k > 0) {
+        _av.centre[0] = ST.panning.vpc[0] - (scr[0] - ST.panning.x) / k;
+        _av.centre[1] = ST.panning.vpc[1] + (scr[1] - ST.panning.y) / k;
+      }
+      moved = true; ST.panDragged = true; draw(); return;
+    }
     /* 1:1 and absolute — recomputed from the press point every move, so a pan
        can never accumulate drift however long the drag runs */
     V.px = ST.panning.px + (scr[0] - ST.panning.x);
@@ -353,7 +366,17 @@ stage.addEventListener('contextmenu', ev => {
 window.addEventListener('pointerdown', ev => {
   if (SNAPMENU && !ev.target.closest('.snapmenu')) hideSnapMenu();
 }, true);
-stage.addEventListener('dblclick', () => {
+stage.addEventListener('dblclick', ev => {
+  /* On a sheet, a double click is the model/paper toggle, not an edit: inside
+     a viewport it takes you through the window, outside it brings you back. */
+  const sh = (typeof curSheet === 'function') ? curSheet() : null;
+  if (sh) {
+    const scr = localXY(ev);
+    const pp = s2paper(sh, scr[0], scr[1]);
+    const vp = vpAt(sh, pp[0], pp[1]);
+    setActiveVp(sh, vp ? vp.id : null);
+    return;
+  }
   const p = ST.cur; if (!p) return;
   const e = pickAt(p, 9);
   if (!e) return;
@@ -386,7 +409,12 @@ stage.addEventListener('wheel', ev => {
              : (px >= 120 && px % 120 === 0) ? 120 : 100;
   const notches = clamp(ev.deltaY / unit, -4, 4);
   if (!notches) return;
-  zoomAt(scr[0], scr[1], wheelFactor(notches));
+  /* inside a viewport the wheel moves the model behind the paper, not the
+     paper on the screen */
+  const _sh = (typeof curSheet === 'function') ? curSheet() : null;
+  const _avp = _sh && typeof activeVp === 'function' ? activeVp() : null;
+  if (_avp) vpZoomAt(_sh, _avp, scr[0], scr[1], wheelFactor(notches));
+  else zoomAt(scr[0], scr[1], wheelFactor(notches));
   ST.cur = snapPoint(scr[0], scr[1], refPoint());
   syncCoord(); syncDyn();
 }, { passive: false });
@@ -531,6 +559,10 @@ window.addEventListener('keydown', ev => {
   const inField = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
   if (ev.key === 'Escape') {
     if (SNAPMENU) { hideSnapMenu(); return; }
+    /* leaving a viewport comes before cancelling a command: Escape on a sheet
+       most often means "put me back on the page" */
+    const _es = (typeof curSheet === 'function') ? curSheet() : null;
+    if (_es && _es.activeVp) { setActiveVp(_es, null); return; }
     if (CYCLEUI) { hideCycleList(); draw(); return; }
     if (ST.styleTarget) { ST.styleTarget = null; echo('Cancelled'); buildProps(); return; }
     if ($('#modal').classList.contains('show')) return closeModal();

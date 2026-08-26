@@ -299,4 +299,95 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(r.modelOnScreen[0] > r.canvas[0] * 0.5,
       'model space still fits the model, got ' + Math.round(r.modelOnScreen[0]));
   });
+
+  group('sheets: working inside a viewport');
+
+  t('a viewport is a window: the model moves, the paper does not', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'wall', a:[0,0], b:[8000,0], wt:'gen100', layer:'A-WALL'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0], vp = sh.viewports[0];
+      fitSheet();
+      const mid = w2s(sheetWorld(sh, vp.x + vp.w/2, vp.y + vp.h/2));
+      setActiveVp(sh, vp.id);
+      const paperBefore = w2s(sheetWorld(sh, 0, 0));
+      const viewBefore = { z: V.z, px: V.px, py: V.py };
+      /* zoom with the cursor off-centre: the model under it must not shift */
+      const sx = mid[0] + 70, sy = mid[1] - 40;
+      const under0 = s2vpModel(sh, vp, sx, sy);
+      const scale0 = vp.scale;
+      vpZoomAt(sh, vp, sx, sy, 1.35);
+      const under1 = s2vpModel(sh, vp, sx, sy);
+      const paperAfter = w2s(sheetWorld(sh, 0, 0));
+      return {
+        held: Math.hypot(under1[0]-under0[0], under1[1]-under0[1]),
+        scaleChanged: Math.abs(vp.scale - scale0) > 1e-9,
+        paperMoved: Math.hypot(paperAfter[0]-paperBefore[0], paperAfter[1]-paperBefore[1]),
+        viewUntouched: V.z === viewBefore.z && V.px === viewBefore.px && V.py === viewBefore.py };`);
+    ok(r.held < 1e-6, 'zoom must hold what is under the cursor, drifted ' + r.held + 'mm');
+    eq(r.scaleChanged, true, 'and it must actually zoom');
+    ok(r.paperMoved < 1e-9, 'the PAGE must not move when the model does');
+    eq(r.viewUntouched, true, 'the paper view transform is untouched');
+  });
+
+  t('panning inside a viewport moves the model one for one', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[8000,0], layer:'0'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0], vp = sh.viewports[0];
+      fitSheet(); setActiveVp(sh, vp.id);
+      const k = vp.scale * V.z;
+      const c0 = vp.centre.slice();
+      vpPanBy(sh, vp, 100, 0);
+      const dx = c0[0] - vp.centre[0];
+      vpPanBy(sh, vp, -100, 0);
+      return { dx, want: 100 / k, backToStart: Math.hypot(vp.centre[0]-c0[0], vp.centre[1]-c0[1]) };`);
+    close(r.dx, r.want, 1e-9, '100px of drag must move 100px worth of model');
+    ok(r.backToStart < 1e-9, 'and dragging back must land exactly where it started');
+  });
+
+  t('double click enters a viewport and leaves it', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[8000,0], layer:'0'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0], vp = sh.viewports[0];
+      fitSheet();
+      const inside = s2paper(sh, ...w2s(sheetWorld(sh, vp.x + vp.w/2, vp.y + vp.h/2)));
+      const hitIn = vpAt(sh, inside[0], inside[1]);
+      const hitOut = vpAt(sh, 2, 2);
+      setActiveVp(sh, hitIn ? hitIn.id : null);
+      const entered = !!activeVp();
+      setActiveVp(sh, null);
+      return { hitIn: !!hitIn, hitOut, entered, left: activeVp() === null };`);
+    eq(r.hitIn, true, 'the middle of a viewport is inside it');
+    eq(r.hitOut, null, 'and the corner of the page is not');
+    eq(r.entered, true); eq(r.left, true, 'Escape must put you back on the page');
+  });
+
+  t('VPSCALE sets an exact scale off the ruler', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[8000,0], layer:'0'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0], vp = sh.viewports[0];
+      setActiveVp(sh, vp.id);
+      const out = {};
+      for (const typed of ['50', '1:200', '1:20', '0.01']) {
+        dispatch('VPSCALE'); dispatch(typed);
+        out[typed] = scaleLabel(vp.scale);
+      }
+      /* nonsense must be refused, and must not silently change the drawing */
+      const before = vp.scale;
+      dispatch('VPSCALE'); dispatch('banana');
+      out.kept = vp.scale === before;
+      endCmd(true);
+      return out;`);
+    eq(r['50'], '1:50', 'typing 50 means 1:50');
+    eq(r['1:200'], '1:200'); eq(r['1:20'], '1:20');
+    eq(r['0.01'], '1:100', 'a ratio works too');
+    eq(r.kept, true, 'nonsense must not change the scale of a drawing');
+  });
 };
