@@ -449,4 +449,51 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       return { before, after, same: before === after };`);
     eq(r.same, true, 'a nonsense angle must not quietly set a chamfer');
   });
+
+  group('B2 — JOIN gives back the right kind of object');
+
+  /* Two halves of the same line joining into a three-point polyline is
+     technically the same shape and behaves differently everywhere afterwards:
+     offset, fillet, grips and the DXF it writes. */
+  t('collinear pieces join back into a line', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[1000,0], layer:'0'});
+      addEnt({t:'line', a:[1000,0], b:[2500,0], layer:'0'});
+      SEL.clear(); for (const e of DOC.ents.values()) SEL.add(e.id);
+      cancelCmd();
+      startCmd('join'); endCmd(true);
+      const all = [...DOC.ents.values()];
+      return { n: all.length, t: all[0] && all[0].t,
+               len: all[0] && all[0].t === 'line' ? +dist(all[0].a, all[0].b).toFixed(6) : null };`);
+    eq(r.n, 1, 'the two become one');
+    eq(r.t, 'line', 'and it is a line, not a polyline with a redundant middle point');
+    close(r.len, 2500, 1e-6, 'spanning the whole run');
+  });
+
+  t('a bent run still joins into a polyline', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[1000,0], layer:'0'});
+      addEnt({t:'line', a:[1000,0], b:[1000,900], layer:'0'});
+      SEL.clear(); for (const e of DOC.ents.values()) SEL.add(e.id);
+      cancelCmd();
+      startCmd('join'); endCmd(true);
+      const all = [...DOC.ents.values()];
+      return { n: all.length, t: all[0] && all[0].t, pts: all[0] && all[0].pts && all[0].pts.length };`);
+    eq(r.n, 1); eq(r.t, 'pline', 'a corner is a polyline, and must stay one');
+    eq(r.pts, 3, 'keeping the corner point');
+  });
+
+  t('a run that doubles back on itself is not called straight', () => {
+    const r = R(`${SETUP}
+      /* out to 1000 and back to 400: every point IS on the line, but the run
+         is not a single segment and must not be flattened into one */
+      addEnt({t:'line', a:[0,0], b:[1000,0], layer:'0'});
+      addEnt({t:'line', a:[1000,0], b:[400,0], layer:'0'});
+      SEL.clear(); for (const e of DOC.ents.values()) SEL.add(e.id);
+      cancelCmd();
+      startCmd('join'); endCmd(true);
+      const all = [...DOC.ents.values()];
+      return { t: all[0] && all[0].t };`);
+    eq(r.t, 'pline', 'doubling back is a polyline, not a line from 0 to 400');
+  });
 };

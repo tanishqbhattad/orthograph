@@ -896,9 +896,18 @@ function boot() {
     window.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') autosaveNow('hidden');
     });
+    /* Chrome refuses a beforeunload prompt on a page the user has never
+       touched, and logs an error for trying. Arm the asking part only once
+       there has been a real gesture — which is exactly when the browser would
+       honour it, and by then there is something worth keeping anyway. The
+       autosave itself is unconditional. */
+    let gestured = false;
+    const gesture = () => { gestured = true; };
+    window.addEventListener('pointerdown', gesture, { once: true, capture: true });
+    window.addEventListener('keydown', gesture, { once: true, capture: true });
     window.addEventListener('beforeunload', ev => {
       autosaveNow('unload');
-      if (!docDirty()) return;
+      if (!gestured || !docDirty()) return;
       /* the browser shows its own wording; returning a string is what asks */
       ev.preventDefault();
       ev.returnValue = '';

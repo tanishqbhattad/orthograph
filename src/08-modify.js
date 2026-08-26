@@ -652,7 +652,15 @@ defc('join', {
     SEL.clear();
     for (const ch of merged) {
       const closed = ch.length > 2 && dist(ch[0], ch[ch.length - 1]) < tol;
-      const n = addEnt(Object.assign({ t: 'pline', pts: closed ? ch.slice(0, -1) : ch, closed }, meta));
+      /* Collinear pieces join back into a LINE, which is what AutoCAD does and
+         what anyone joining two halves of the same line expects. Coming back
+         as a three-point polyline is technically the same shape and behaves
+         differently everywhere afterwards — offset, fillet, grips and the DXF
+         it writes. */
+      const straight = !closed && ch.length > 2 && collinearRun(ch, tol);
+      const n = straight
+        ? addEnt(Object.assign({ t: 'line', a: ch[0].slice(), b: ch[ch.length - 1].slice() }, meta))
+        : addEnt(Object.assign({ t: 'pline', pts: closed ? ch.slice(0, -1) : ch, closed }, meta));
       SEL.add(n.id);
     }
     commit('Joined into ' + merged.length); endCmd();
@@ -1214,5 +1222,22 @@ function gripClick(g, additive) {
   ST.gripAction = m ? m.items[m.idx].id : 'stretch';
   gripMenuClose();
   startCmd('gripedit');
+  return true;
+}
+
+/** Is every point of a run on the straight line between its two ends? The
+    tolerance is the same screen-sized one the join itself uses, so what looks
+    straight at the zoom you are working at is treated as straight. */
+function collinearRun(pts, tol) {
+  const a = pts[0], b = pts[pts.length - 1];
+  const L = dist(a, b);
+  if (L < 1e-9) return false;
+  const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const vx = pts[i][0] - a[0], vy = pts[i][1] - a[1];
+    const t = vx * ux + vy * uy;
+    if (t < -tol || t > L + tol) return false;      /* doubles back on itself */
+    if (Math.abs(vx * uy - vy * ux) > tol) return false;
+  }
   return true;
 }
