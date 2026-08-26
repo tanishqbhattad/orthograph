@@ -30,7 +30,7 @@ class El {
   constructor(tag) {
     this.tagName = (tag || 'div').toUpperCase();
     this.children = []; this.style = {}; this.dataset = {};
-    this._cls = new Set(); this.innerHTML = ''; this.textContent = ''; this._value = '';
+    this._cls = new Set(); this._html = ''; this._text = ''; this._value = '';
     this._listeners = {};
     this._selStart = 0; this._selEnd = 0;
     this.classList = {
@@ -40,6 +40,23 @@ class El {
       contains: c => this._cls.has(c),
     };
   }
+  /* A real element keeps innerHTML and textContent in step: set one and the
+     other follows. The stub kept them as two unrelated strings, so anything
+     built with el(tag, cls, html) — which is most of this UI — read back as
+     having no text at all, and every assertion about what a control SAYS was
+     silently unfalsifiable. */
+  get innerHTML() { return this._html; }
+  set innerHTML(v) {
+    this._html = v == null ? '' : String(v);
+    this._text = this._html.replace(/<[^>]*>/g, '');
+    this.children.length = 0;
+  }
+  get textContent() {
+    if (this._text) return this._text;
+    /* and a node with children reports their text, as the DOM does */
+    return (this.children || []).map(c => c.textContent || '').join('');
+  }
+  set textContent(v) { this._text = v == null ? '' : String(v); this._html = this._text; }
   get className() { return [...this._cls].join(' '); }
   set className(v) { this._cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
   /* A real input.value is a DOMString whatever you assign to it. The stub kept

@@ -520,10 +520,9 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       const wrap = document.getElementById('cmdwrap');
       const box = (wrap.children||[]).find(c => c.id === 'acList');
       const rows = box ? [...(box.children||[])] : [];
-      /* the stub does not roll child text up into textContent, so the rendered
-         rows read empty here — assert against the model the list was built
-         from, and let the row count prove the DOM was actually populated */
-      const names = (AC.items || []).map(it => it.name);
+      /* read what the rows actually SAY, now that the stub keeps innerHTML and
+         textContent in step — the model agreeing with itself proves nothing */
+      const names = rows.map(b => b.textContent);
       /* arrow down writes the highlighted name into the field, as AutoCAD does */
       inp.dispatchEvent(new KeyboardEvent('keydown', { key:'ArrowDown', bubbles:true, cancelable:true }));
       const first = inp.value;
@@ -577,9 +576,9 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       const inRow = n => (n.children||[]).some(c => c.tagName === 'INPUT'
                        || (c.children||[]).some(g => g.tagName === 'INPUT'));
       const boxCount = rows.filter(inRow).length;
-      /* same stub limitation: row text lives in child spans. The counts above
-         prove the DOM was built; the labels come from the model that built it */
-      const labels = snapMenuItems().map(m => m.label || m.name || '');
+      /* the rendered labels, not the model's — a checkbox that exists but is
+         captioned wrong is still a broken dialog */
+      const labels = rows.map(n => n.textContent.trim());
       return { rows: rows.length, boxes: boxCount, labels,
                modes: snapMenuItems().length };`);
     eq(r.modes, 16, 'there are sixteen modes to offer');

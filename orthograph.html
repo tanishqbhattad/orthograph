@@ -236,6 +236,21 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 #cmdhist .cl.err{color:var(--red,#f85149)}
 #cmdhist .cl.cmd{color:var(--amber)}
 #cmdhist .cl.dim{color:var(--tx2)}
+/* ---------------- layout tabs ----------------
+   Model space and each sheet, along the bottom, exactly where every CAD
+   program has put them for thirty years. They are how anyone discovers that
+   paper space exists at all. */
+#tabs{display:flex;align-items:flex-end;gap:2px;padding:0 11px;height:24px;flex:none;
+  border-bottom:1px solid var(--bd);overflow-x:auto;scrollbar-width:none}
+#tabs::-webkit-scrollbar{display:none}
+#tabs .tab{font-size:11px;padding:3px 11px;color:var(--tx2);white-space:nowrap;
+  border:1px solid transparent;border-bottom:none;border-radius:4px 4px 0 0;
+  max-width:180px;overflow:hidden;text-overflow:ellipsis}
+#tabs .tab:hover{color:var(--tx0);background:var(--bg2)}
+#tabs .tab.on{color:var(--amber);background:var(--bg1);border-color:var(--bd);
+  position:relative;top:1px}
+#tabs .tab.add{color:var(--tx2);padding:3px 8px}
+#tabs .tab.add:hover{color:var(--amber)}
 #cmdwrap{display:flex;align-items:center;gap:8px;padding:0 11px;height:32px;flex:none;
   position:relative}
 /* AutoComplete. It hangs off the input rather than being measured onto the
@@ -491,6 +506,7 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
   </div>
 
   <div id="bot">
+    <div id="tabs"></div>
     <div id="cmdhist" aria-live="polite"></div>
     <div id="cmdwrap">
       <span id="caret">❯</span>
@@ -14327,6 +14343,79 @@ function toggleCliHistory() {
   if (box) box.scrollTop = box.scrollHeight;
 }
 
+/* ============================================================
+   Layout tabs
+   ------------------------------------------------------------
+   Model and each sheet, along the bottom. Paper space is not
+   discoverable from a command line alone: without a tab strip
+   nobody finds out a drawing can have sheets, which is most of
+   why the feature would go unused.
+   ============================================================ */
+function buildSheetTabs() {
+  const bar = $('#tabs'); if (!bar) return;
+  clearNode(bar);
+  const tab = (label, on, fn, cls, title) => {
+    const b = el('button', 'tab' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), esc(label));
+    if (title) b.title = title;
+    b.onclick = fn;
+    bar.appendChild(b);
+    return b;
+  };
+  tab('Model', DOC.curSheet == null, () => gotoSheet(null), '', 'The model \u2014 draw here');
+  for (const sh of (DOC.sheets || [])) {
+    const b = tab(sh.name, DOC.curSheet === sh.id, () => gotoSheet(sh.id), '',
+      sh.size + (sh.landscape ? ' landscape' : ' portrait'));
+    /* right-click is where a layout gets renamed or thrown away, as it is in
+       every other tabbed thing on the machine */
+    b.oncontextmenu = ev => { ev.preventDefault(); sheetTabMenu(sh, b); };
+  }
+  tab('+', false, () => {
+    /* a new layout straight from the tab strip, named for you. Typing LAYOUT N
+       is still there for anyone who prefers the keyboard. */
+    const n = (DOC.sheets || []).length + 1;
+    cancelCmd();
+    dispatch('LAYOUT'); dispatch('N'); dispatch('Sheet ' + n);
+  }, 'add', 'New layout');
+}
+function sheetTabMenu(sh, anchor) {
+  const items = [
+    ['Rename\u2026', () => {
+      const n = prompt('Layout name', sh.name);
+      if (n == null) return;
+      begin(); sh.name = String(n).trim() || sh.name; commit('Rename layout');
+      buildSheetTabs(); draw();
+    }],
+    ['Plot\u2026', () => { gotoSheet(sh.id); plotSheet(sh); }],
+    ['Delete', () => {
+      begin();
+      DOC.sheets = DOC.sheets.filter(x => x.id !== sh.id);
+      commit('Delete layout');
+      gotoSheet(DOC.sheets.length ? DOC.sheets[0].id : null);
+    }],
+  ];
+  popMenu(items, anchor);
+}
+/** a small menu anchored to an element, used by the tab strip */
+function popMenu(items, anchor) {
+  const old = $('#tabmenu'); if (old) old.remove();
+  const m = el('div'); m.id = 'tabmenu';
+  m.className = 'gripmenu';
+  const r = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: 60, top: 60 };
+  m.style.left = Math.round(r.left) + 'px';
+  m.style.top = Math.round((r.top || 0) - 8 - items.length * 22) + 'px';
+  for (const [label, fn] of items) {
+    const b = el('button', 'gmi', esc(label));
+    b.onclick = () => { m.remove(); fn(); };
+    m.appendChild(b);
+  }
+  document.body.appendChild(m);
+  setTimeout(() => {
+    const close = () => { m.remove(); document.removeEventListener('pointerdown', close); };
+    document.addEventListener('pointerdown', close);
+  }, 0);
+  return m;
+}
+
 
 /* ===== 14-events.js ===== */
 /* ============================================================
@@ -14363,6 +14452,7 @@ function toast(s) {
   clearTimeout(_tt); _tt = setTimeout(() => t.classList.remove('show'), 2800);
 }
 function syncUI() {
+  if (typeof buildSheetTabs === 'function') buildSheetTabs();
   buildLayers(); buildProps(); syncTools();
   const u = $('#mUndo'), r = $('#mRedo');
   if (u) u.disabled = !HIST.past.length;

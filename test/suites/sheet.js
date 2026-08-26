@@ -209,4 +209,65 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.sheets, 0, 'no paper space is not a broken document');
     eq(r.cur, null); eq(r.ents, 1, 'and the drawing still loads');
   });
+
+  group('sheets: the layout tabs');
+
+  /* Paper space is not discoverable from a command line alone. Without a tab
+     strip nobody finds out a drawing can have sheets, which is most of why the
+     feature would go unused however well it worked. */
+  t('the tab strip lists model space and every sheet', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'});
+      cancelCmd();
+      const bar = document.getElementById('tabs');
+      buildSheetTabs();
+      const start = (bar.children || []).map(b => b.textContent);
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-102');
+      syncUI();
+      const after = (bar.children || []).map(b => b.textContent);
+      const on = (bar.children || []).filter(b => (b.className || '').includes('on'))
+                                     .map(b => b.textContent);
+      return { start, after, on, cur: DOC.curSheet };`);
+    eq(r.start.join('|'), 'Model|+', 'with no sheets it is Model and a new-layout button');
+    eq(r.after.join('|'), 'Model|A-101|A-102|+', 'got ' + r.after.join('|'));
+    eq(r.on.join(','), 'A-102', 'exactly one tab is current, and it is the newest');
+  });
+
+  t('clicking a tab moves between model and paper', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0];
+      const bar = document.getElementById('tabs');
+      syncUI();
+      const hit = name => (bar.children || []).find(b => b.textContent === name);
+      hit('Model').onclick();
+      const model = DOC.curSheet;
+      hit('A-101').onclick();
+      const back = DOC.curSheet;
+      const onNow = (bar.children || []).filter(b => (b.className || '').includes('on'))
+                                        .map(b => b.textContent);
+      return { model, back: back === sh.id, onNow };`);
+    eq(r.model, null, 'the Model tab is model space');
+    eq(r.back, true, 'and the sheet tab returns to the sheet');
+    eq(r.onNow.join(','), 'A-101', 'the strip follows what is current');
+  });
+
+  t('the + tab makes a new layout', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'});
+      cancelCmd();
+      const bar = document.getElementById('tabs');
+      buildSheetTabs();
+      (bar.children || []).find(b => b.textContent === '+').onclick();
+      const sh = DOC.sheets[0];
+      return { n: DOC.sheets.length, name: sh && sh.name,
+               vps: sh && sh.viewports.length, current: DOC.curSheet === (sh && sh.id) };`);
+    eq(r.n, 1, 'one layout appears');
+    eq(r.name, 'Sheet 1', 'named for you rather than demanding one up front');
+    eq(r.vps, 1, 'and it opens showing the model, not an empty page');
+    eq(r.current, true);
+  });
 };

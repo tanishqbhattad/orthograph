@@ -32,6 +32,7 @@ function toast(s) {
   clearTimeout(_tt); _tt = setTimeout(() => t.classList.remove('show'), 2800);
 }
 function syncUI() {
+  if (typeof buildSheetTabs === 'function') buildSheetTabs();
   buildLayers(); buildProps(); syncTools();
   const u = $('#mUndo'), r = $('#mRedo');
   if (u) u.disabled = !HIST.past.length;

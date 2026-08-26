@@ -1939,3 +1939,76 @@ function toggleCliHistory() {
   if (box) box.scrollTop = box.scrollHeight;
 }
 
+/* ============================================================
+   Layout tabs
+   ------------------------------------------------------------
+   Model and each sheet, along the bottom. Paper space is not
+   discoverable from a command line alone: without a tab strip
+   nobody finds out a drawing can have sheets, which is most of
+   why the feature would go unused.
+   ============================================================ */
+function buildSheetTabs() {
+  const bar = $('#tabs'); if (!bar) return;
+  clearNode(bar);
+  const tab = (label, on, fn, cls, title) => {
+    const b = el('button', 'tab' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), esc(label));
+    if (title) b.title = title;
+    b.onclick = fn;
+    bar.appendChild(b);
+    return b;
+  };
+  tab('Model', DOC.curSheet == null, () => gotoSheet(null), '', 'The model \u2014 draw here');
+  for (const sh of (DOC.sheets || [])) {
+    const b = tab(sh.name, DOC.curSheet === sh.id, () => gotoSheet(sh.id), '',
+      sh.size + (sh.landscape ? ' landscape' : ' portrait'));
+    /* right-click is where a layout gets renamed or thrown away, as it is in
+       every other tabbed thing on the machine */
+    b.oncontextmenu = ev => { ev.preventDefault(); sheetTabMenu(sh, b); };
+  }
+  tab('+', false, () => {
+    /* a new layout straight from the tab strip, named for you. Typing LAYOUT N
+       is still there for anyone who prefers the keyboard. */
+    const n = (DOC.sheets || []).length + 1;
+    cancelCmd();
+    dispatch('LAYOUT'); dispatch('N'); dispatch('Sheet ' + n);
+  }, 'add', 'New layout');
+}
+function sheetTabMenu(sh, anchor) {
+  const items = [
+    ['Rename\u2026', () => {
+      const n = prompt('Layout name', sh.name);
+      if (n == null) return;
+      begin(); sh.name = String(n).trim() || sh.name; commit('Rename layout');
+      buildSheetTabs(); draw();
+    }],
+    ['Plot\u2026', () => { gotoSheet(sh.id); plotSheet(sh); }],
+    ['Delete', () => {
+      begin();
+      DOC.sheets = DOC.sheets.filter(x => x.id !== sh.id);
+      commit('Delete layout');
+      gotoSheet(DOC.sheets.length ? DOC.sheets[0].id : null);
+    }],
+  ];
+  popMenu(items, anchor);
+}
+/** a small menu anchored to an element, used by the tab strip */
+function popMenu(items, anchor) {
+  const old = $('#tabmenu'); if (old) old.remove();
+  const m = el('div'); m.id = 'tabmenu';
+  m.className = 'gripmenu';
+  const r = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: 60, top: 60 };
+  m.style.left = Math.round(r.left) + 'px';
+  m.style.top = Math.round((r.top || 0) - 8 - items.length * 22) + 'px';
+  for (const [label, fn] of items) {
+    const b = el('button', 'gmi', esc(label));
+    b.onclick = () => { m.remove(); fn(); };
+    m.appendChild(b);
+  }
+  document.body.appendChild(m);
+  setTimeout(() => {
+    const close = () => { m.remove(); document.removeEventListener('pointerdown', close); };
+    document.addEventListener('pointerdown', close);
+  }, 0);
+  return m;
+}
+
