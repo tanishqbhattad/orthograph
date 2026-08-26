@@ -41,9 +41,13 @@ function svgEntityBody(lwMul) {
     const lw = Math.max(entLw(e), 0.13) * K;
     const lt = entLt(e);
     if (e.t === 'hatch') {
-      for (const L of (e.loops || [])) {
-        out.push(`<path d="M${L.map(T2).join('L')}Z" fill="${e.solid ? col + '55' : 'none'}" stroke="${col}" stroke-width="${lw}"/>`);
-      }
+      /* One path with a subpath per loop and an even-odd rule, so an island is
+         SUBTRACTED. Drawing each loop as its own filled path paints the hole
+         in again, which on a plan means hatching straight over the column the
+         hole was there to protect. The canvas has always clipped evenodd; the
+         export did not, so the screen and the paper disagreed. */
+      const d = (e.loops || []).map(L => 'M' + L.map(T2).join('L') + 'Z').join(' ');
+      if (d) out.push(`<path d="${d}" fill-rule="evenodd" fill="${e.solid ? col + '55' : 'none'}" stroke="${col}" stroke-width="${lw}"/>`);
       continue;
     }
     if (e.t === 'dim') {

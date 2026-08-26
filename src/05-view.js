@@ -879,8 +879,14 @@ function drawEnt(e, mode) {
   const col = S ? (S.col || lift(fcol(e), S.lift)) : fcol(e);
   if (e.t === 'dim') return drawDim(e, col, mode);
   if (e.t === 'text') return drawTextAt(e.s, e.p, e.h, e.rot, e.anchor, col);
-  if (GEOM[e.t]) return drawShapes(e, col, mode);
+  /* Hatch is registered in GEOM, so it MUST be tested before the GEOM branch.
+     It was tested after, which made drawHatch unreachable: every hatch fell
+     through to the generic shape path, drew its loops as outlines and never
+     filled or patterned anything. The DXF writer already carried an explicit
+     `&& e.t !== 'hatch'` guard against the same collision, which is the shape
+     of a bug that has been worked around twice and fixed neither time. */
   if (e.t === 'hatch') return drawHatch(e, col, mode);
+  if (GEOM[e.t]) return drawShapes(e, col, mode);
   const lw = lwPx(flw(e)) + (S ? S.core : 0);
   pathEnt(e);
   if (e.fill && !HALO) { ctx.fillStyle = col + (S ? S.fillA : '22'); ctx.fill(); }

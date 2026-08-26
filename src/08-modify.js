@@ -845,35 +845,76 @@ defc('hatch', {
     if (SEL.size) { hatchFrom(selEnts()); endCmd(); }
   },
   point(c, p) {
-    const loops = findEnclosing(p);
-    if (!loops.length) return echo('No closed boundary around that point');
-    hatchFrom(loops);
+    const b = findBoundary(p);
+    if (!b) return echo('No closed boundary around that point');
+    hatchRings([b.outer, ...b.holes]);
   },
 });
-/** closed entities whose interior contains p, smallest area first */
-function findEnclosing(p) {
-  const hits = [];
+/** the closed ring an entity encloses, or null if it does not enclose one */
+function ringOf(e) {
+  if ((e.t === 'pline' || e.t === 'spline') && e.closed) return e.pts;
+  if (e.t === 'circle' || e.t === 'ellipse') return poly(e, 64);
+  if (e.t === 'room') return e.pts;
+  if (e.t === 'wall') return wallOutline(e);
+  return null;
+}
+/** every closed ring in the drawing, with its area */
+function closedRings() {
+  const out = [];
   for (const e of DOC.ents.values()) {
     if (!visible(e)) continue;
-    let ring = null;
-    if ((e.t === 'pline' || e.t === 'spline') && e.closed) ring = e.pts;
-    else if (e.t === 'circle' || e.t === 'ellipse') ring = poly(e, 64);
-    else if (e.t === 'room') ring = e.pts;
-    else if (e.t === 'wall') ring = wallOutline(e);
+    const ring = ringOf(e);
     if (!ring || ring.length < 3) continue;
-    if (pointInPoly(p, ring)) hits.push({ e, a: polyArea(ring) });
+    out.push({ e, ring, a: Math.abs(polyArea(ring)) });
   }
-  hits.sort((x, y) => x.a - y.a);
-  return hits.length ? [hits[0].e] : [];
+  return out;
+}
+/** is every point of `inner` inside `outer`? */
+function ringInside(inner, outer) {
+  for (const q of inner) if (!pointInPoly(q, outer)) return false;
+  return true;
+}
+/* ---------------- island detection ----------------
+   A room with a column in it is one boundary and one hole, and hatching over
+   the column is the difference between a drawing and a picture of one. The
+   smallest ring containing the pick is the boundary; anything closed that sits
+   wholly inside it, and inside nothing smaller, is a hole. Nesting is handled
+   by that second condition: a duct inside a riser inside a room leaves the
+   riser as the hole and the duct as solid again, which is what alternating
+   fill means and what AutoCAD calls Normal island detection. */
+function findEnclosing(p) {
+  const rings = closedRings();
+  const inside = rings.filter(r => pointInPoly(p, r.ring)).sort((x, y) => x.a - y.a);
+  if (!inside.length) return [];
+  return [inside[0].e];
+}
+/** the boundary containing p, plus the rings that are holes in it */
+function findBoundary(p) {
+  const rings = closedRings();
+  const inside = rings.filter(r => pointInPoly(p, r.ring)).sort((x, y) => x.a - y.a);
+  if (!inside.length) return null;
+  const outer = inside[0];
+  const holes = [];
+  for (const r of rings) {
+    if (r.e.id === outer.e.id) continue;
+    if (r.a >= outer.a) continue;
+    if (!ringInside(r.ring, outer.ring)) continue;
+    /* only rings that are not themselves inside a smaller candidate: the
+       first level down is a hole, the level below that is filled again */
+    const nestedInAnother = rings.some(o =>
+      o.e.id !== r.e.id && o.e.id !== outer.e.id &&
+      o.a < outer.a && o.a > r.a && ringInside(r.ring, o.ring));
+    if (!nestedInAnother) holes.push(r.ring);
+  }
+  return { outer: outer.ring, holes };
 }
 function hatchFrom(ents) {
   const loops = [];
-  for (const e of ents) {
-    if ((e.t === 'pline' || e.t === 'spline') && e.closed) loops.push(e.pts);
-    else if (e.t === 'circle' || e.t === 'ellipse') loops.push(poly(e, 64));
-    else if (e.t === 'room') loops.push(e.pts);
-    else if (e.t === 'wall') loops.push(wallOutline(e));
-  }
+  for (const e of ents) { const r = ringOf(e); if (r) loops.push(r); }
+  return hatchRings(loops);
+}
+function hatchRings(loops) {
+  loops = (loops || []).filter(L => L && L.length >= 3);
   if (!loops.length) return echo('Select closed shapes to hatch');
   modal(`<h3>Hatch</h3>
     <div class="row"><label>Pattern</label><select class="f" id="hp">
