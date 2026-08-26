@@ -1887,7 +1887,64 @@ function dimText(e, val) {
   if (s.prec != null && DOC.units !== 'ft') return (val / U[DOC.units]).toFixed(s.prec);
   return fmt(val);
 }
-function dimGeom(e) {
+/* ---------------- associative dimensions ----------------
+   A dimension that keeps a copy of two coordinates starts lying the moment the
+   wall it measures is moved, and a drawing full of confidently wrong numbers is
+   worse than one with none. An associative dimension stores a reference to the
+   geometry instead, and is resolved every time it is drawn, exported or
+   measured — so it cannot go stale between an edit and a redraw. */
+/** the point a reference names, or null if it no longer exists */
+function refPointOf(host, at, ref) {
+  if (!host) return null;
+  let base = null;
+  if (at === 'a') base = host.a;
+  else if (at === 'b') base = host.b;
+  else if (at === 'c') base = host.c;
+  else if (at === 'p') base = host.p;
+  else if (at === 'mid' && host.a && host.b) base = mid(host.a, host.b);
+  else if (typeof at === 'number' && host.pts) base = host.pts[at];
+  if (!base) return null;
+  /* An offset recorded in the entity's own frame is rebuilt from the frame it
+     has NOW, so the point follows the wall through a stretch or a rotation
+     rather than staying where the world used to be. */
+  if (ref && (ref.du || ref.dv) && host.a && host.b) {
+    const L = dist(host.a, host.b);
+    if (L < 1e-9) return base;
+    const ux = (host.b[0] - host.a[0]) / L, uy = (host.b[1] - host.a[1]) / L;
+    return [base[0] + ux * (ref.du || 0) - uy * (ref.dv || 0),
+            base[1] + uy * (ref.du || 0) + ux * (ref.dv || 0)];
+  }
+  return base;
+}
+/** One end of a dimension: the live geometry if it is attached and still
+    there, otherwise the last coordinate it saw. Losing the host does not
+    invalidate the dimension — AutoCAD keeps it and simply stops updating it,
+    which is also the only answer that does not silently delete work. */
+function dimEnd(e, which) {
+  const ref = which === 1 ? e.r1 : e.r2;
+  const fallback = which === 1 ? e.p1 : e.p2;
+  if (!ref) return fallback;
+  const p = refPointOf(DOC.ents.get(ref.id), ref.at, ref);
+  return p || fallback;
+}
+/** true when a dimension is attached to geometry that still exists */
+function dimAssoc(e) {
+  for (const ref of [e.r1, e.r2]) {
+    if (!ref) continue;
+    if (refPointOf(DOC.ents.get(ref.id), ref.at, ref)) return true;
+  }
+  return false;
+}
+function dimGeom(e0) {
+  /* Resolve any association once, then work from the live points. The body
+     below is unchanged and still reads p1/p2: an associative dimension simply
+     hands it a view of itself in which those are current. Doing it here means
+     drawing, exporting, plotting and measuring all get the same answer, and
+     none of them can see a stale one. */
+  const P1 = dimEnd(e0, 1), P2 = dimEnd(e0, 2);
+  const e = (P1 === e0.p1 && P2 === e0.p2)
+    ? e0
+    : Object.assign({}, e0, { p1: P1, p2: P2 });
   const S = dimStyle();
   const lines = [], arrows = [];
   if (e.k === 'radius' || e.k === 'diameter') {
@@ -5572,8 +5629,12 @@ function entSnaps(e, dEnt, raw, ref, r, push, on) {
   on = on || activeModes();
   switch (e.t) {
     case 'line': {
-      if (on.end) { push(e.a, 'end'); push(e.b, 'end'); }
-      if (on.mid) push(mid(e.a, e.b), 'mid');
+      /* meta names the geometry a snap came from. Nothing needed it until
+         dimensions had to stay attached to what they measure; it costs one
+         object per candidate and makes association possible at all. */
+      if (on.end) { push(e.a, 'end', null, null, false, { id: e.id, at: 'a' });
+                    push(e.b, 'end', null, null, false, { id: e.id, at: 'b' }); }
+      if (on.mid) push(mid(e.a, e.b), 'mid', null, null, false, { id: e.id, at: 'mid' });
       if (ref && on.perp) perpOnSeg(e.a, e.b, ref, raw, push);
       break;
     }
@@ -5585,7 +5646,11 @@ function entSnaps(e, dEnt, raw, ref, r, push, on) {
     }
     case 'pline': case 'spline': {
       const P = e.t === 'spline' ? poly(e, 48) : e.pts;
-      if (on.end) for (const p of (e.t === 'spline' ? [e.pts[0], e.pts[e.pts.length - 1]] : P)) push(p, 'end');
+      if (on.end) {
+        if (e.t === 'spline') { push(e.pts[0], 'end', null, null, false, { id: e.id, at: 0 });
+          push(e.pts[e.pts.length - 1], 'end', null, null, false, { id: e.id, at: e.pts.length - 1 }); }
+        else P.forEach((p, i) => push(p, 'end', null, null, false, { id: e.id, at: i }));
+      }
       if (on.end && e.t === 'spline' && e.fit) for (const p of e.fit) push(p, 'end');
       const Q = e.closed ? [...P, P[0]] : P;
       for (let i = 1; i < Q.length; i++) {
@@ -5640,10 +5705,20 @@ function entSnaps(e, dEnt, raw, ref, r, push, on) {
     }
     default: {
       if (!GEOM[e.t]) break;
+      /* An architectural entity snaps to its GENERATED geometry — a wall's
+         corners are faces, derived from its centreline and thickness, and no
+         simple reference can name one. So a snap here is attached only when it
+         lands on a point the entity is actually defined BY: the ends of the
+         centreline. That covers what dimensions are for on a plan, wall end to
+         wall end, and refuses to invent an attachment for the rest. */
+      const dref = q => defPointRef(e, q);
       for (const s of shapes(e, 24)) {
         if (s.pts) {
-          if (on.end) for (const p of s.pts) push(p, 'end');
-          if (on.mid && s.pts.length === 2) push(mid(s.pts[0], s.pts[1]), 'mid');
+          if (on.end) for (const p of s.pts) push(p, 'end', null, null, false, dref(p));
+          if (on.mid && s.pts.length === 2) {
+            const m = mid(s.pts[0], s.pts[1]);
+            push(m, 'mid', null, null, false, dref(m));
+          }
           if (ref && on.perp) for (let i = 1; i < s.pts.length; i++) perpOnSeg(s.pts[i - 1], s.pts[i], ref, raw, push);
         } else if (s.c && s.r != null) {
           if (on.cen) centreSnap({ t: 'circle', c: s.c, r: s.r }, s.c, raw, dEnt, r, push);
@@ -5872,10 +5947,13 @@ function wallSnaps(w, raw, ref, push, on) {
   on = on || activeModes();
   if (wallLen(w) < EPS) return;
   if (on.wcen) {
-    if (on.end) { push(w.a, 'end'); push(w.b, 'end'); }
-    if (on.mid) push(mid(w.a, w.b), 'mid');
+    /* The centreline ends ARE the points a wall is defined by, so a dimension
+       snapped here attaches to the wall itself and follows it. */
+    if (on.end) { push(w.a, 'end', null, null, false, { id: w.id, at: 'a' });
+                  push(w.b, 'end', null, null, false, { id: w.id, at: 'b' }); }
+    if (on.mid) push(mid(w.a, w.b), 'mid', null, null, false, { id: w.id, at: 'mid' });
     const c = segClosest(raw, w.a, w.b);
-    push(c.p, 'wcen', dist(raw, c.p));
+    push(c.p, 'wcen', dist(raw, c.p), null, false, defPointRef(w, c.p));
     if (ref && on.perp) perpOnSeg(w.a, w.b, ref, raw, push);
   }
   if (!on.wface) return;
@@ -5891,7 +5969,7 @@ function wallSnaps(w, raw, ref, push, on) {
     if (on.end) { push(a, 'end'); push(b, 'end'); }
     if (on.mid) push(mid(a, b), 'mid');
     const c = segClosest(raw, a, b);
-    push(c.p, 'wface', dist(raw, c.p));
+    push(c.p, 'wface', dist(raw, c.p), null, false, defPointRef(w, c.p));
     if (ref && on.perp) perpOnSeg(a, b, ref, raw, push);
   }
   if (allWalls().length > 240) { ST.snapLimited = true; return; }
@@ -5901,7 +5979,7 @@ function wallSnaps(w, raw, ref, push, on) {
     if (on.end) { push(a, 'end'); push(b, 'end'); }
     if (on.mid) push(mid(a, b), 'mid');
     const c = segClosest(raw, a, b);
-    push(c.p, 'wface', dist(raw, c.p));
+    push(c.p, 'wface', dist(raw, c.p), null, false, defPointRef(w, c.p));
   }
 }
 /** walls whose *body* comes near the cursor, closest first.
@@ -6872,6 +6950,39 @@ function draftToggle(k, val) {
   if (typeof syncToggles === 'function') syncToggles();
   if (typeof draw === 'function') draw();
   return v;
+}
+
+/** A reference to the point an entity is DEFINED by, when the given point is
+    one of them. Exact equality is the right test: these points come out of the
+    same numbers, so anything that is not exact is a different point and
+    attaching to it would be a guess. */
+function defPointRef(e, p) {
+  if (!e || e.id == null || !p) return null;
+  const same = q => q && Math.abs(q[0] - p[0]) < 1e-9 && Math.abs(q[1] - p[1]) < 1e-9;
+  if (same(e.a)) return { id: e.id, at: 'a' };
+  if (same(e.b)) return { id: e.id, at: 'b' };
+  if (same(e.c)) return { id: e.id, at: 'c' };
+  if (same(e.p)) return { id: e.id, at: 'p' };
+  /* A wall's corner is a FACE corner: derived from the centreline and the
+     thickness, and not a point the wall is defined by. Recording it as an
+     offset from the nearer end, measured in the wall's OWN frame rather than
+     in the world, means the attachment survives the wall being stretched,
+     moved and turned — which is most of what happens to a wall. */
+  if (e.a && e.b) {
+    const L = dist(e.a, e.b);
+    if (L < 1e-9) return null;
+    const ux = (e.b[0] - e.a[0]) / L, uy = (e.b[1] - e.a[1]) / L;
+    const nearA = dist(p, e.a) <= dist(p, e.b);
+    const base = nearA ? e.a : e.b;
+    const dx = p[0] - base[0], dy = p[1] - base[1];
+    const du = dx * ux + dy * uy;
+    const dv = dx * -uy + dy * ux;
+    /* only near an end — a point out along the wall is not that end */
+    if (Math.abs(du) > L * 0.5 + 1e-6) return null;
+    if (Math.abs(du) < 1e-9 && Math.abs(dv) < 1e-9) return { id: e.id, at: nearA ? 'a' : 'b' };
+    return { id: e.id, at: nearA ? 'a' : 'b', du, dv };
+  }
+  return null;
 }
 
 /* ===== 07-cmd.js ===== */
@@ -8075,6 +8186,22 @@ const DIM_PROMPT = {
   radius: 'Select arc or circle:', diameter: 'Select arc or circle:',
   angular: 'Specify vertex point:',
 };
+/** The geometry the current snap came from, if it came from any. This is how
+    a dimension ends up attached to a wall rather than to a pair of numbers: at
+    the moment of the pick the snap knows what it hit, and a moment later
+    nothing does. */
+function snapRef() {
+  const m = ST.snap && ST.snap.meta;
+  if (!m || m.id == null) return null;
+  return DOC.ents.get(m.id) ? { id: m.id, at: m.at } : null;
+}
+/** attach r1/r2 only when there is something to attach to, so a plain
+    dimension stays a plain object in the saved file */
+function withRefs(d, refs) {
+  if (refs && refs[0]) d.r1 = refs[0];
+  if (refs && refs[1]) d.r2 = refs[1];
+  return d;
+}
 defc('dim', {
   hint: 'Specify first extension line origin or [Linear/ALigned/ANgular/Radius/Diameter/Horizontal/Vertical]:',
   group: 'annotate',
@@ -8104,13 +8231,16 @@ defc('dim', {
       return;
     }
     c.pts.push(p);
+    (c.refs || (c.refs = [])).push(snapRef());
     if (c.pts.length === 3) {
       const [a, b, o] = c.pts;
       const k = c.k === 'linear' ? linearK(a, b, o) : c.k;
       const u = k === 'horizontal' ? [1, 0] : k === 'vertical' ? [0, 1] : norm(sub(b, a));
       const off = dot(sub(o, a), perp(u));
-      begin(); addEnt({ t: 'dim', k, p1: a, p2: b, off, layer: dimLayer() }); commit('Dimension');
-      c.pts = []; hint('Specify first extension line origin:');
+      begin();
+      addEnt(withRefs({ t: 'dim', k, p1: a, p2: b, off, layer: dimLayer() }, c.refs));
+      commit('Dimension');
+      c.pts = []; c.refs = []; hint('Specify first extension line origin:');
     } else hint(c.pts.length === 1 ? 'Specify second extension line origin:' : 'Specify dimension line location:');
   },
   preview(c, p) {
@@ -12394,7 +12524,23 @@ function roomForSave(e) {
   if (!pts || pts === e.pts) return e;
   return Object.assign({}, e, { pts: pts.map(p => p.slice()) });
 }
+/** Bring every associative dimension's stored coordinates up to date with the
+    geometry it is attached to. Those coordinates are only ever a fallback —
+    what is drawn is resolved live — but they are what a file carries, and what
+    is left if the host is later deleted. Refreshing them here rather than
+    during a redraw keeps the write outside the hot path and, more importantly,
+    out of the journal, where an unjournalled mutation has cost this program
+    data before. */
+function syncDimCache() {
+  for (const e of DOC.ents.values()) {
+    if (e.t !== 'dim' || (!e.r1 && !e.r2)) continue;
+    const P1 = dimEnd(e, 1), P2 = dimEnd(e, 2);
+    if (P1 && P1 !== e.p1) e.p1 = P1.slice();
+    if (P2 && P2 !== e.p2) e.p2 = P2.slice();
+  }
+}
 function saveNative() {
+  syncDimCache();
   return JSON.stringify({
     app: 'orthograph', v: FILE_VERSION, units: DOC.units, textH: DOC.textH,
     gridStep: DOC.gridStep, snapStep: DOC.snapStep, dimStyle: DOC.dimStyle || null,

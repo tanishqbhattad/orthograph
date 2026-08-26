@@ -751,8 +751,12 @@ function entSnaps(e, dEnt, raw, ref, r, push, on) {
   on = on || activeModes();
   switch (e.t) {
     case 'line': {
-      if (on.end) { push(e.a, 'end'); push(e.b, 'end'); }
-      if (on.mid) push(mid(e.a, e.b), 'mid');
+      /* meta names the geometry a snap came from. Nothing needed it until
+         dimensions had to stay attached to what they measure; it costs one
+         object per candidate and makes association possible at all. */
+      if (on.end) { push(e.a, 'end', null, null, false, { id: e.id, at: 'a' });
+                    push(e.b, 'end', null, null, false, { id: e.id, at: 'b' }); }
+      if (on.mid) push(mid(e.a, e.b), 'mid', null, null, false, { id: e.id, at: 'mid' });
       if (ref && on.perp) perpOnSeg(e.a, e.b, ref, raw, push);
       break;
     }
@@ -764,7 +768,11 @@ function entSnaps(e, dEnt, raw, ref, r, push, on) {
     }
     case 'pline': case 'spline': {
       const P = e.t === 'spline' ? poly(e, 48) : e.pts;
-      if (on.end) for (const p of (e.t === 'spline' ? [e.pts[0], e.pts[e.pts.length - 1]] : P)) push(p, 'end');
+      if (on.end) {
+        if (e.t === 'spline') { push(e.pts[0], 'end', null, null, false, { id: e.id, at: 0 });
+          push(e.pts[e.pts.length - 1], 'end', null, null, false, { id: e.id, at: e.pts.length - 1 }); }
+        else P.forEach((p, i) => push(p, 'end', null, null, false, { id: e.id, at: i }));
+      }
       if (on.end && e.t === 'spline' && e.fit) for (const p of e.fit) push(p, 'end');
       const Q = e.closed ? [...P, P[0]] : P;
       for (let i = 1; i < Q.length; i++) {
@@ -819,10 +827,20 @@ function entSnaps(e, dEnt, raw, ref, r, push, on) {
     }
     default: {
       if (!GEOM[e.t]) break;
+      /* An architectural entity snaps to its GENERATED geometry — a wall's
+         corners are faces, derived from its centreline and thickness, and no
+         simple reference can name one. So a snap here is attached only when it
+         lands on a point the entity is actually defined BY: the ends of the
+         centreline. That covers what dimensions are for on a plan, wall end to
+         wall end, and refuses to invent an attachment for the rest. */
+      const dref = q => defPointRef(e, q);
       for (const s of shapes(e, 24)) {
         if (s.pts) {
-          if (on.end) for (const p of s.pts) push(p, 'end');
-          if (on.mid && s.pts.length === 2) push(mid(s.pts[0], s.pts[1]), 'mid');
+          if (on.end) for (const p of s.pts) push(p, 'end', null, null, false, dref(p));
+          if (on.mid && s.pts.length === 2) {
+            const m = mid(s.pts[0], s.pts[1]);
+            push(m, 'mid', null, null, false, dref(m));
+          }
           if (ref && on.perp) for (let i = 1; i < s.pts.length; i++) perpOnSeg(s.pts[i - 1], s.pts[i], ref, raw, push);
         } else if (s.c && s.r != null) {
           if (on.cen) centreSnap({ t: 'circle', c: s.c, r: s.r }, s.c, raw, dEnt, r, push);
@@ -1051,10 +1069,13 @@ function wallSnaps(w, raw, ref, push, on) {
   on = on || activeModes();
   if (wallLen(w) < EPS) return;
   if (on.wcen) {
-    if (on.end) { push(w.a, 'end'); push(w.b, 'end'); }
-    if (on.mid) push(mid(w.a, w.b), 'mid');
+    /* The centreline ends ARE the points a wall is defined by, so a dimension
+       snapped here attaches to the wall itself and follows it. */
+    if (on.end) { push(w.a, 'end', null, null, false, { id: w.id, at: 'a' });
+                  push(w.b, 'end', null, null, false, { id: w.id, at: 'b' }); }
+    if (on.mid) push(mid(w.a, w.b), 'mid', null, null, false, { id: w.id, at: 'mid' });
     const c = segClosest(raw, w.a, w.b);
-    push(c.p, 'wcen', dist(raw, c.p));
+    push(c.p, 'wcen', dist(raw, c.p), null, false, defPointRef(w, c.p));
     if (ref && on.perp) perpOnSeg(w.a, w.b, ref, raw, push);
   }
   if (!on.wface) return;
@@ -1070,7 +1091,7 @@ function wallSnaps(w, raw, ref, push, on) {
     if (on.end) { push(a, 'end'); push(b, 'end'); }
     if (on.mid) push(mid(a, b), 'mid');
     const c = segClosest(raw, a, b);
-    push(c.p, 'wface', dist(raw, c.p));
+    push(c.p, 'wface', dist(raw, c.p), null, false, defPointRef(w, c.p));
     if (ref && on.perp) perpOnSeg(a, b, ref, raw, push);
   }
   if (allWalls().length > 240) { ST.snapLimited = true; return; }
@@ -1080,7 +1101,7 @@ function wallSnaps(w, raw, ref, push, on) {
     if (on.end) { push(a, 'end'); push(b, 'end'); }
     if (on.mid) push(mid(a, b), 'mid');
     const c = segClosest(raw, a, b);
-    push(c.p, 'wface', dist(raw, c.p));
+    push(c.p, 'wface', dist(raw, c.p), null, false, defPointRef(w, c.p));
   }
 }
 /** walls whose *body* comes near the cursor, closest first.
@@ -2051,4 +2072,37 @@ function draftToggle(k, val) {
   if (typeof syncToggles === 'function') syncToggles();
   if (typeof draw === 'function') draw();
   return v;
+}
+
+/** A reference to the point an entity is DEFINED by, when the given point is
+    one of them. Exact equality is the right test: these points come out of the
+    same numbers, so anything that is not exact is a different point and
+    attaching to it would be a guess. */
+function defPointRef(e, p) {
+  if (!e || e.id == null || !p) return null;
+  const same = q => q && Math.abs(q[0] - p[0]) < 1e-9 && Math.abs(q[1] - p[1]) < 1e-9;
+  if (same(e.a)) return { id: e.id, at: 'a' };
+  if (same(e.b)) return { id: e.id, at: 'b' };
+  if (same(e.c)) return { id: e.id, at: 'c' };
+  if (same(e.p)) return { id: e.id, at: 'p' };
+  /* A wall's corner is a FACE corner: derived from the centreline and the
+     thickness, and not a point the wall is defined by. Recording it as an
+     offset from the nearer end, measured in the wall's OWN frame rather than
+     in the world, means the attachment survives the wall being stretched,
+     moved and turned — which is most of what happens to a wall. */
+  if (e.a && e.b) {
+    const L = dist(e.a, e.b);
+    if (L < 1e-9) return null;
+    const ux = (e.b[0] - e.a[0]) / L, uy = (e.b[1] - e.a[1]) / L;
+    const nearA = dist(p, e.a) <= dist(p, e.b);
+    const base = nearA ? e.a : e.b;
+    const dx = p[0] - base[0], dy = p[1] - base[1];
+    const du = dx * ux + dy * uy;
+    const dv = dx * -uy + dy * ux;
+    /* only near an end — a point out along the wall is not that end */
+    if (Math.abs(du) > L * 0.5 + 1e-6) return null;
+    if (Math.abs(du) < 1e-9 && Math.abs(dv) < 1e-9) return { id: e.id, at: nearA ? 'a' : 'b' };
+    return { id: e.id, at: nearA ? 'a' : 'b', du, dv };
+  }
+  return null;
 }

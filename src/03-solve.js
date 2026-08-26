@@ -348,7 +348,64 @@ function dimText(e, val) {
   if (s.prec != null && DOC.units !== 'ft') return (val / U[DOC.units]).toFixed(s.prec);
   return fmt(val);
 }
-function dimGeom(e) {
+/* ---------------- associative dimensions ----------------
+   A dimension that keeps a copy of two coordinates starts lying the moment the
+   wall it measures is moved, and a drawing full of confidently wrong numbers is
+   worse than one with none. An associative dimension stores a reference to the
+   geometry instead, and is resolved every time it is drawn, exported or
+   measured — so it cannot go stale between an edit and a redraw. */
+/** the point a reference names, or null if it no longer exists */
+function refPointOf(host, at, ref) {
+  if (!host) return null;
+  let base = null;
+  if (at === 'a') base = host.a;
+  else if (at === 'b') base = host.b;
+  else if (at === 'c') base = host.c;
+  else if (at === 'p') base = host.p;
+  else if (at === 'mid' && host.a && host.b) base = mid(host.a, host.b);
+  else if (typeof at === 'number' && host.pts) base = host.pts[at];
+  if (!base) return null;
+  /* An offset recorded in the entity's own frame is rebuilt from the frame it
+     has NOW, so the point follows the wall through a stretch or a rotation
+     rather than staying where the world used to be. */
+  if (ref && (ref.du || ref.dv) && host.a && host.b) {
+    const L = dist(host.a, host.b);
+    if (L < 1e-9) return base;
+    const ux = (host.b[0] - host.a[0]) / L, uy = (host.b[1] - host.a[1]) / L;
+    return [base[0] + ux * (ref.du || 0) - uy * (ref.dv || 0),
+            base[1] + uy * (ref.du || 0) + ux * (ref.dv || 0)];
+  }
+  return base;
+}
+/** One end of a dimension: the live geometry if it is attached and still
+    there, otherwise the last coordinate it saw. Losing the host does not
+    invalidate the dimension — AutoCAD keeps it and simply stops updating it,
+    which is also the only answer that does not silently delete work. */
+function dimEnd(e, which) {
+  const ref = which === 1 ? e.r1 : e.r2;
+  const fallback = which === 1 ? e.p1 : e.p2;
+  if (!ref) return fallback;
+  const p = refPointOf(DOC.ents.get(ref.id), ref.at, ref);
+  return p || fallback;
+}
+/** true when a dimension is attached to geometry that still exists */
+function dimAssoc(e) {
+  for (const ref of [e.r1, e.r2]) {
+    if (!ref) continue;
+    if (refPointOf(DOC.ents.get(ref.id), ref.at, ref)) return true;
+  }
+  return false;
+}
+function dimGeom(e0) {
+  /* Resolve any association once, then work from the live points. The body
+     below is unchanged and still reads p1/p2: an associative dimension simply
+     hands it a view of itself in which those are current. Doing it here means
+     drawing, exporting, plotting and measuring all get the same answer, and
+     none of them can see a stale one. */
+  const P1 = dimEnd(e0, 1), P2 = dimEnd(e0, 2);
+  const e = (P1 === e0.p1 && P2 === e0.p2)
+    ? e0
+    : Object.assign({}, e0, { p1: P1, p2: P2 });
   const S = dimStyle();
   const lines = [], arrows = [];
   if (e.k === 'radius' || e.k === 'diameter') {

@@ -208,7 +208,23 @@ function roomForSave(e) {
   if (!pts || pts === e.pts) return e;
   return Object.assign({}, e, { pts: pts.map(p => p.slice()) });
 }
+/** Bring every associative dimension's stored coordinates up to date with the
+    geometry it is attached to. Those coordinates are only ever a fallback —
+    what is drawn is resolved live — but they are what a file carries, and what
+    is left if the host is later deleted. Refreshing them here rather than
+    during a redraw keeps the write outside the hot path and, more importantly,
+    out of the journal, where an unjournalled mutation has cost this program
+    data before. */
+function syncDimCache() {
+  for (const e of DOC.ents.values()) {
+    if (e.t !== 'dim' || (!e.r1 && !e.r2)) continue;
+    const P1 = dimEnd(e, 1), P2 = dimEnd(e, 2);
+    if (P1 && P1 !== e.p1) e.p1 = P1.slice();
+    if (P2 && P2 !== e.p2) e.p2 = P2.slice();
+  }
+}
 function saveNative() {
+  syncDimCache();
   return JSON.stringify({
     app: 'orthograph', v: FILE_VERSION, units: DOC.units, textH: DOC.textH,
     gridStep: DOC.gridStep, snapStep: DOC.snapStep, dimStyle: DOC.dimStyle || null,

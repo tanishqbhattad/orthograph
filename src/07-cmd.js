@@ -1198,6 +1198,22 @@ const DIM_PROMPT = {
   radius: 'Select arc or circle:', diameter: 'Select arc or circle:',
   angular: 'Specify vertex point:',
 };
+/** The geometry the current snap came from, if it came from any. This is how
+    a dimension ends up attached to a wall rather than to a pair of numbers: at
+    the moment of the pick the snap knows what it hit, and a moment later
+    nothing does. */
+function snapRef() {
+  const m = ST.snap && ST.snap.meta;
+  if (!m || m.id == null) return null;
+  return DOC.ents.get(m.id) ? { id: m.id, at: m.at } : null;
+}
+/** attach r1/r2 only when there is something to attach to, so a plain
+    dimension stays a plain object in the saved file */
+function withRefs(d, refs) {
+  if (refs && refs[0]) d.r1 = refs[0];
+  if (refs && refs[1]) d.r2 = refs[1];
+  return d;
+}
 defc('dim', {
   hint: 'Specify first extension line origin or [Linear/ALigned/ANgular/Radius/Diameter/Horizontal/Vertical]:',
   group: 'annotate',
@@ -1227,13 +1243,16 @@ defc('dim', {
       return;
     }
     c.pts.push(p);
+    (c.refs || (c.refs = [])).push(snapRef());
     if (c.pts.length === 3) {
       const [a, b, o] = c.pts;
       const k = c.k === 'linear' ? linearK(a, b, o) : c.k;
       const u = k === 'horizontal' ? [1, 0] : k === 'vertical' ? [0, 1] : norm(sub(b, a));
       const off = dot(sub(o, a), perp(u));
-      begin(); addEnt({ t: 'dim', k, p1: a, p2: b, off, layer: dimLayer() }); commit('Dimension');
-      c.pts = []; hint('Specify first extension line origin:');
+      begin();
+      addEnt(withRefs({ t: 'dim', k, p1: a, p2: b, off, layer: dimLayer() }, c.refs));
+      commit('Dimension');
+      c.pts = []; c.refs = []; hint('Specify first extension line origin:');
     } else hint(c.pts.length === 1 ? 'Specify second extension line origin:' : 'Specify dimension line location:');
   },
   preview(c, p) {
