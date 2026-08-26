@@ -827,6 +827,7 @@ function resetDoc() {
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];
+  DOC.dimStyles = stdDimStyles(); DOC.curDim = 'Standard';
   /* a document straight off the shelf has nothing unsaved in it */
   DOC.savedSeq = HIST.seq;
   idxInvalidate(); HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;
@@ -1866,9 +1867,40 @@ function dirFrom(P, L, click) {
 /* ---- dimension geometry ----
    All sizes are model-space, driven by DOC.dimStyle, so a dimension
    plots at a real size and can round-trip through DXF unchanged.     */
-function dimStyle() {
+/* ---------------- named dimension styles ----------------
+   One global set of dimension settings is fine until a drawing needs plan
+   dimensions at one size and detail dimensions at another on the same sheet,
+   which is to say almost immediately. A style is a named set; a dimension may
+   name one, and may carry its own overrides on top of it — that three-step
+   resolution is AutoCAD's, and it is what makes a style worth having rather
+   than a global you keep changing back. */
+function stdDimStyles() {
+  return [{ name: 'Standard' }];
+}
+function dimStyles() {
+  if (!Array.isArray(DOC.dimStyles) || !DOC.dimStyles.length) {
+    DOC.dimStyles = stdDimStyles();
+    /* a document written before styles existed carries its settings in
+       DOC.dimStyle; that becomes Standard rather than being thrown away */
+    if (DOC.dimStyle && typeof DOC.dimStyle === 'object')
+      Object.assign(DOC.dimStyles[0], DOC.dimStyle);
+  }
+  return DOC.dimStyles;
+}
+function dimStyleRec(name) {
+  const n = String(name || '').trim().toLowerCase();
+  return dimStyles().find(x => String(x.name).toLowerCase() === n) || null;
+}
+function curDimStyleRec() {
+  return dimStyleRec(DOC.curDim) || dimStyles()[0];
+}
+/** The settings that apply to one dimension: its own overrides over its named
+    style over the current one. Called with nothing, it answers for the current
+    style, which is what every caller wanted before styles existed. */
+function dimStyle(e) {
   const h = DOC.textH || 2.5;
-  const d = DOC.dimStyle || (DOC.dimStyle = {});
+  const base = (e && e.style && dimStyleRec(e.style)) || curDimStyleRec() || {};
+  const d = (e && e.ovr) ? Object.assign({}, base, e.ovr) : base;
   /* DIMSCALE multiplies every size on a dimension and nothing else, exactly as
      it does in AutoCAD — the measurement itself is untouched. */
   const k = DOC.dimScale == null ? 1 : DOC.dimScale;
@@ -1883,7 +1915,7 @@ function dimStyle() {
 }
 function dimText(e, val) {
   if (e.txt) return e.txt;
-  const s = dimStyle();
+  const s = dimStyle(e);
   if (s.prec != null && DOC.units !== 'ft') return (val / U[DOC.units]).toFixed(s.prec);
   return fmt(val);
 }
@@ -1945,7 +1977,7 @@ function dimGeom(e0) {
   const e = (P1 === e0.p1 && P2 === e0.p2)
     ? e0
     : Object.assign({}, e0, { p1: P1, p2: P2 });
-  const S = dimStyle();
+  const S = dimStyle(e0);
   const lines = [], arrows = [];
   if (e.k === 'radius' || e.k === 'diameter') {
     const c = e.p1, p = e.p2, u = norm(sub(p, c));
@@ -9432,7 +9464,7 @@ function vpPanBy(sh, vp, dxScr, dyScr) {
 /** set a viewport to an exact scale off the ruler, keeping its centre */
 defc('vpscale', {
   key: 'vpscale', group: 'view',
-  hint: 'Scale for this viewport — type <em>50</em> for 1:50, or a ratio',
+  hint: 'Scale for this viewport — type 50 for 1:50, or a ratio',
   init(c) {
     const vp = activeVp() || ((curSheet() || {}).viewports || [])[0];
     if (!vp) { cliPrint('No viewport. Make one with MVIEW.', 'err'); c.done = true; endCmd(true); return; }
@@ -9761,7 +9793,7 @@ defc('mirror', {
 });
 defc('offset', {
   group: 'modify',
-  hint: 'Offset distance · <em>T</em> through · <em>M</em> multiple · <em>E</em> erase source · <em>L</em> layer',
+  hint: 'Offset distance · <em>T</em>hrough · <em>M</em>ultiple · <em>E</em>rase source · <em>L</em>ayer',
   init: c => { c.d = null; c.e = null; c.thru = false;
                c.multiple = false; c.erase = false; c.layerCur = false; },
   text(c, s) {
@@ -9886,8 +9918,8 @@ function trimLike(extending) {
   return {
     group: 'modify',
     hint: extending
-      ? 'Click near the end to extend · <em>F</em> fence · <em>C</em> crossing · hold <em>Shift</em> to trim'
-      : 'Click the piece to remove · <em>F</em> fence · <em>C</em> crossing · <em>R</em> erase · hold <em>Shift</em> to extend',
+      ? 'Click near the end to extend · <em>F</em>ence · <em>C</em>rossing · hold <em>Shift</em> to trim'
+      : 'Click the piece to remove · <em>F</em>ence · <em>C</em>rossing · e<em>R</em>ase · hold <em>Shift</em> to extend',
     init(c) { c.mode = null; c.fence = []; },
     text(c, s) {
       const k = String(s).trim().toLowerCase();
@@ -11494,7 +11526,7 @@ function restoreLayerState(name) {
 }
 defc('layerstate', {
   key: 'layerstate', group: 'view',
-  hint: '<em>S</em> save · <em>R</em> restore · <em>D</em> delete · <em>?</em> list',
+  hint: '<em>S</em>ave · <em>R</em>estore · <em>D</em>elete · <em>?</em> list',
   init(c) { c.data = {}; },
   text(c, s) {
     const raw = String(s).trim(), k = raw.toLowerCase(), d = c.data;
@@ -11522,6 +11554,95 @@ defc('layerstate', {
       return true;
     }
     return false;
+  },
+});
+
+/* ============================================================
+   DIMSTYLE and DIMBASELINE
+   ------------------------------------------------------------
+   A style is only worth having if it can be made, named, set
+   current and applied to what is already drawn. Baseline is the
+   other half of DIMCONTINUE: continue carries on from the last
+   extension line, baseline stacks from the FIRST one, and a
+   drawing needs both.
+   ============================================================ */
+defc('dimstyle', {
+  key: 'dimstyle', group: 'annotate',
+  hint: '<em>S</em>ave · <em>R</em>estore · <em>A</em>pply to selection · <em>?</em> list',
+  init(c) { c.data = {}; },
+  text(c, s) {
+    const raw = String(s).trim(), k = raw.toLowerCase(), d = c.data;
+    if (d.await === 'save') {
+      /* saving captures what the current style resolves to, so "save as" from
+         a tweaked Standard behaves the way anyone expects */
+      const cur = curDimStyleRec() || {};
+      const rec = Object.assign({}, cur, { name: raw });
+      const list = dimStyles();
+      const at = list.findIndex(x => String(x.name).toLowerCase() === k);
+      begin();
+      if (at >= 0) list[at] = rec; else list.push(rec);
+      DOC.curDim = raw;
+      commit('Dimension style');
+      cliPrint('Dimension style "' + raw + '" saved and made current');
+      draw(); return true;
+    }
+    if (d.await === 'set') {
+      if (!dimStyleRec(raw)) { cliPrint('No dimension style called "' + raw + '".', 'err'); return true; }
+      begin(); DOC.curDim = dimStyleRec(raw).name; commit('Current dimension style');
+      cliPrint('Current dimension style is ' + DOC.curDim);
+      draw(); return true;
+    }
+    if (d.await === 'apply') {
+      const rec = dimStyleRec(raw);
+      if (!rec) { cliPrint('No dimension style called "' + raw + '".', 'err'); return true; }
+      const dims = selEnts().filter(e => e.t === 'dim');
+      if (!dims.length) { cliPrint('Select some dimensions first.', 'err'); return true; }
+      begin();
+      for (const e of dims) { mut(e); e.style = rec.name; }
+      commit('Dimension style');
+      cliPrint(dims.length + ' dimension' + (dims.length === 1 ? '' : 's') + ' set to ' + rec.name);
+      draw(); return true;
+    }
+    if (k === 's' || k === 'save') { d.await = 'save'; hint('Name for this dimension style:'); return true; }
+    if (k === 'r' || k === 'set' || k === 'restore') { d.await = 'set'; hint('Style to make current:'); return true; }
+    if (k === 'a' || k === 'apply') { d.await = 'apply'; hint('Style to apply to the selection:'); return true; }
+    if (k === '?' || k === 'list') {
+      cliPrint(dimStyles().map(x =>
+        (x.name === (curDimStyleRec() || {}).name ? '* ' : '  ') + x.name).join('\n'));
+      return true;
+    }
+    return false;
+  },
+});
+
+/** DIMBASELINE — stack a new dimension from the FIRST extension line of the
+    last one, rather than carrying on from its second the way DIMCONTINUE does.
+    The offset grows each time so the dimension lines do not land on top of one
+    another, which is the whole reason baseline dimensions are drawn stacked. */
+defc('dimbase', {
+  key: 'dimbase', group: 'annotate',
+  hint: 'Pick the next extension line origin · <em>Enter</em> to stop',
+  init(c) {
+    const dims = [...DOC.ents.values()].filter(e => e.t === 'dim' && e.k !== 'angular'
+      && e.k !== 'radius' && e.k !== 'diameter');
+    c.base = dims.length ? dims[dims.length - 1] : null;
+    if (!c.base) { cliPrint('Draw one dimension first, then stack from it.', 'err'); endCmd(true); return; }
+    c.step = 0;
+    /* the gap between stacked dimension lines: the text height plus a little,
+       scaled the same way every other dimension size is */
+    c.gap = dimStyle(c.base).txt * 2.4;
+  },
+  point(c, p) {
+    const b = c.base; if (!b) return;
+    c.step++;
+    const off = b.off + Math.sign(b.off || 1) * c.gap * c.step;
+    begin();
+    const n = addEnt(withRefs({
+      t: 'dim', k: b.k, p1: dimEnd(b, 1), p2: p, off,
+      style: b.style, layer: dimLayer(),
+    }, [b.r1, snapRef()]));
+    commit('Baseline dimension');
+    draw();
   },
 });
 
@@ -12549,6 +12670,7 @@ function saveNative() {
     levels: DOC.levels, curLevel: DOC.curLevel,
     sheets: DOC.sheets || [], curSheet: DOC.curSheet,
     layerStates: DOC.layerStates || [],
+    dimStyles: dimStyles(), curDim: DOC.curDim || 'Standard',
     ents: [...DOC.ents.values()].map(roomForSave),
   });
 }
@@ -12598,6 +12720,8 @@ function loadNative(txt) {
   /* Sheets postdate version 2, so an older file simply has none — that is a
      document with no paper space, not a broken one. */
   DOC.layerStates = Array.isArray(d.layerStates) ? d.layerStates : [];
+  DOC.dimStyles = Array.isArray(d.dimStyles) && d.dimStyles.length ? d.dimStyles : null;
+  DOC.curDim = d.curDim || 'Standard';
   DOC.sheets = Array.isArray(d.sheets) ? d.sheets.filter(sh => sh && sh.w > 0 && sh.h > 0) : [];
   DOC.curSheet = DOC.sheets.some(sh => sh.id === d.curSheet) ? d.curSheet : null;
   SHEET_UID = Math.max(1, ...DOC.sheets.map(sh => (sh.id || 0) + 1),

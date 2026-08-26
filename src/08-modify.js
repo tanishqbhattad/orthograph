@@ -167,7 +167,7 @@ defc('mirror', {
 });
 defc('offset', {
   group: 'modify',
-  hint: 'Offset distance · <em>T</em> through · <em>M</em> multiple · <em>E</em> erase source · <em>L</em> layer',
+  hint: 'Offset distance · <em>T</em>hrough · <em>M</em>ultiple · <em>E</em>rase source · <em>L</em>ayer',
   init: c => { c.d = null; c.e = null; c.thru = false;
                c.multiple = false; c.erase = false; c.layerCur = false; },
   text(c, s) {
@@ -292,8 +292,8 @@ function trimLike(extending) {
   return {
     group: 'modify',
     hint: extending
-      ? 'Click near the end to extend · <em>F</em> fence · <em>C</em> crossing · hold <em>Shift</em> to trim'
-      : 'Click the piece to remove · <em>F</em> fence · <em>C</em> crossing · <em>R</em> erase · hold <em>Shift</em> to extend',
+      ? 'Click near the end to extend · <em>F</em>ence · <em>C</em>rossing · hold <em>Shift</em> to trim'
+      : 'Click the piece to remove · <em>F</em>ence · <em>C</em>rossing · e<em>R</em>ase · hold <em>Shift</em> to extend',
     init(c) { c.mode = null; c.fence = []; },
     text(c, s) {
       const k = String(s).trim().toLowerCase();

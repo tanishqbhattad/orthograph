@@ -146,7 +146,7 @@ function restoreLayerState(name) {
 }
 defc('layerstate', {
   key: 'layerstate', group: 'view',
-  hint: '<em>S</em> save · <em>R</em> restore · <em>D</em> delete · <em>?</em> list',
+  hint: '<em>S</em>ave · <em>R</em>estore · <em>D</em>elete · <em>?</em> list',
   init(c) { c.data = {}; },
   text(c, s) {
     const raw = String(s).trim(), k = raw.toLowerCase(), d = c.data;
@@ -174,5 +174,94 @@ defc('layerstate', {
       return true;
     }
     return false;
+  },
+});
+
+/* ============================================================
+   DIMSTYLE and DIMBASELINE
+   ------------------------------------------------------------
+   A style is only worth having if it can be made, named, set
+   current and applied to what is already drawn. Baseline is the
+   other half of DIMCONTINUE: continue carries on from the last
+   extension line, baseline stacks from the FIRST one, and a
+   drawing needs both.
+   ============================================================ */
+defc('dimstyle', {
+  key: 'dimstyle', group: 'annotate',
+  hint: '<em>S</em>ave · <em>R</em>estore · <em>A</em>pply to selection · <em>?</em> list',
+  init(c) { c.data = {}; },
+  text(c, s) {
+    const raw = String(s).trim(), k = raw.toLowerCase(), d = c.data;
+    if (d.await === 'save') {
+      /* saving captures what the current style resolves to, so "save as" from
+         a tweaked Standard behaves the way anyone expects */
+      const cur = curDimStyleRec() || {};
+      const rec = Object.assign({}, cur, { name: raw });
+      const list = dimStyles();
+      const at = list.findIndex(x => String(x.name).toLowerCase() === k);
+      begin();
+      if (at >= 0) list[at] = rec; else list.push(rec);
+      DOC.curDim = raw;
+      commit('Dimension style');
+      cliPrint('Dimension style "' + raw + '" saved and made current');
+      draw(); return true;
+    }
+    if (d.await === 'set') {
+      if (!dimStyleRec(raw)) { cliPrint('No dimension style called "' + raw + '".', 'err'); return true; }
+      begin(); DOC.curDim = dimStyleRec(raw).name; commit('Current dimension style');
+      cliPrint('Current dimension style is ' + DOC.curDim);
+      draw(); return true;
+    }
+    if (d.await === 'apply') {
+      const rec = dimStyleRec(raw);
+      if (!rec) { cliPrint('No dimension style called "' + raw + '".', 'err'); return true; }
+      const dims = selEnts().filter(e => e.t === 'dim');
+      if (!dims.length) { cliPrint('Select some dimensions first.', 'err'); return true; }
+      begin();
+      for (const e of dims) { mut(e); e.style = rec.name; }
+      commit('Dimension style');
+      cliPrint(dims.length + ' dimension' + (dims.length === 1 ? '' : 's') + ' set to ' + rec.name);
+      draw(); return true;
+    }
+    if (k === 's' || k === 'save') { d.await = 'save'; hint('Name for this dimension style:'); return true; }
+    if (k === 'r' || k === 'set' || k === 'restore') { d.await = 'set'; hint('Style to make current:'); return true; }
+    if (k === 'a' || k === 'apply') { d.await = 'apply'; hint('Style to apply to the selection:'); return true; }
+    if (k === '?' || k === 'list') {
+      cliPrint(dimStyles().map(x =>
+        (x.name === (curDimStyleRec() || {}).name ? '* ' : '  ') + x.name).join('\n'));
+      return true;
+    }
+    return false;
+  },
+});
+
+/** DIMBASELINE — stack a new dimension from the FIRST extension line of the
+    last one, rather than carrying on from its second the way DIMCONTINUE does.
+    The offset grows each time so the dimension lines do not land on top of one
+    another, which is the whole reason baseline dimensions are drawn stacked. */
+defc('dimbase', {
+  key: 'dimbase', group: 'annotate',
+  hint: 'Pick the next extension line origin · <em>Enter</em> to stop',
+  init(c) {
+    const dims = [...DOC.ents.values()].filter(e => e.t === 'dim' && e.k !== 'angular'
+      && e.k !== 'radius' && e.k !== 'diameter');
+    c.base = dims.length ? dims[dims.length - 1] : null;
+    if (!c.base) { cliPrint('Draw one dimension first, then stack from it.', 'err'); endCmd(true); return; }
+    c.step = 0;
+    /* the gap between stacked dimension lines: the text height plus a little,
+       scaled the same way every other dimension size is */
+    c.gap = dimStyle(c.base).txt * 2.4;
+  },
+  point(c, p) {
+    const b = c.base; if (!b) return;
+    c.step++;
+    const off = b.off + Math.sign(b.off || 1) * c.gap * c.step;
+    begin();
+    const n = addEnt(withRefs({
+      t: 'dim', k: b.k, p1: dimEnd(b, 1), p2: p, off,
+      style: b.style, layer: dimLayer(),
+    }, [b.r1, snapRef()]));
+    commit('Baseline dimension');
+    draw();
   },
 });

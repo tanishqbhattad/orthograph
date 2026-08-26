@@ -233,6 +233,7 @@ function saveNative() {
     levels: DOC.levels, curLevel: DOC.curLevel,
     sheets: DOC.sheets || [], curSheet: DOC.curSheet,
     layerStates: DOC.layerStates || [],
+    dimStyles: dimStyles(), curDim: DOC.curDim || 'Standard',
     ents: [...DOC.ents.values()].map(roomForSave),
   });
 }
@@ -282,6 +283,8 @@ function loadNative(txt) {
   /* Sheets postdate version 2, so an older file simply has none — that is a
      document with no paper space, not a broken one. */
   DOC.layerStates = Array.isArray(d.layerStates) ? d.layerStates : [];
+  DOC.dimStyles = Array.isArray(d.dimStyles) && d.dimStyles.length ? d.dimStyles : null;
+  DOC.curDim = d.curDim || 'Standard';
   DOC.sheets = Array.isArray(d.sheets) ? d.sheets.filter(sh => sh && sh.w > 0 && sh.h > 0) : [];
   DOC.curSheet = DOC.sheets.some(sh => sh.id === d.curSheet) ? d.curSheet : null;
   SHEET_UID = Math.max(1, ...DOC.sheets.map(sh => (sh.id || 0) + 1),

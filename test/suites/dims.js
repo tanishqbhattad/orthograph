@@ -203,4 +203,110 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(Math.abs(r.at1[0] + 115) < 1e-6 && Math.abs(r.at1[1]) < 1e-6,
       'and turns with the wall, got ' + r.at1.map(n => +n.toFixed(3)).join(','));
   });
+
+  group('named dimension styles');
+
+  /* A drawing needs plan dimensions at one size and detail dimensions at
+     another on the same sheet, which is why one global set of settings stops
+     being enough almost immediately. */
+  t('a dimension can name its own style, and falls back to the current one', () => {
+    const r = R(`${SETUP}
+      begin(); addEnt({t:'line', a:[0,0], b:[3000,0], layer:'0'}); commit('l');
+      cancelCmd();
+      startCmd('dim'); cmdPoint([0,0]); cmdPoint([3000,0]); cmdPoint([1500,-600]);
+      endCmd(true);
+      const d = [...DOC.ents.values()].find(e => e.t === 'dim');
+      const asStandard = dimStyle(d).txt;
+      /* a bigger style for details */
+      dimStyles().push({ name: 'Detail', txt: 5 });
+      const stillStandard = dimStyle(d).txt;
+      d.style = 'Detail';
+      const asDetail = dimStyle(d).txt;
+      /* an override on the dimension itself beats its style */
+      d.ovr = { txt: 9 };
+      const asOverride = dimStyle(d).txt;
+      /* and the current style is what a dimension with no style of its own gets */
+      DOC.curDim = 'Detail';
+      const plain = dimStyle({ t: 'dim' }).txt;
+      return { asStandard, stillStandard, asDetail, asOverride, plain,
+               names: dimStyles().map(x => x.name) };`);
+    eq(r.stillStandard, r.asStandard, 'adding a style changes nothing on its own');
+    eq(r.asDetail, 5, 'naming a style uses it, got ' + r.asDetail);
+    eq(r.asOverride, 9, 'and the dimension’s own override beats the style');
+    eq(r.plain, 5, 'a dimension with no style of its own follows the current one');
+    eq(r.names.join(','), 'Standard,Detail');
+  });
+
+  t('DIMSTYLE saves, sets current, and applies to a selection', () => {
+    const r = R(`${SETUP}
+      begin(); addEnt({t:'line', a:[0,0], b:[3000,0], layer:'0'}); commit('l');
+      cancelCmd();
+      startCmd('dim'); cmdPoint([0,0]); cmdPoint([3000,0]); cmdPoint([1500,-600]);
+      endCmd(true);
+      const d = [...DOC.ents.values()].find(e => e.t === 'dim');
+      /* save the current settings under a new name */
+      startCmd('dimstyle'); dispatch('S'); dispatch('Detail'); endCmd(true);
+      const afterSave = { names: dimStyles().map(x => x.name), cur: DOC.curDim };
+      /* set back to Standard */
+      startCmd('dimstyle'); dispatch('R'); dispatch('Standard'); endCmd(true);
+      const afterSet = DOC.curDim;
+      /* apply Detail to the selected dimension */
+      SEL.clear(); SEL.add(d.id);
+      startCmd('dimstyle'); dispatch('A'); dispatch('Detail'); endCmd(true);
+      const applied = d.style;
+      /* a name that does not exist changes nothing */
+      startCmd('dimstyle'); dispatch('R'); dispatch('Nope'); endCmd(true);
+      return { afterSave, afterSet, applied, curAfterBad: DOC.curDim };`);
+    eq(r.afterSave.names.join(','), 'Standard,Detail');
+    eq(r.afterSave.cur, 'Detail', 'saving makes the new style current');
+    eq(r.afterSet, 'Standard', 'and it can be set back');
+    eq(r.applied, 'Detail', 'applying tags the selected dimension');
+    eq(r.curAfterBad, 'Standard', 'an unknown style is refused, not guessed at');
+  });
+
+  t('styles travel with the drawing, and an old file keeps its settings', () => {
+    const r = R(`${SETUP}
+      dimStyles().push({ name: 'Detail', txt: 5 });
+      DOC.curDim = 'Detail';
+      const txt = saveNative();
+      resetDoc();
+      loadNative(txt);
+      const back = { names: dimStyles().map(x => x.name), cur: DOC.curDim,
+                     txt: dimStyle().txt };
+      /* a document written before styles existed carried DOC.dimStyle */
+      resetDoc();
+      const old = JSON.stringify({ app:'orthograph', v:2, units:'mm',
+        layers:[newLayer('0')], cur:'0', ents:[],
+        dimStyle: { txt: 7, prec: 2 } });
+      loadNative(old);
+      return { back, migrated: dimStyle().txt, prec: dimStyle().prec,
+               styleCount: dimStyles().length };`);
+    eq(r.back.names.join(','), 'Standard,Detail', 'styles come back with the file');
+    eq(r.back.cur, 'Detail'); eq(r.back.txt, 5);
+    eq(r.migrated, 7, 'an old global dimStyle becomes Standard rather than being lost');
+    eq(r.prec, 2); eq(r.styleCount, 1);
+  });
+
+  t('DIMBASELINE stacks from the first extension line, not the last', () => {
+    const r = R(`${SETUP}
+      begin(); addEnt({t:'line', a:[0,0], b:[6000,0], layer:'0'}); commit('l');
+      cancelCmd();
+      startCmd('dim'); cmdPoint([0,0]); cmdPoint([2000,0]); cmdPoint([1000,-600]);
+      endCmd(true);
+      const first = [...DOC.ents.values()].find(e => e.t === 'dim');
+      startCmd('dimbase');
+      cmdPoint([4000, 0]);
+      cmdPoint([6000, 0]);
+      endCmd(true);
+      const dims = [...DOC.ents.values()].filter(e => e.t === 'dim');
+      return { n: dims.length,
+               starts: dims.map(d => Math.round(dimEnd(d, 1)[0])),
+               ends: dims.map(d => Math.round(dimEnd(d, 2)[0])),
+               offs: dims.map(d => Math.round(Math.abs(d.off))) };`);
+    eq(r.n, 3, 'two more dimensions are stacked on the first');
+    eq(r.starts.join(','), '0,0,0', 'every one starts at the FIRST extension line');
+    eq(r.ends.join(','), '2000,4000,6000', 'and ends where it was picked');
+    ok(r.offs[1] > r.offs[0] && r.offs[2] > r.offs[1],
+      'each sits further out so they do not overlap, got ' + r.offs.join(','));
+  });
 };

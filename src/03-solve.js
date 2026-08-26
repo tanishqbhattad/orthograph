@@ -327,9 +327,40 @@ function dirFrom(P, L, click) {
 /* ---- dimension geometry ----
    All sizes are model-space, driven by DOC.dimStyle, so a dimension
    plots at a real size and can round-trip through DXF unchanged.     */
-function dimStyle() {
+/* ---------------- named dimension styles ----------------
+   One global set of dimension settings is fine until a drawing needs plan
+   dimensions at one size and detail dimensions at another on the same sheet,
+   which is to say almost immediately. A style is a named set; a dimension may
+   name one, and may carry its own overrides on top of it — that three-step
+   resolution is AutoCAD's, and it is what makes a style worth having rather
+   than a global you keep changing back. */
+function stdDimStyles() {
+  return [{ name: 'Standard' }];
+}
+function dimStyles() {
+  if (!Array.isArray(DOC.dimStyles) || !DOC.dimStyles.length) {
+    DOC.dimStyles = stdDimStyles();
+    /* a document written before styles existed carries its settings in
+       DOC.dimStyle; that becomes Standard rather than being thrown away */
+    if (DOC.dimStyle && typeof DOC.dimStyle === 'object')
+      Object.assign(DOC.dimStyles[0], DOC.dimStyle);
+  }
+  return DOC.dimStyles;
+}
+function dimStyleRec(name) {
+  const n = String(name || '').trim().toLowerCase();
+  return dimStyles().find(x => String(x.name).toLowerCase() === n) || null;
+}
+function curDimStyleRec() {
+  return dimStyleRec(DOC.curDim) || dimStyles()[0];
+}
+/** The settings that apply to one dimension: its own overrides over its named
+    style over the current one. Called with nothing, it answers for the current
+    style, which is what every caller wanted before styles existed. */
+function dimStyle(e) {
   const h = DOC.textH || 2.5;
-  const d = DOC.dimStyle || (DOC.dimStyle = {});
+  const base = (e && e.style && dimStyleRec(e.style)) || curDimStyleRec() || {};
+  const d = (e && e.ovr) ? Object.assign({}, base, e.ovr) : base;
   /* DIMSCALE multiplies every size on a dimension and nothing else, exactly as
      it does in AutoCAD — the measurement itself is untouched. */
   const k = DOC.dimScale == null ? 1 : DOC.dimScale;
@@ -344,7 +375,7 @@ function dimStyle() {
 }
 function dimText(e, val) {
   if (e.txt) return e.txt;
-  const s = dimStyle();
+  const s = dimStyle(e);
   if (s.prec != null && DOC.units !== 'ft') return (val / U[DOC.units]).toFixed(s.prec);
   return fmt(val);
 }
@@ -406,7 +437,7 @@ function dimGeom(e0) {
   const e = (P1 === e0.p1 && P2 === e0.p2)
     ? e0
     : Object.assign({}, e0, { p1: P1, p2: P2 });
-  const S = dimStyle();
+  const S = dimStyle(e0);
   const lines = [], arrows = [];
   if (e.k === 'radius' || e.k === 'diameter') {
     const c = e.p1, p = e.p2, u = norm(sub(p, c));

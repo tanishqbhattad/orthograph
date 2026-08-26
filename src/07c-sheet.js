@@ -239,7 +239,7 @@ function vpPanBy(sh, vp, dxScr, dyScr) {
 /** set a viewport to an exact scale off the ruler, keeping its centre */
 defc('vpscale', {
   key: 'vpscale', group: 'view',
-  hint: 'Scale for this viewport — type <em>50</em> for 1:50, or a ratio',
+  hint: 'Scale for this viewport — type 50 for 1:50, or a ratio',
   init(c) {
     const vp = activeVp() || ((curSheet() || {}).viewports || [])[0];
     if (!vp) { cliPrint('No viewport. Make one with MVIEW.', 'err'); c.done = true; endCmd(true); return; }

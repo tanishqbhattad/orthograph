@@ -587,4 +587,43 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     for (const want of ['Endpoint', 'Midpoint', 'Centre', 'Quadrant', 'Perpendicular'])
       ok(r.labels.some(l => l.includes(want)), want + ' must be listed');
   });
+
+  group('every advertised keyword can actually be typed');
+
+  /* A prompt advertises its options by marking the key letter inside the word:
+     <em>F</em>ront. Write it detached — "<em>S</em> save" — and the parser
+     scavenges a capital out of the following text instead, so DIMSTYLE's S
+     silently resolved to R and the option could not be reached at all. The
+     prompt and the parser must agree for every command, or a command is
+     advertising something it will not accept. */
+  t('a prompt never advertises a key its own parser will not return', () => {
+    const r = R(`
+      resetDoc();
+      V.w = 1200; V.h = 800; V.z = 1; V.px = 0; V.py = 800;
+      const bad = [], checked = [];
+      for (const name of Object.keys(CMDS)) {
+        const def = CMDS[name];
+        const h = def && def.hint;
+        if (!h || typeof h !== 'string') continue;
+        const re = new RegExp('<em>([^<]+)</em>', 'g');
+        const letters = [...h.matchAll(re)].map(m => m[1]);
+        if (!letters.length) continue;
+        cancelCmd();
+        try { startCmd(name); } catch (e) { continue; }
+        if (!CMD) continue;
+        for (const L of letters) {
+          /* Shift and whole words like 50 are not option keys */
+          if (L.length !== 1 || !/[a-z?]/i.test(L)) continue;
+          checked.push(name + ':' + L);
+          const got = matchKeyword(L);
+          if (got == null) continue;             /* no keyword table: not a claim */
+          if (String(got).toLowerCase() !== L.toLowerCase())
+            bad.push(name + ' advertises ' + L + ' but types as ' + got);
+        }
+        cancelCmd();
+      }
+      return { bad, n: checked.length };`);
+    ok(r.n > 20, 'the sweep must actually cover the commands, checked ' + r.n);
+    eq(r.bad.length, 0, r.bad.slice(0, 6).join('; '));
+  });
 };

@@ -121,6 +121,7 @@ function resetDoc() {
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];
+  DOC.dimStyles = stdDimStyles(); DOC.curDim = 'Standard';
   /* a document straight off the shelf has nothing unsaved in it */
   DOC.savedSeq = HIST.seq;
   idxInvalidate(); HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;
