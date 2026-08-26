@@ -270,4 +270,33 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.vps, 1, 'and it opens showing the model, not an empty page');
     eq(r.current, true);
   });
+
+  /* ZOOM Extents on a sheet is the sheet. Zooming to the model's extents there
+     treats building millimetres as paper millimetres, which shrank an A3 page
+     to sixteen pixels — green tests throughout, obvious the moment it was
+     driven and looked at. */
+  t('zoom extents on a sheet fits the paper, not the model', () => {
+    const r = R(`${SETUP}
+      /* an 11m building: three orders of magnitude bigger than the paper */
+      addEnt({t:'wall', a:[0,0], b:[11000,0], wt:'gen100', layer:'A-WALL'});
+      addEnt({t:'wall', a:[0,0], b:[0,8000], wt:'gen100', layer:'A-WALL'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0];
+      fit();
+      const tl = w2s(sheetWorld(sh, 0, 0)), br = w2s(sheetWorld(sh, sh.w, sh.h));
+      const onScreen = [Math.abs(br[0] - tl[0]), Math.abs(br[1] - tl[1])];
+      /* and in model space it must still fit the model */
+      gotoSheet(null); fit();
+      const b = bboxAll([...DOC.ents.values()].filter(visible));
+      const m0 = w2s([b[0], b[1]]), m1 = w2s([b[2], b[3]]);
+      return { paperOnScreen: onScreen, canvas: [V.w, V.h],
+               modelOnScreen: [Math.abs(m1[0] - m0[0]), Math.abs(m1[1] - m0[1])] };`);
+    ok(r.paperOnScreen[0] > r.canvas[0] * 0.6,
+      'the sheet must fill the view, got ' + Math.round(r.paperOnScreen[0]) +
+      'px of ' + Math.round(r.canvas[0]));
+    ok(r.paperOnScreen[0] <= r.canvas[0], 'and not overflow it');
+    ok(r.modelOnScreen[0] > r.canvas[0] * 0.5,
+      'model space still fits the model, got ' + Math.round(r.modelOnScreen[0]));
+  });
 };

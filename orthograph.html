@@ -3368,6 +3368,15 @@ function viewForBox(b, fill) {
 }
 /** ZOOM Extents. Synchronous by default — importers and tests rely on that. */
 function fit(list, anim) {
+  /* On a sheet, the extents are the PAPER. Zooming to the model's extents here
+     treats building millimetres as paper millimetres and shrinks an A3 page to
+     a 16px stamp — which is what this did until it was driven and looked at. */
+  const sh = (typeof curSheet === 'function') ? curSheet() : null;
+  if (sh && !list) {
+    if (anim) pushView();
+    fitSheet();
+    return { z: V.z, px: V.px, py: V.py, rot: 0 };
+  }
   const b = bboxAll(list || [...DOC.ents.values()].filter(visible));
   const to = b ? viewForBox(b) : { z: 1, px: V.w / 2, py: V.h / 2, rot: V.rot };
   if (anim) pushView();
@@ -3376,6 +3385,9 @@ function fit(list, anim) {
 }
 /** ZOOM All: the drawing limits, or the extents when they are bigger */
 function zoomAll(anim) {
+  /* ZOOM All on a sheet is the sheet: there are no drawing limits on paper */
+  const shA = (typeof curSheet === 'function') ? curSheet() : null;
+  if (shA) { if (anim) pushView(); fitSheet(); return; }
   const b = bboxAll([...DOC.ents.values()].filter(visible));
   const L = DOC.limits;
   let box = b;
