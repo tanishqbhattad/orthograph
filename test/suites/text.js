@@ -155,4 +155,72 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.clip, false, 'clipping a corner is not enclosing the paragraph');
     eq(r.whole, true, 'enclosing the whole box is');
   });
+
+  group('a leader is one object too');
+
+  /* LEADER used to add a polyline, a filled arrowhead and a text as three
+     unrelated entities: move the note and the arrow stayed pointing at
+     nothing, erase the arrow and the leader still looked finished. */
+  t('drawing a leader makes one entity, not three', () => {
+    const r = R(`${SETUP}
+      cancelCmd();
+      startCmd('leader');
+      cmdPoint([1000, 1000]);
+      cmdPoint([3000, 2500]);
+      dispatch('SEE DETAIL 3');
+      endCmd(true);
+      const es = [...DOC.ents.values()];
+      const L = es[0];
+      const g = L && leaderGeom(L);
+      return { n: es.length, t: L && L.t, s: L && L.s,
+               spine: g && g.spine.length, head: g && g.head.length > 2 };`);
+    eq(r.n, 1, 'one entity');
+    eq(r.t, 'leader'); eq(r.s, 'SEE DETAIL 3');
+    eq(r.spine, 3, 'the elbow and the landing tail come out of its points');
+    eq(r.head, true, 'and so does the arrowhead');
+  });
+
+  t('moving a leader takes the arrow and the note with it', () => {
+    const r = R(`${SETUP}
+      begin();
+      const L = addEnt({t:'leader', pts:[[1000,1000],[3000,2500]], s:'NOTE', h:200, layer:'0'});
+      commit('l');
+      const before = leaderGeom(L);
+      begin(); xf(L, T.move([500, -700])); commit('mv');
+      const after = leaderGeom(L);
+      return { n: DOC.ents.size,
+               tip: after.spine[0].map(Math.round),
+               textMoved: Math.round(after.tp[0] - before.tp[0]),
+               headMoved: Math.round(after.head[0][0] - before.head[0][0]) };`);
+    eq(r.n, 1);
+    eq(r.tip.join(','), '1500,300', 'the arrow tip moved');
+    eq(r.textMoved, 500, 'the note moved with it');
+    eq(r.headMoved, 500, 'and so did the arrowhead');
+  });
+
+  t('a leader is picked along its line and on its note', () => {
+    const r = R(`${SETUP}
+      begin();
+      const L = addEnt({t:'leader', pts:[[0,0],[2000,2000]], s:'NOTE', h:200, layer:'0'});
+      commit('l');
+      const onLine = pickAt([1000, 1000], 10);
+      const away = pickAt([0, 5000], 10);
+      return { onLine: !!onLine && onLine.id === L.id, away: away === null };`);
+    eq(r.onLine, true, 'clicking the leader line selects it');
+    eq(r.away, true, 'and clicking nowhere near it selects nothing');
+  });
+
+  t('a leader exports its line, its head and its note', () => {
+    const r = R(`${SETUP}
+      begin();
+      addEnt({t:'leader', pts:[[0,0],[2000,2000]], s:'SEE DETAIL', h:200, layer:'0'});
+      commit('l');
+      const svg = exportSVG();
+      return { paths: (svg.match(/<path/g) || []).length,
+               filled: /fill="#[0-9a-f]{6}" stroke="none"/i.test(svg),
+               text: /SEE DETAIL/.test(svg) };`);
+    ok(r.paths >= 2, 'the spine and the head are both drawn');
+    eq(r.filled, true, 'the arrowhead is filled');
+    eq(r.text, true, 'and the note is in the file');
+  });
 };

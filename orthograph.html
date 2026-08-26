@@ -1247,6 +1247,16 @@ function bbox(e) {
   const g = GEOM[e.t];
   if (g && g.bbox) { const b = g.bbox(e); if (b) return b; }
   if (e.t === 'circle') { acc([e.c[0] - e.r, e.c[1] - e.r]); acc([e.c[0] + e.r, e.c[1] + e.r]); }
+  else if (e.t === 'leader') {
+    const g = leaderGeom(e);
+    if (g) {
+      g.spine.forEach(acc);
+      g.head.forEach(acc);
+      const w = g.text.length * g.h * MT_CHAR;
+      const ox = g.anchor === 'r' ? -w : 0;
+      acc([g.tp[0] + ox, g.tp[1]]); acc([g.tp[0] + ox + w, g.tp[1] + g.h]);
+    }
+  }
   else if (e.t === 'mtext') {
     const rows = mtextLines(e);
     const h = e.h || 2.5;
@@ -1312,6 +1322,28 @@ function mtextLines(e) {
              p: [e.p[0] - dy * sn, e.p[1] + dy * c] };
   });
 }
+/* ============================================================
+   leader — one object, not three loose pieces
+   ------------------------------------------------------------
+   LEADER used to add a polyline, a filled arrowhead and a text
+   as three unrelated entities. Move the note and the arrow
+   stayed pointing at nothing; erase the arrow and the leader
+   still looked finished. It is one entity now, and its parts are
+   worked out from its points every time it is drawn.
+   ============================================================ */
+function leaderGeom(e) {
+  const pts = (e.pts || []).slice();
+  if (pts.length < 2) return null;
+  const h = e.h || DOC.textH || 2.5;
+  const a = pts[0], b = pts[pts.length - 1];
+  const dir = b[0] >= a[0] ? 1 : -1;
+  const tail = [b[0] + dir * h * 3, b[1]];
+  const spine = pts.concat([tail]);
+  const head = arrowPoly(a, ang(pts[1], a), h * 0.8);
+  const tp = [tail[0] + dir * h * 0.3, tail[1] + h * 0.3];
+  return { spine, head, tail, tp, h, dir,
+           anchor: dir > 0 ? 'l' : 'r', text: e.s == null ? '' : String(e.s) };
+}
 function bboxAll(list) {
   let b = [Infinity, Infinity, -Infinity, -Infinity];
   for (const e of list) {
@@ -1367,6 +1399,14 @@ function entDist(p, e) {
   /* Text is picked by its BOX, not by its insertion point. A paragraph whose
      only pickable point is its top-left corner is one you cannot click on,
      which is how mtext arrived: it drew perfectly and could not be selected. */
+  if (e.t === 'leader') {
+    const g = leaderGeom(e);
+    if (!g) return Infinity;
+    let d = polyDist(p, g.spine, false);
+    const b = bbox(e);
+    if (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) d = Math.min(d, 0);
+    return d;
+  }
   if (e.t === 'text' || e.t === 'mtext') {
     const b = bbox(e);
     if (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) return 0;
@@ -1428,6 +1468,16 @@ function xf(e, fn) {
     case 'line': E.a = fn(E.a); E.b = fn(E.b); break;
     case 'pline': case 'spline': E.pts = E.pts.map(fn); break;
     case 'point': E.p = fn(E.p); break;
+    case 'leader': {
+      /* measure the scale from the ORIGINAL point: mapping pts first and then
+         transforming p0 again applies fn twice, which turned a plain move into
+         a text height of 172,000 */
+      const p0 = E.pts[0].slice();
+      const q = fn(add(p0, [1, 0]));
+      E.pts = E.pts.map(fn);
+      E.h = (E.h || DOC.textH || 2.5) * dist(E.pts[0], q);
+      break;
+    }
     case 'mtext': {
       /* the same readable-text rule as a single line, plus the column width,
          which scales with the text so a wrapped paragraph keeps its shape */
@@ -4299,6 +4349,18 @@ function drawEnt(e, mode) {
   const col = S ? (S.col || lift(fcol(e), S.lift)) : fcol(e);
   if (e.t === 'dim') return drawDim(e, col, mode);
   if (e.t === 'text') return drawTextAt(e.s, e.p, e.h, e.rot, e.anchor, col);
+  if (e.t === 'leader') {
+    const g = leaderGeom(e);
+    if (!g) return;
+    ctx.beginPath(); pathPts(g.spine, false);
+    strokeAs(col, lwPx(flw(e)) + (S ? S.core : 0), DASH_SOLID);
+    if (!HALO) {
+      ctx.beginPath(); pathPts(g.head, true);
+      ctx.fillStyle = col; ctx.fill();
+    }
+    if (g.text) drawTextAt(g.text, g.tp, g.h, 0, g.anchor, col);
+    return;
+  }
   if (e.t === 'mtext') {
     for (const r of mtextLines(e)) drawTextAt(r.text, r.p, r.h, r.rot, r.anchor, col);
     return;
@@ -8323,14 +8385,7 @@ defc('leader', {
   text(c, s) {
     if (c.pts.length < 2 || !s) return false;
     begin();
-    const a = c.pts[0], b = c.pts[1];
-    const dir = b[0] >= a[0] ? 1 : -1;
-    const tail = [b[0] + dir * DOC.textH * 3, b[1]];
-    addEnt({ t: 'pline', pts: [a, b, tail], layer: dimLayer() });
-    const ah = DOC.textH * 0.8, u = norm(sub(b, a));
-    addEnt({ t: 'pline', pts: arrowPoly(a, ang(b, a), ah), closed: true, fill: true, layer: dimLayer() });
-    addEnt({ t: 'text', p: [tail[0] + dir * DOC.textH * .3, tail[1] + DOC.textH * .3], s, h: DOC.textH,
-      rot: 0, anchor: dir > 0 ? 'l' : 'r', layer: dimLayer() });
+    addEnt({ t: 'leader', pts: c.pts.slice(), s, h: DOC.textH, layer: dimLayer() });
     commit('Leader'); endCmd(); return true;
   },
   preview(c, p) { return c.pts.length === 1 ? [pv({ t: 'line', a: c.pts[0], b: p })] : null; },
@@ -12666,6 +12721,15 @@ function svgEntityBody(lwMul) {
       continue;
     }
     if (e.t === 'text') { emitShape({ text: e.s, p: e.p, h: e.h, rot: e.rot, anchor: e.anchor }, col, lw, lt); continue; }
+    if (e.t === 'leader') {
+      const g = leaderGeom(e);
+      if (g) {
+        out.push(`<path d="M${g.spine.map(T2).join('L')}" fill="none" ${strokeOf(col, lw, '')}/>`);
+        out.push(`<path d="M${g.head.map(T2).join('L')}Z" fill="${col}" stroke="none"/>`);
+        if (g.text) emitShape({ text: g.text, p: g.tp, h: g.h, rot: 0, anchor: g.anchor }, col, lw, lt);
+      }
+      continue;
+    }
     if (e.t === 'mtext') {
       for (const r of mtextLines(e))
         emitShape({ text: r.text, p: r.p, h: r.h, rot: r.rot, anchor: r.anchor }, col, lw, lt);

@@ -95,6 +95,16 @@ function bbox(e) {
   const g = GEOM[e.t];
   if (g && g.bbox) { const b = g.bbox(e); if (b) return b; }
   if (e.t === 'circle') { acc([e.c[0] - e.r, e.c[1] - e.r]); acc([e.c[0] + e.r, e.c[1] + e.r]); }
+  else if (e.t === 'leader') {
+    const g = leaderGeom(e);
+    if (g) {
+      g.spine.forEach(acc);
+      g.head.forEach(acc);
+      const w = g.text.length * g.h * MT_CHAR;
+      const ox = g.anchor === 'r' ? -w : 0;
+      acc([g.tp[0] + ox, g.tp[1]]); acc([g.tp[0] + ox + w, g.tp[1] + g.h]);
+    }
+  }
   else if (e.t === 'mtext') {
     const rows = mtextLines(e);
     const h = e.h || 2.5;
@@ -160,6 +170,28 @@ function mtextLines(e) {
              p: [e.p[0] - dy * sn, e.p[1] + dy * c] };
   });
 }
+/* ============================================================
+   leader — one object, not three loose pieces
+   ------------------------------------------------------------
+   LEADER used to add a polyline, a filled arrowhead and a text
+   as three unrelated entities. Move the note and the arrow
+   stayed pointing at nothing; erase the arrow and the leader
+   still looked finished. It is one entity now, and its parts are
+   worked out from its points every time it is drawn.
+   ============================================================ */
+function leaderGeom(e) {
+  const pts = (e.pts || []).slice();
+  if (pts.length < 2) return null;
+  const h = e.h || DOC.textH || 2.5;
+  const a = pts[0], b = pts[pts.length - 1];
+  const dir = b[0] >= a[0] ? 1 : -1;
+  const tail = [b[0] + dir * h * 3, b[1]];
+  const spine = pts.concat([tail]);
+  const head = arrowPoly(a, ang(pts[1], a), h * 0.8);
+  const tp = [tail[0] + dir * h * 0.3, tail[1] + h * 0.3];
+  return { spine, head, tail, tp, h, dir,
+           anchor: dir > 0 ? 'l' : 'r', text: e.s == null ? '' : String(e.s) };
+}
 function bboxAll(list) {
   let b = [Infinity, Infinity, -Infinity, -Infinity];
   for (const e of list) {
@@ -215,6 +247,14 @@ function entDist(p, e) {
   /* Text is picked by its BOX, not by its insertion point. A paragraph whose
      only pickable point is its top-left corner is one you cannot click on,
      which is how mtext arrived: it drew perfectly and could not be selected. */
+  if (e.t === 'leader') {
+    const g = leaderGeom(e);
+    if (!g) return Infinity;
+    let d = polyDist(p, g.spine, false);
+    const b = bbox(e);
+    if (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) d = Math.min(d, 0);
+    return d;
+  }
   if (e.t === 'text' || e.t === 'mtext') {
     const b = bbox(e);
     if (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) return 0;
@@ -276,6 +316,16 @@ function xf(e, fn) {
     case 'line': E.a = fn(E.a); E.b = fn(E.b); break;
     case 'pline': case 'spline': E.pts = E.pts.map(fn); break;
     case 'point': E.p = fn(E.p); break;
+    case 'leader': {
+      /* measure the scale from the ORIGINAL point: mapping pts first and then
+         transforming p0 again applies fn twice, which turned a plain move into
+         a text height of 172,000 */
+      const p0 = E.pts[0].slice();
+      const q = fn(add(p0, [1, 0]));
+      E.pts = E.pts.map(fn);
+      E.h = (E.h || DOC.textH || 2.5) * dist(E.pts[0], q);
+      break;
+    }
     case 'mtext': {
       /* the same readable-text rule as a single line, plus the column width,
          which scales with the text so a wrapped paragraph keeps its shape */

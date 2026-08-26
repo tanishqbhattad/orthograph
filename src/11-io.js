@@ -58,6 +58,15 @@ function svgEntityBody(lwMul) {
       continue;
     }
     if (e.t === 'text') { emitShape({ text: e.s, p: e.p, h: e.h, rot: e.rot, anchor: e.anchor }, col, lw, lt); continue; }
+    if (e.t === 'leader') {
+      const g = leaderGeom(e);
+      if (g) {
+        out.push(`<path d="M${g.spine.map(T2).join('L')}" fill="none" ${strokeOf(col, lw, '')}/>`);
+        out.push(`<path d="M${g.head.map(T2).join('L')}Z" fill="${col}" stroke="none"/>`);
+        if (g.text) emitShape({ text: g.text, p: g.tp, h: g.h, rot: 0, anchor: g.anchor }, col, lw, lt);
+      }
+      continue;
+    }
     if (e.t === 'mtext') {
       for (const r of mtextLines(e))
         emitShape({ text: r.text, p: r.p, h: r.h, rot: r.rot, anchor: r.anchor }, col, lw, lt);

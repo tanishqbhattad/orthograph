@@ -1200,14 +1200,7 @@ defc('leader', {
   text(c, s) {
     if (c.pts.length < 2 || !s) return false;
     begin();
-    const a = c.pts[0], b = c.pts[1];
-    const dir = b[0] >= a[0] ? 1 : -1;
-    const tail = [b[0] + dir * DOC.textH * 3, b[1]];
-    addEnt({ t: 'pline', pts: [a, b, tail], layer: dimLayer() });
-    const ah = DOC.textH * 0.8, u = norm(sub(b, a));
-    addEnt({ t: 'pline', pts: arrowPoly(a, ang(b, a), ah), closed: true, fill: true, layer: dimLayer() });
-    addEnt({ t: 'text', p: [tail[0] + dir * DOC.textH * .3, tail[1] + DOC.textH * .3], s, h: DOC.textH,
-      rot: 0, anchor: dir > 0 ? 'l' : 'r', layer: dimLayer() });
+    addEnt({ t: 'leader', pts: c.pts.slice(), s, h: DOC.textH, layer: dimLayer() });
     commit('Leader'); endCmd(); return true;
   },
   preview(c, p) { return c.pts.length === 1 ? [pv({ t: 'line', a: c.pts[0], b: p })] : null; },

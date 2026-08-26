@@ -879,6 +879,18 @@ function drawEnt(e, mode) {
   const col = S ? (S.col || lift(fcol(e), S.lift)) : fcol(e);
   if (e.t === 'dim') return drawDim(e, col, mode);
   if (e.t === 'text') return drawTextAt(e.s, e.p, e.h, e.rot, e.anchor, col);
+  if (e.t === 'leader') {
+    const g = leaderGeom(e);
+    if (!g) return;
+    ctx.beginPath(); pathPts(g.spine, false);
+    strokeAs(col, lwPx(flw(e)) + (S ? S.core : 0), DASH_SOLID);
+    if (!HALO) {
+      ctx.beginPath(); pathPts(g.head, true);
+      ctx.fillStyle = col; ctx.fill();
+    }
+    if (g.text) drawTextAt(g.text, g.tp, g.h, 0, g.anchor, col);
+    return;
+  }
   if (e.t === 'mtext') {
     for (const r of mtextLines(e)) drawTextAt(r.text, r.p, r.h, r.rot, r.anchor, col);
     return;
