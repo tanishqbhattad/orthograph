@@ -152,9 +152,11 @@ function vpAt(sh, px, py) {
   }
   return null;
 }
-/** screen -> paper millimetres (paper world is y up; a sheet counts y down) */
+/** screen -> paper millimetres (paper world is y up; a sheet counts y down).
+    Always through the PAPER view, so it keeps answering correctly while we are
+    standing inside a viewport and V describes the model. */
 function s2paper(sh, sx, sy) {
-  const w = s2w(sx, sy);
+  const w = paperS2W(sx, sy);
   return [w[0], sh.h - w[1]];
 }
 /** screen -> model millimetres, seen through a viewport */
@@ -166,16 +168,49 @@ function activeVp() {
   const sh = curSheet(); if (!sh) return null;
   return (sh.viewports || []).find(v => v.id === sh.activeVp) || null;
 }
+/** Write the live view back into the viewport it belongs to. Standing inside a
+    window, V is the model view, so the viewport's scale and centre are simply
+    read out of it — which is why an ordinary pan or zoom needs to know nothing
+    about paper space to do the right thing. */
+function syncVpFromView(sh) {
+  const vp = activeVp();
+  if (!vp || !insideVp()) return;
+  const pv = PAPERV;
+  vp.scale = V.z / pv.z;
+  const ax = vp.x + vp.w / 2, ay = sh.h - (vp.y + vp.h / 2);
+  const m = s2w(ax * pv.z + pv.px, -ay * pv.z + pv.py);
+  vp.centre[0] = m[0]; vp.centre[1] = m[1];
+}
+/** Step into a viewport, or back out onto the page. Entering sets the paper
+    view aside and makes V the model view seen through that window; leaving
+    writes the view back into the viewport and restores the page. Everything
+    else — snap, pick, dynamic input, every draw command — then works through
+    the window without knowing one exists. */
 function setActiveVp(sh, id) {
   if (!sh) return;
-  const was = sh.activeVp;
-  sh.activeVp = id || null;
-  if (was !== sh.activeVp) {
-    cliPrint(sh.activeVp ? 'In the viewport — pan and zoom move the model. Esc to leave.'
-                         : 'On the page.');
-    if (typeof syncViewUI === 'function') syncViewUI();
-    draw();
+  const was = sh.activeVp || null;
+  const next = id || null;
+  if (was === next) return;
+  if (was && insideVp()) {
+    syncVpFromView(sh);
+    Object.assign(V, PAPERV);
+    PAPERV = null;
   }
+  sh.activeVp = next;
+  if (next) {
+    const vp = (sh.viewports || []).find(v => v.id === next);
+    if (vp) {
+      PAPERV = { z: V.z, px: V.px, py: V.py, rot: V.rot };
+      Object.assign(V, vpViewState(sh, vp, PAPERV));
+      V.rot = 0;
+      sh.selVp = null;
+    } else { sh.activeVp = null; }
+  }
+  cliPrint(sh.activeVp ? 'In the viewport — you are drawing in the model. Esc to leave.'
+                       : 'On the page.');
+  if (typeof syncViewUI === 'function') syncViewUI();
+  if (typeof syncCoord === 'function') syncCoord();
+  draw();
 }
 /** Zoom the MODEL inside a viewport, holding still whatever is under the
     cursor — the same contract zoomAt keeps on the page. The scale stops being
@@ -225,3 +260,140 @@ defc('vpscale', {
     return true;
   },
 });
+
+/* ============================================================
+   Viewport grips
+   ------------------------------------------------------------
+   MVIEW places a window; without grips nothing ever moves it
+   again, which makes composing a sheet a matter of getting the
+   rectangle right first time. Click a frame to select it, then
+   drag a corner to resize or the body to move. Resizing reveals
+   or crops model — it never rescales the drawing, because the
+   scale is the one thing on a sheet that must not change by
+   accident.
+   ============================================================ */
+const VPGRIP_R = 7;                       /* pick radius, screen pixels */
+const VPMIN = 5;                          /* smallest useful viewport, mm  */
+/** the eight grip points of a viewport, in screen coordinates */
+function vpGripPts(sh, vp) {
+  const r = vpScreenRect(sh, vp);
+  const [x, y, w, h] = r;
+  return [[x, y], [x + w, y], [x + w, y + h], [x, y + h],
+          [x + w / 2, y], [x + w, y + h / 2], [x + w / 2, y + h], [x, y + h / 2]];
+}
+function vpGripAt(sh, sx, sy) {
+  const vp = (sh.viewports || []).find(v => v.id === sh.selVp);
+  if (!vp) return null;
+  const pts = vpGripPts(sh, vp);
+  for (let i = 0; i < pts.length; i++)
+    if (Math.hypot(sx - pts[i][0], sy - pts[i][1]) <= VPGRIP_R) return { vp, grip: i };
+  return null;
+}
+/** Apply a grip drag, in paper millimetres. Edges move independently so a
+    corner drags two and an edge grip drags one; the rectangle is normalised at
+    the end so dragging an edge past its opposite number cannot invert it. */
+function vpApplyGrip(sh, vp, grip, px, py) {
+  let x0 = vp.x, y0 = vp.y, x1 = vp.x + vp.w, y1 = vp.y + vp.h;
+  const L = () => { x0 = px; }, R = () => { x1 = px; };
+  const T = () => { y0 = py; }, B = () => { y1 = py; };
+  ({ 0: () => { L(); T(); }, 1: () => { R(); T(); }, 2: () => { R(); B(); },
+     3: () => { L(); B(); }, 4: T, 5: R, 6: B, 7: L }[grip] || (() => {}))();
+  const nx = Math.min(x0, x1), ny = Math.min(y0, y1);
+  const nw = Math.abs(x1 - x0), nh = Math.abs(y1 - y0);
+  if (nw < VPMIN || nh < VPMIN) return;   /* refuse, rather than snap to a sliver */
+  /* the model under the window must not slide while the window is resized: the
+     centre is anchored to the paper, so growing the frame reveals more */
+  const oldC = vpToModel(vp, vp.x + vp.w / 2, vp.y + vp.h / 2);
+  vp.x = clamp(nx, 0, sh.w); vp.y = clamp(ny, 0, sh.h);
+  vp.w = nw; vp.h = nh;
+  vp.centre[0] = oldC[0]; vp.centre[1] = oldC[1];
+}
+function drawVpGrips(sh, vp) {
+  const pts = vpGripPts(sh, vp);
+  ctx.save();
+  ctx.setLineDash(DASH_SOLID);
+  for (const p of pts) {
+    ctx.fillStyle = CO.grip; ctx.strokeStyle = CO.bg; ctx.lineWidth = 1;
+    ctx.fillRect(p[0] - 3.5, p[1] - 3.5, 7, 7);
+    ctx.strokeRect(p[0] - 3.5, p[1] - 3.5, 7, 7);
+  }
+  ctx.restore();
+}
+/** the viewport whose frame or body is under a screen point */
+function vpPickAt(sh, sx, sy) {
+  const p = s2paper(sh, sx, sy);
+  return vpAt(sh, p[0], p[1]);
+}
+
+/* ============================================================
+   PAGESETUP — the sheet and its title block
+   ------------------------------------------------------------
+   The title-block fields have existed since the plot did, and
+   until now were settable only from code, which meant every
+   drawing this program could produce carried an empty title
+   block. On an issued drawing that is not a cosmetic gap: the
+   block is how anyone knows which project, which revision and
+   which sheet they are holding.
+   ============================================================ */
+defm('PAGESETUP', () => {
+  const sh = needSheet(); if (!sh) return;
+  const T = sh.title || (sh.title = {});
+  const opt = (v, cur) => '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>';
+  const sizes = Object.keys(PAPER).map(k => opt(k, sh.size)).join('');
+  modal(
+    '<h3>Sheet setup</h3>' +
+    '<div class="row"><label>Size</label><select class="f" id="psSize">' + sizes + '</select></div>' +
+    '<div class="row"><label>Orientation</label><select class="f" id="psOrient">' +
+      '<option value="l"' + (sh.landscape ? ' selected' : '') + '>Landscape</option>' +
+      '<option value="p"' + (!sh.landscape ? ' selected' : '') + '>Portrait</option></select></div>' +
+    '<div class="row"><label>Project</label><input class="f" id="psProj" value="' + esc(T.project || '') + '"></div>' +
+    '<div class="row"><label>Drawing</label><input class="f" id="psDwg" value="' + esc(T.drawing || '') + '"></div>' +
+    '<div class="row"><label>Sheet no.</label><input class="f" id="psNum" value="' + esc(T.number || '') + '"></div>' +
+    '<div class="row"><label>Revision</label><input class="f" id="psRev" value="' + esc(T.rev || '') + '"></div>' +
+    '<div class="row"><label>Date</label><input class="f" id="psDate" value="' + esc(T.date || '') + '"></div>' +
+    '<div class="row"><label>Drawn by</label><input class="f" id="psBy" value="' + esc(T.by || '') + '"></div>' +
+    '<div class="row"><label>Title block</label><select class="f" id="psShow">' +
+      '<option value="1"' + (T.show !== false ? ' selected' : '') + '>Show</option>' +
+      '<option value="0"' + (T.show === false ? ' selected' : '') + '>Hide</option></select></div>',
+    () => applyPageSetup(sh, {
+      size: $('#psSize').value,
+      landscape: $('#psOrient').value === 'l',
+      project: $('#psProj').value, drawing: $('#psDwg').value,
+      number: $('#psNum').value, rev: $('#psRev').value,
+      date: $('#psDate').value, by: $('#psBy').value,
+      show: $('#psShow').value === '1',
+    }));
+}, { group: 'view' });
+defm('PAGE', () => META.pagesetup.fn(), { group: 'view' });
+
+/** The work PAGESETUP does, with the dialog taken off it. Keeping this out of
+    the DOM handler is what makes it testable at all — and a sheet's paper size
+    is not something to leave resting on whether a modal rendered. */
+function applyPageSetup(sh, o) {
+  if (!sh || !o) return;
+  begin();
+  const size = o.size || sh.size;
+  const land = o.landscape !== false;
+  const [w, h] = paperSize(size, land);
+  const changed = w !== sh.w || h !== sh.h;
+  if (changed) {
+    /* Keep every viewport on the paper when the paper changes under it.
+       Scaling the frames with the sheet keeps a composed layout composed, and
+       the SCALE is deliberately left alone: a drawing does not change scale
+       because it moved from A3 to A1. */
+    const kx = w / sh.w, ky = h / sh.h;
+    for (const vp of (sh.viewports || [])) {
+      vp.x *= kx; vp.y *= ky; vp.w *= kx; vp.h *= ky;
+    }
+  }
+  sh.size = size; sh.landscape = land; sh.w = w; sh.h = h;
+  const T = sh.title || (sh.title = {});
+  for (const k of ['project', 'drawing', 'number', 'rev', 'date', 'by'])
+    if (o[k] != null) T[k] = o[k];
+  if (o.show != null) T.show = !!o.show;
+  commit('Sheet setup');
+  if (typeof buildSheetTabs === 'function') buildSheetTabs();
+  if (!insideVp()) fitSheet();
+  draw();
+  cliPrint('Sheet ' + sh.name + ' — ' + sh.size + (sh.landscape ? ' landscape' : ' portrait'));
+}

@@ -3372,7 +3372,7 @@ function fit(list, anim) {
      treats building millimetres as paper millimetres and shrinks an A3 page to
      a 16px stamp — which is what this did until it was driven and looked at. */
   const sh = (typeof curSheet === 'function') ? curSheet() : null;
-  if (sh && !list) {
+  if (sh && !list && !insideVp()) {
     if (anim) pushView();
     fitSheet();
     return { z: V.z, px: V.px, py: V.py, rot: 0 };
@@ -3387,7 +3387,7 @@ function fit(list, anim) {
 function zoomAll(anim) {
   /* ZOOM All on a sheet is the sheet: there are no drawing limits on paper */
   const shA = (typeof curSheet === 'function') ? curSheet() : null;
-  if (shA) { if (anim) pushView(); fitSheet(); return; }
+  if (shA && !insideVp()) { if (anim) pushView(); fitSheet(); return; }
   const b = bboxAll([...DOC.ents.values()].filter(visible));
   const L = DOC.limits;
   let box = b;
@@ -4519,34 +4519,59 @@ function drawEntitiesInView() {
    ============================================================ */
 /** sheet coordinates (y down from the top edge) -> paper world (y up) */
 function sheetWorld(sh, x, y) { return [x, sh.h - y]; }
+
+/* When you step INTO a viewport, V stops describing the paper and starts
+   describing the model, and the paper view is set aside here. That one move is
+   what makes snapping, picking, dynamic input and every drawing command work
+   through the window without any of them knowing a window exists. The
+   alternative — teaching a dozen input paths about viewports — is the version
+   of this that rots. */
+let PAPERV = null;
+/** the view that describes the PAPER, wherever we happen to be standing */
+function paperView() { return PAPERV || V; }
+function insideVp() { return PAPERV != null; }
+/** paper world <-> screen, through the paper view rather than through V */
+function paperW2S(p) {
+  const pv = paperView();
+  return [p[0] * pv.z + pv.px, -p[1] * pv.z + pv.py];
+}
+function paperS2W(sx, sy) {
+  const pv = paperView();
+  return [(sx - pv.px) / pv.z, -(sy - pv.py) / pv.z];
+}
 /** the V that makes w2s draw MODEL space through this viewport */
-function vpViewState(sh, vp) {
+function vpViewState(sh, vp, pv) {
+  const q = pv || paperView();
   const s = vp.scale || 1;
   const ax = vp.x + vp.w / 2, ay = sh.h - vp.y - vp.h / 2;
   return {
-    z: s * V.z,
-    px: (ax - vp.centre[0] * s) * V.z + V.px,
-    py: (vp.centre[1] * s - ay) * V.z + V.py,
+    z: s * q.z,
+    px: (ax - vp.centre[0] * s) * q.z + q.px,
+    py: (vp.centre[1] * s - ay) * q.z + q.py,
   };
 }
 /** screen rect of a viewport, for clipping */
 function vpScreenRect(sh, vp) {
-  const a = w2s(sheetWorld(sh, vp.x, vp.y));
-  const b = w2s(sheetWorld(sh, vp.x + vp.w, vp.y + vp.h));
+  const a = paperW2S(sheetWorld(sh, vp.x, vp.y));
+  const b = paperW2S(sheetWorld(sh, vp.x + vp.w, vp.y + vp.h));
   return [Math.min(a[0], b[0]), Math.min(a[1], b[1]),
           Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])];
 }
 function fitSheet() {
   const sh = curSheet(); if (!sh) return;
-  V.rot = 0;                                       /* a sheet is never rotated */
   const pad = 28;
   const z = Math.min((V.w - pad * 2) / sh.w, (V.h - pad * 2) / sh.h);
-  V.z = z > 0 ? z : 1;
-  V.px = (V.w - sh.w * V.z) / 2;
-  V.py = (V.h - sh.h * V.z) / 2 + sh.h * V.z;      /* paper world y points up */
+  const t = { z: z > 0 ? z : 1 };
+  t.px = (V.w - sh.w * t.z) / 2;
+  t.py = (V.h - sh.h * t.z) / 2 + sh.h * t.z;      /* paper world y points up */
+  if (PAPERV) { Object.assign(PAPERV, t); }        /* inside: move the page under us */
+  else { V.rot = 0; Object.assign(V, t); }         /* a sheet is never rotated */
 }
 function drawSheet(sh) {
-  const P = (x, y) => w2s(sheetWorld(sh, x, y));
+  /* standing inside a viewport, V is the model view — write it back to the
+     viewport first so the stored window always matches what is on screen */
+  if (insideVp() && typeof syncVpFromView === 'function') syncVpFromView(sh);
+  const P = (x, y) => paperW2S(sheetWorld(sh, x, y));
   const tl = P(0, 0), br = P(sh.w, sh.h);
   const x = tl[0], y = tl[1], w = br[0] - tl[0], h = br[1] - tl[1];
   /* the paper, with a drop shadow: the one place in this program where a
@@ -4568,18 +4593,25 @@ function drawSheet(sh) {
     if (r[2] < 1 || r[3] < 1) continue;
     ctx.save();
     ctx.beginPath(); ctx.rect(r[0], r[1], r[2], r[3]); ctx.clip();
+    const live = insideVp() && vp.id === sh.activeVp;
     const keep = { z: V.z, px: V.px, py: V.py };
-    Object.assign(V, vpViewState(sh, vp));
+    /* the one we are standing in is already the current view; the rest are
+       drawn by pointing the same renderer through their own transform */
+    if (!live) Object.assign(V, vpViewState(sh, vp));
     try { drawEntitiesInView(); } catch (err) { /* one bad viewport must not take the page down */ }
-    Object.assign(V, keep);
+    if (!live) Object.assign(V, keep);
     ctx.restore();
     /* the frame is screen furniture: it marks the window while you work and is
        deliberately absent from the plot, exactly like a non-plotting layer */
     ctx.save();
-    ctx.strokeStyle = vp.id === sh.activeVp ? CO.sel : '#b9b9b2';
+    ctx.strokeStyle = vp.id === sh.activeVp ? CO.sel
+                    : vp.id === sh.selVp ? CO.grip : '#b9b9b2';
+    ctx.lineWidth = (vp.id === sh.activeVp || vp.id === sh.selVp) ? Math.max(HAIR, 1.5) : HAIR;
     ctx.lineWidth = HAIR; ctx.setLineDash(DASH_SOLID);
     ctx.strokeRect(r[0], r[1], r[2], r[3]);
     ctx.restore();
+    if (!insideVp() && vp.id === sh.selVp && typeof drawVpGrips === 'function')
+      drawVpGrips(sh, vp);
   }
   drawTitleBlock(sh, P);
 }
@@ -4610,7 +4642,17 @@ function drawTitleBlock(sh, P) {
     /* When the block is small on screen there is not room for a caption AND a
        value. Drop the caption and keep the value: an empty-looking title block
        reads as broken, where a small one reads as small. */
-    if (rh < 4.5) return;
+    /* Below about four pixels a row cannot carry a glyph. Ruling five empty
+       boxes reads as a broken title block, so draw a grey bar standing in for
+       the line of text: too small to read is a fair thing for a drawing to
+       look like, empty is not. */
+    if (rh < 4.5) {
+      if (!rw[1]) return;
+      ctx.fillStyle = '#a9a9a2';
+      ctx.fillRect(x + rh * 0.3, ry + rh * 0.42,
+                   Math.min(w - rh * 0.6, w * 0.62), Math.max(0.7, rh * 0.22));
+      return;
+    }
     const tight = rh < 11;
     if (tight) {
       ctx.fillStyle = '#1b1b16';
@@ -9060,9 +9102,11 @@ function vpAt(sh, px, py) {
   }
   return null;
 }
-/** screen -> paper millimetres (paper world is y up; a sheet counts y down) */
+/** screen -> paper millimetres (paper world is y up; a sheet counts y down).
+    Always through the PAPER view, so it keeps answering correctly while we are
+    standing inside a viewport and V describes the model. */
 function s2paper(sh, sx, sy) {
-  const w = s2w(sx, sy);
+  const w = paperS2W(sx, sy);
   return [w[0], sh.h - w[1]];
 }
 /** screen -> model millimetres, seen through a viewport */
@@ -9074,16 +9118,49 @@ function activeVp() {
   const sh = curSheet(); if (!sh) return null;
   return (sh.viewports || []).find(v => v.id === sh.activeVp) || null;
 }
+/** Write the live view back into the viewport it belongs to. Standing inside a
+    window, V is the model view, so the viewport's scale and centre are simply
+    read out of it — which is why an ordinary pan or zoom needs to know nothing
+    about paper space to do the right thing. */
+function syncVpFromView(sh) {
+  const vp = activeVp();
+  if (!vp || !insideVp()) return;
+  const pv = PAPERV;
+  vp.scale = V.z / pv.z;
+  const ax = vp.x + vp.w / 2, ay = sh.h - (vp.y + vp.h / 2);
+  const m = s2w(ax * pv.z + pv.px, -ay * pv.z + pv.py);
+  vp.centre[0] = m[0]; vp.centre[1] = m[1];
+}
+/** Step into a viewport, or back out onto the page. Entering sets the paper
+    view aside and makes V the model view seen through that window; leaving
+    writes the view back into the viewport and restores the page. Everything
+    else — snap, pick, dynamic input, every draw command — then works through
+    the window without knowing one exists. */
 function setActiveVp(sh, id) {
   if (!sh) return;
-  const was = sh.activeVp;
-  sh.activeVp = id || null;
-  if (was !== sh.activeVp) {
-    cliPrint(sh.activeVp ? 'In the viewport — pan and zoom move the model. Esc to leave.'
-                         : 'On the page.');
-    if (typeof syncViewUI === 'function') syncViewUI();
-    draw();
+  const was = sh.activeVp || null;
+  const next = id || null;
+  if (was === next) return;
+  if (was && insideVp()) {
+    syncVpFromView(sh);
+    Object.assign(V, PAPERV);
+    PAPERV = null;
   }
+  sh.activeVp = next;
+  if (next) {
+    const vp = (sh.viewports || []).find(v => v.id === next);
+    if (vp) {
+      PAPERV = { z: V.z, px: V.px, py: V.py, rot: V.rot };
+      Object.assign(V, vpViewState(sh, vp, PAPERV));
+      V.rot = 0;
+      sh.selVp = null;
+    } else { sh.activeVp = null; }
+  }
+  cliPrint(sh.activeVp ? 'In the viewport — you are drawing in the model. Esc to leave.'
+                       : 'On the page.');
+  if (typeof syncViewUI === 'function') syncViewUI();
+  if (typeof syncCoord === 'function') syncCoord();
+  draw();
 }
 /** Zoom the MODEL inside a viewport, holding still whatever is under the
     cursor — the same contract zoomAt keeps on the page. The scale stops being
@@ -9133,6 +9210,143 @@ defc('vpscale', {
     return true;
   },
 });
+
+/* ============================================================
+   Viewport grips
+   ------------------------------------------------------------
+   MVIEW places a window; without grips nothing ever moves it
+   again, which makes composing a sheet a matter of getting the
+   rectangle right first time. Click a frame to select it, then
+   drag a corner to resize or the body to move. Resizing reveals
+   or crops model — it never rescales the drawing, because the
+   scale is the one thing on a sheet that must not change by
+   accident.
+   ============================================================ */
+const VPGRIP_R = 7;                       /* pick radius, screen pixels */
+const VPMIN = 5;                          /* smallest useful viewport, mm  */
+/** the eight grip points of a viewport, in screen coordinates */
+function vpGripPts(sh, vp) {
+  const r = vpScreenRect(sh, vp);
+  const [x, y, w, h] = r;
+  return [[x, y], [x + w, y], [x + w, y + h], [x, y + h],
+          [x + w / 2, y], [x + w, y + h / 2], [x + w / 2, y + h], [x, y + h / 2]];
+}
+function vpGripAt(sh, sx, sy) {
+  const vp = (sh.viewports || []).find(v => v.id === sh.selVp);
+  if (!vp) return null;
+  const pts = vpGripPts(sh, vp);
+  for (let i = 0; i < pts.length; i++)
+    if (Math.hypot(sx - pts[i][0], sy - pts[i][1]) <= VPGRIP_R) return { vp, grip: i };
+  return null;
+}
+/** Apply a grip drag, in paper millimetres. Edges move independently so a
+    corner drags two and an edge grip drags one; the rectangle is normalised at
+    the end so dragging an edge past its opposite number cannot invert it. */
+function vpApplyGrip(sh, vp, grip, px, py) {
+  let x0 = vp.x, y0 = vp.y, x1 = vp.x + vp.w, y1 = vp.y + vp.h;
+  const L = () => { x0 = px; }, R = () => { x1 = px; };
+  const T = () => { y0 = py; }, B = () => { y1 = py; };
+  ({ 0: () => { L(); T(); }, 1: () => { R(); T(); }, 2: () => { R(); B(); },
+     3: () => { L(); B(); }, 4: T, 5: R, 6: B, 7: L }[grip] || (() => {}))();
+  const nx = Math.min(x0, x1), ny = Math.min(y0, y1);
+  const nw = Math.abs(x1 - x0), nh = Math.abs(y1 - y0);
+  if (nw < VPMIN || nh < VPMIN) return;   /* refuse, rather than snap to a sliver */
+  /* the model under the window must not slide while the window is resized: the
+     centre is anchored to the paper, so growing the frame reveals more */
+  const oldC = vpToModel(vp, vp.x + vp.w / 2, vp.y + vp.h / 2);
+  vp.x = clamp(nx, 0, sh.w); vp.y = clamp(ny, 0, sh.h);
+  vp.w = nw; vp.h = nh;
+  vp.centre[0] = oldC[0]; vp.centre[1] = oldC[1];
+}
+function drawVpGrips(sh, vp) {
+  const pts = vpGripPts(sh, vp);
+  ctx.save();
+  ctx.setLineDash(DASH_SOLID);
+  for (const p of pts) {
+    ctx.fillStyle = CO.grip; ctx.strokeStyle = CO.bg; ctx.lineWidth = 1;
+    ctx.fillRect(p[0] - 3.5, p[1] - 3.5, 7, 7);
+    ctx.strokeRect(p[0] - 3.5, p[1] - 3.5, 7, 7);
+  }
+  ctx.restore();
+}
+/** the viewport whose frame or body is under a screen point */
+function vpPickAt(sh, sx, sy) {
+  const p = s2paper(sh, sx, sy);
+  return vpAt(sh, p[0], p[1]);
+}
+
+/* ============================================================
+   PAGESETUP — the sheet and its title block
+   ------------------------------------------------------------
+   The title-block fields have existed since the plot did, and
+   until now were settable only from code, which meant every
+   drawing this program could produce carried an empty title
+   block. On an issued drawing that is not a cosmetic gap: the
+   block is how anyone knows which project, which revision and
+   which sheet they are holding.
+   ============================================================ */
+defm('PAGESETUP', () => {
+  const sh = needSheet(); if (!sh) return;
+  const T = sh.title || (sh.title = {});
+  const opt = (v, cur) => '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>';
+  const sizes = Object.keys(PAPER).map(k => opt(k, sh.size)).join('');
+  modal(
+    '<h3>Sheet setup</h3>' +
+    '<div class="row"><label>Size</label><select class="f" id="psSize">' + sizes + '</select></div>' +
+    '<div class="row"><label>Orientation</label><select class="f" id="psOrient">' +
+      '<option value="l"' + (sh.landscape ? ' selected' : '') + '>Landscape</option>' +
+      '<option value="p"' + (!sh.landscape ? ' selected' : '') + '>Portrait</option></select></div>' +
+    '<div class="row"><label>Project</label><input class="f" id="psProj" value="' + esc(T.project || '') + '"></div>' +
+    '<div class="row"><label>Drawing</label><input class="f" id="psDwg" value="' + esc(T.drawing || '') + '"></div>' +
+    '<div class="row"><label>Sheet no.</label><input class="f" id="psNum" value="' + esc(T.number || '') + '"></div>' +
+    '<div class="row"><label>Revision</label><input class="f" id="psRev" value="' + esc(T.rev || '') + '"></div>' +
+    '<div class="row"><label>Date</label><input class="f" id="psDate" value="' + esc(T.date || '') + '"></div>' +
+    '<div class="row"><label>Drawn by</label><input class="f" id="psBy" value="' + esc(T.by || '') + '"></div>' +
+    '<div class="row"><label>Title block</label><select class="f" id="psShow">' +
+      '<option value="1"' + (T.show !== false ? ' selected' : '') + '>Show</option>' +
+      '<option value="0"' + (T.show === false ? ' selected' : '') + '>Hide</option></select></div>',
+    () => applyPageSetup(sh, {
+      size: $('#psSize').value,
+      landscape: $('#psOrient').value === 'l',
+      project: $('#psProj').value, drawing: $('#psDwg').value,
+      number: $('#psNum').value, rev: $('#psRev').value,
+      date: $('#psDate').value, by: $('#psBy').value,
+      show: $('#psShow').value === '1',
+    }));
+}, { group: 'view' });
+defm('PAGE', () => META.pagesetup.fn(), { group: 'view' });
+
+/** The work PAGESETUP does, with the dialog taken off it. Keeping this out of
+    the DOM handler is what makes it testable at all — and a sheet's paper size
+    is not something to leave resting on whether a modal rendered. */
+function applyPageSetup(sh, o) {
+  if (!sh || !o) return;
+  begin();
+  const size = o.size || sh.size;
+  const land = o.landscape !== false;
+  const [w, h] = paperSize(size, land);
+  const changed = w !== sh.w || h !== sh.h;
+  if (changed) {
+    /* Keep every viewport on the paper when the paper changes under it.
+       Scaling the frames with the sheet keeps a composed layout composed, and
+       the SCALE is deliberately left alone: a drawing does not change scale
+       because it moved from A3 to A1. */
+    const kx = w / sh.w, ky = h / sh.h;
+    for (const vp of (sh.viewports || [])) {
+      vp.x *= kx; vp.y *= ky; vp.w *= kx; vp.h *= ky;
+    }
+  }
+  sh.size = size; sh.landscape = land; sh.w = w; sh.h = h;
+  const T = sh.title || (sh.title = {});
+  for (const k of ['project', 'drawing', 'number', 'rev', 'date', 'by'])
+    if (o[k] != null) T[k] = o[k];
+  if (o.show != null) T.show = !!o.show;
+  commit('Sheet setup');
+  if (typeof buildSheetTabs === 'function') buildSheetTabs();
+  if (!insideVp()) fitSheet();
+  draw();
+  cliPrint('Sheet ' + sh.name + ' — ' + sh.size + (sh.landscape ? ' landscape' : ' portrait'));
+}
 
 /* ===== 08-modify.js ===== */
 /* ============================================================
@@ -14491,6 +14705,7 @@ function sheetTabMenu(sh, anchor) {
       begin(); sh.name = String(n).trim() || sh.name; commit('Rename layout');
       buildSheetTabs(); draw();
     }],
+    ['Sheet setup…', () => { gotoSheet(sh.id); META.pagesetup.fn(); }],
     ['Plot\u2026', () => { gotoSheet(sh.id); plotSheet(sh); }],
     ['Delete', () => {
       begin();
@@ -14743,11 +14958,32 @@ stage.addEventListener('pointerdown', ev => {
   downScr = scr; moved = false; pend = null;
   /* Pan on the middle button, on a held spacebar, and for the whole of the
      PAN command. The right button is AutoCAD's shortcut menu, not a pan. */
+  /* On the page — not inside a window — the left button selects and drags
+     viewports. Inside one, the pointer belongs to the model and this is
+     skipped entirely. */
+  const _psh = (typeof curSheet === 'function') ? curSheet() : null;
+  if (_psh && !insideVp() && ev.button === 0 && !ev.altKey && !ST.panReady && !ST.panCmd && !CMD) {
+    const g = vpGripAt(_psh, scr[0], scr[1]);
+    if (g) {
+      ST.vpDrag = { vp: g.vp, grip: g.grip };
+      stage.setPointerCapture && stage.setPointerCapture(ev.pointerId);
+      begin();
+      return;
+    }
+    const hit = vpPickAt(_psh, scr[0], scr[1]);
+    if (hit) {
+      if (_psh.selVp !== hit.id) { _psh.selVp = hit.id; draw(); }
+      const pp = s2paper(_psh, scr[0], scr[1]);
+      ST.vpDrag = { vp: hit, grip: -1, ox: pp[0] - hit.x, oy: pp[1] - hit.y };
+      stage.setPointerCapture && stage.setPointerCapture(ev.pointerId);
+      begin();
+      return;
+    }
+    if (_psh.selVp) { _psh.selVp = null; draw(); }
+  }
   if (ev.button === 1 || (ev.button === 0 && (ev.altKey || ST.panReady || ST.panCmd))) {
     cancelAnim();
-    const _pv = (typeof activeVp === 'function') ? activeVp() : null;
-    ST.panning = { x: scr[0], y: scr[1], px: V.px, py: V.py,
-                   vpc: _pv ? _pv.centre.slice() : null };
+    ST.panning = { x: scr[0], y: scr[1], px: V.px, py: V.py };
     ST.panDragged = false; navCursor(); return;
   }
   /* ZOOM real time: drag up to magnify, anchored where the drag started */
@@ -14794,18 +15030,24 @@ stage.addEventListener('pointermove', ev => {
     zoomAt(c[0], c[1], (pinch.z * f) / V.z); pinch.d = d; pinch.z = V.z;
     return;
   }
-  if (ST.panning) {
-    const _av = (typeof activeVp === 'function') ? activeVp() : null;
-    if (_av && ST.panning.vpc) {
-      /* the paper stays put; the model slides behind it, so a drag of n pixels
-         moves n pixels' worth of model — which is what a window has to mean */
-      const k = (_av.scale || 1) * (V.z || 1);
-      if (k > 0) {
-        _av.centre[0] = ST.panning.vpc[0] - (scr[0] - ST.panning.x) / k;
-        _av.centre[1] = ST.panning.vpc[1] + (scr[1] - ST.panning.y) / k;
+  if (ST.vpDrag) {
+    const sh = curSheet();
+    if (sh) {
+      const pp = s2paper(sh, scr[0], scr[1]);
+      const d = ST.vpDrag;
+      if (d.grip < 0) {
+        /* moving the window takes its view with it: the same model stays in
+           frame, which is what dragging a view on a sheet has to mean */
+        d.vp.x = clamp(pp[0] - d.ox, 0, sh.w - d.vp.w);
+        d.vp.y = clamp(pp[1] - d.oy, 0, sh.h - d.vp.h);
+      } else {
+        vpApplyGrip(sh, d.vp, d.grip, pp[0], pp[1]);
       }
-      moved = true; ST.panDragged = true; draw(); return;
+      moved = true; draw();
     }
+    return;
+  }
+  if (ST.panning) {
     /* 1:1 and absolute — recomputed from the press point every move, so a pan
        can never accumulate drift however long the drag runs */
     V.px = ST.panning.px + (scr[0] - ST.panning.x);
@@ -14842,6 +15084,12 @@ stage.addEventListener('pointermove', ev => {
 stage.addEventListener('pointerup', ev => {
   ptrs.delete(ev.pointerId);
   if (ptrs.size < 2) pinch = null;
+  if (ST.vpDrag) {
+    const d = ST.vpDrag; ST.vpDrag = null;
+    commit(d.grip < 0 ? 'Move viewport' : 'Resize viewport');
+    downPt = null; downScr = null; pend = null; draw();
+    return;
+  }
   if (ST.panning) { ST.panning = null; navCursor(); downPt = null; downScr = null; pend = null; return; }
   if (ST.rtdrag) { ST.rtdrag = null; navCursor(); downPt = null; downScr = null; pend = null; return; }  const scr = localXY(ev);
   const p = ST.cur || s2w(scr[0], scr[1]);
@@ -14935,12 +15183,9 @@ stage.addEventListener('wheel', ev => {
              : (px >= 120 && px % 120 === 0) ? 120 : 100;
   const notches = clamp(ev.deltaY / unit, -4, 4);
   if (!notches) return;
-  /* inside a viewport the wheel moves the model behind the paper, not the
-     paper on the screen */
-  const _sh = (typeof curSheet === 'function') ? curSheet() : null;
-  const _avp = _sh && typeof activeVp === 'function' ? activeVp() : null;
-  if (_avp) vpZoomAt(_sh, _avp, scr[0], scr[1], wheelFactor(notches));
-  else zoomAt(scr[0], scr[1], wheelFactor(notches));
+  /* No special case for viewports: inside one, V already IS the model view, so
+     the ordinary zoom moves the model behind the paper by construction. */
+  zoomAt(scr[0], scr[1], wheelFactor(notches));
   ST.cur = snapPoint(scr[0], scr[1], refPoint());
   syncCoord(); syncDyn();
 }, { passive: false });

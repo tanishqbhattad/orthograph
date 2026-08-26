@@ -211,7 +211,7 @@ function fit(list, anim) {
      treats building millimetres as paper millimetres and shrinks an A3 page to
      a 16px stamp — which is what this did until it was driven and looked at. */
   const sh = (typeof curSheet === 'function') ? curSheet() : null;
-  if (sh && !list) {
+  if (sh && !list && !insideVp()) {
     if (anim) pushView();
     fitSheet();
     return { z: V.z, px: V.px, py: V.py, rot: 0 };
@@ -226,7 +226,7 @@ function fit(list, anim) {
 function zoomAll(anim) {
   /* ZOOM All on a sheet is the sheet: there are no drawing limits on paper */
   const shA = (typeof curSheet === 'function') ? curSheet() : null;
-  if (shA) { if (anim) pushView(); fitSheet(); return; }
+  if (shA && !insideVp()) { if (anim) pushView(); fitSheet(); return; }
   const b = bboxAll([...DOC.ents.values()].filter(visible));
   const L = DOC.limits;
   let box = b;
@@ -1358,34 +1358,59 @@ function drawEntitiesInView() {
    ============================================================ */
 /** sheet coordinates (y down from the top edge) -> paper world (y up) */
 function sheetWorld(sh, x, y) { return [x, sh.h - y]; }
+
+/* When you step INTO a viewport, V stops describing the paper and starts
+   describing the model, and the paper view is set aside here. That one move is
+   what makes snapping, picking, dynamic input and every drawing command work
+   through the window without any of them knowing a window exists. The
+   alternative — teaching a dozen input paths about viewports — is the version
+   of this that rots. */
+let PAPERV = null;
+/** the view that describes the PAPER, wherever we happen to be standing */
+function paperView() { return PAPERV || V; }
+function insideVp() { return PAPERV != null; }
+/** paper world <-> screen, through the paper view rather than through V */
+function paperW2S(p) {
+  const pv = paperView();
+  return [p[0] * pv.z + pv.px, -p[1] * pv.z + pv.py];
+}
+function paperS2W(sx, sy) {
+  const pv = paperView();
+  return [(sx - pv.px) / pv.z, -(sy - pv.py) / pv.z];
+}
 /** the V that makes w2s draw MODEL space through this viewport */
-function vpViewState(sh, vp) {
+function vpViewState(sh, vp, pv) {
+  const q = pv || paperView();
   const s = vp.scale || 1;
   const ax = vp.x + vp.w / 2, ay = sh.h - vp.y - vp.h / 2;
   return {
-    z: s * V.z,
-    px: (ax - vp.centre[0] * s) * V.z + V.px,
-    py: (vp.centre[1] * s - ay) * V.z + V.py,
+    z: s * q.z,
+    px: (ax - vp.centre[0] * s) * q.z + q.px,
+    py: (vp.centre[1] * s - ay) * q.z + q.py,
   };
 }
 /** screen rect of a viewport, for clipping */
 function vpScreenRect(sh, vp) {
-  const a = w2s(sheetWorld(sh, vp.x, vp.y));
-  const b = w2s(sheetWorld(sh, vp.x + vp.w, vp.y + vp.h));
+  const a = paperW2S(sheetWorld(sh, vp.x, vp.y));
+  const b = paperW2S(sheetWorld(sh, vp.x + vp.w, vp.y + vp.h));
   return [Math.min(a[0], b[0]), Math.min(a[1], b[1]),
           Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])];
 }
 function fitSheet() {
   const sh = curSheet(); if (!sh) return;
-  V.rot = 0;                                       /* a sheet is never rotated */
   const pad = 28;
   const z = Math.min((V.w - pad * 2) / sh.w, (V.h - pad * 2) / sh.h);
-  V.z = z > 0 ? z : 1;
-  V.px = (V.w - sh.w * V.z) / 2;
-  V.py = (V.h - sh.h * V.z) / 2 + sh.h * V.z;      /* paper world y points up */
+  const t = { z: z > 0 ? z : 1 };
+  t.px = (V.w - sh.w * t.z) / 2;
+  t.py = (V.h - sh.h * t.z) / 2 + sh.h * t.z;      /* paper world y points up */
+  if (PAPERV) { Object.assign(PAPERV, t); }        /* inside: move the page under us */
+  else { V.rot = 0; Object.assign(V, t); }         /* a sheet is never rotated */
 }
 function drawSheet(sh) {
-  const P = (x, y) => w2s(sheetWorld(sh, x, y));
+  /* standing inside a viewport, V is the model view — write it back to the
+     viewport first so the stored window always matches what is on screen */
+  if (insideVp() && typeof syncVpFromView === 'function') syncVpFromView(sh);
+  const P = (x, y) => paperW2S(sheetWorld(sh, x, y));
   const tl = P(0, 0), br = P(sh.w, sh.h);
   const x = tl[0], y = tl[1], w = br[0] - tl[0], h = br[1] - tl[1];
   /* the paper, with a drop shadow: the one place in this program where a
@@ -1407,18 +1432,25 @@ function drawSheet(sh) {
     if (r[2] < 1 || r[3] < 1) continue;
     ctx.save();
     ctx.beginPath(); ctx.rect(r[0], r[1], r[2], r[3]); ctx.clip();
+    const live = insideVp() && vp.id === sh.activeVp;
     const keep = { z: V.z, px: V.px, py: V.py };
-    Object.assign(V, vpViewState(sh, vp));
+    /* the one we are standing in is already the current view; the rest are
+       drawn by pointing the same renderer through their own transform */
+    if (!live) Object.assign(V, vpViewState(sh, vp));
     try { drawEntitiesInView(); } catch (err) { /* one bad viewport must not take the page down */ }
-    Object.assign(V, keep);
+    if (!live) Object.assign(V, keep);
     ctx.restore();
     /* the frame is screen furniture: it marks the window while you work and is
        deliberately absent from the plot, exactly like a non-plotting layer */
     ctx.save();
-    ctx.strokeStyle = vp.id === sh.activeVp ? CO.sel : '#b9b9b2';
+    ctx.strokeStyle = vp.id === sh.activeVp ? CO.sel
+                    : vp.id === sh.selVp ? CO.grip : '#b9b9b2';
+    ctx.lineWidth = (vp.id === sh.activeVp || vp.id === sh.selVp) ? Math.max(HAIR, 1.5) : HAIR;
     ctx.lineWidth = HAIR; ctx.setLineDash(DASH_SOLID);
     ctx.strokeRect(r[0], r[1], r[2], r[3]);
     ctx.restore();
+    if (!insideVp() && vp.id === sh.selVp && typeof drawVpGrips === 'function')
+      drawVpGrips(sh, vp);
   }
   drawTitleBlock(sh, P);
 }
@@ -1449,7 +1481,17 @@ function drawTitleBlock(sh, P) {
     /* When the block is small on screen there is not room for a caption AND a
        value. Drop the caption and keep the value: an empty-looking title block
        reads as broken, where a small one reads as small. */
-    if (rh < 4.5) return;
+    /* Below about four pixels a row cannot carry a glyph. Ruling five empty
+       boxes reads as a broken title block, so draw a grey bar standing in for
+       the line of text: too small to read is a fair thing for a drawing to
+       look like, empty is not. */
+    if (rh < 4.5) {
+      if (!rw[1]) return;
+      ctx.fillStyle = '#a9a9a2';
+      ctx.fillRect(x + rh * 0.3, ry + rh * 0.42,
+                   Math.min(w - rh * 0.6, w * 0.62), Math.max(0.7, rh * 0.22));
+      return;
+    }
     const tight = rh < 11;
     if (tight) {
       ctx.fillStyle = '#1b1b16';

@@ -302,6 +302,67 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
 
   group('sheets: working inside a viewport');
 
+  t('stepping into a viewport makes V the model view', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'wall', a:[0,0], b:[8000,0], wt:'gen100', layer:'A-WALL'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0], vp = sh.viewports[0];
+      fitSheet();
+      const onPage = { z: V.z, px: V.px, py: V.py };
+      setActiveVp(sh, vp.id);
+      const inVp = { z: V.z, px: V.px, py: V.py };
+      /* the whole point: a model point now lands where the paper says it should */
+      const want = paperW2S(sheetWorld(sh, ...vpToPaper(vp, 3000, 1200)));
+      const got = w2s([3000, 1200]);
+      const zRatio = V.z / onPage.z;
+      setActiveVp(sh, null);
+      const back = { z: V.z, px: V.px, py: V.py };
+      return {
+        changed: inVp.z !== onPage.z,
+        zRatio, scale: vp.scale,
+        agree: Math.hypot(got[0]-want[0], got[1]-want[1]),
+        restored: back.z === onPage.z && back.px === onPage.px && back.py === onPage.py,
+        insideAfter: insideVp() };`);
+    eq(r.changed, true, 'entering a viewport must change the live view');
+    close(r.zRatio, r.scale, 1e-9, 'and it must change it by exactly the drawing scale');
+    ok(r.agree < 1e-6, 'a model point must land where the paper puts it, off by ' + r.agree + 'px');
+    eq(r.restored, true, 'leaving must put the page back exactly as it was');
+    eq(r.insideAfter, false);
+  });
+
+  /* Standing inside a window, an ordinary pan or zoom is the right thing — no
+     viewport-aware input path is involved. What must hold is that the stored
+     viewport keeps up with the view, and the PAGE underneath does not drift. */
+  t('an ordinary zoom inside a viewport rewrites the viewport, not the page', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'wall', a:[0,0], b:[8000,0], wt:'gen100', layer:'A-WALL'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0], vp = sh.viewports[0];
+      fitSheet();
+      const pageBefore = paperW2S(sheetWorld(sh, 0, 0));
+      setActiveVp(sh, vp.id);
+      const scale0 = vp.scale, c0 = vp.centre.slice();
+      /* zoom the way the wheel does, off-centre */
+      zoomAt(V.w * 0.6, V.h * 0.4, 1.35);
+      syncVpFromView(sh);
+      const pageAfter = paperW2S(sheetWorld(sh, 0, 0));
+      setActiveVp(sh, null);
+      const pageOut = paperW2S(sheetWorld(sh, 0, 0));
+      return {
+        scaleChanged: Math.abs(vp.scale - scale0) > 1e-9,
+        scaleNow: vp.scale, want: scale0 * 1.35,
+        centreMoved: Math.hypot(vp.centre[0]-c0[0], vp.centre[1]-c0[1]),
+        pageDrift: Math.hypot(pageAfter[0]-pageBefore[0], pageAfter[1]-pageBefore[1]),
+        pageOutDrift: Math.hypot(pageOut[0]-pageBefore[0], pageOut[1]-pageBefore[1]) };`);
+    eq(r.scaleChanged, true, 'the viewport scale must follow the zoom');
+    close(r.scaleNow, r.want, 1e-9, 'and follow it exactly');
+    ok(r.centreMoved > 0, 'an off-centre zoom also moves what the window looks at');
+    ok(r.pageDrift < 1e-9, 'the PAGE must not move while the model does');
+    ok(r.pageOutDrift < 1e-9, 'and must still be where it was on the way out');
+  });
+
   t('a viewport is a window: the model moves, the paper does not', () => {
     const r = R(`${SETUP}
       addEnt({t:'wall', a:[0,0], b:[8000,0], wt:'gen100', layer:'A-WALL'});
@@ -311,7 +372,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       fitSheet();
       const mid = w2s(sheetWorld(sh, vp.x + vp.w/2, vp.y + vp.h/2));
       setActiveVp(sh, vp.id);
-      const paperBefore = w2s(sheetWorld(sh, 0, 0));
+      const paperBefore = paperW2S(sheetWorld(sh, 0, 0));
       const viewBefore = { z: V.z, px: V.px, py: V.py };
       /* zoom with the cursor off-centre: the model under it must not shift */
       const sx = mid[0] + 70, sy = mid[1] - 40;
@@ -319,7 +380,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       const scale0 = vp.scale;
       vpZoomAt(sh, vp, sx, sy, 1.35);
       const under1 = s2vpModel(sh, vp, sx, sy);
-      const paperAfter = w2s(sheetWorld(sh, 0, 0));
+      const paperAfter = paperW2S(sheetWorld(sh, 0, 0));
       return {
         held: Math.hypot(under1[0]-under0[0], under1[1]-under0[1]),
         scaleChanged: Math.abs(vp.scale - scale0) > 1e-9,
@@ -389,5 +450,125 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r['1:200'], '1:200'); eq(r['1:20'], '1:20');
     eq(r['0.01'], '1:100', 'a ratio works too');
     eq(r.kept, true, 'nonsense must not change the scale of a drawing');
+  });
+
+  group('sheets: composing the page');
+
+  t('drawing through an active viewport lands in the model, at model size', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'wall', a:[0,0], b:[8000,0], wt:'gen100', layer:'A-WALL'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0], vp = sh.viewports[0];
+      fitSheet();
+      const n0 = DOC.ents.size;
+      setActiveVp(sh, vp.id);
+      /* pick two screen points, the way a pointer would */
+      const scr = w2s([2000, 2000]);
+      startCmd('line');
+      cmdPoint(s2w(scr[0], scr[1]));
+      cmdPoint(s2w(scr[0] + 60, scr[1]));
+      endCmd(true);
+      const made = [...DOC.ents.values()].filter(e => e.t === 'line').pop();
+      const out = {
+        added: DOC.ents.size - n0,
+        startedAt: made ? Math.hypot(made.a[0] - 2000, made.a[1] - 2000) : 1e9,
+        len: made ? dist(made.a, made.b) : 0,
+        want: 60 / V.z };
+      setActiveVp(sh, null);
+      out.keptAfterLeaving = DOC.ents.size - n0;
+      return out;`);
+    eq(r.added, 1, 'the line must go into the model, not onto the paper');
+    ok(r.startedAt < 1e-6, 'and start exactly where it was picked');
+    close(r.len, r.want, 1e-6, 'a 60px drag is 60px worth of MODEL through the window');
+    eq(r.keptAfterLeaving, 1, 'and it survives stepping back onto the page');
+  });
+
+  /* The real claim is that the window is transparent: snapping through a
+     viewport must give the identical answer to snapping at the same model view
+     with no sheet involved. My first version of this asserted the centreline
+     endpoint and failed — it had snapped to the wall FACE, 50mm off, which was
+     the snap doing its job on a 100mm wall. */
+  t('the window is transparent to snapping', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'wall', a:[1500,900], b:[8000,900], wt:'gen100', layer:'A-WALL'});
+      cancelCmd();
+      ST.osnap = true; ST.osnapOne = null; ST.osnapOneShot = false;
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0], vp = sh.viewports[0];
+      fitSheet();
+      setActiveVp(sh, vp.id);
+      const w = [...DOC.ents.values()].find(e => e.t === 'wall');
+      const scr = w2s(w.a);
+      const through = snapPoint(scr[0] + 2, scr[1] + 2, null);
+      const kThrough = ST.snap && ST.snap.k;
+      /* the model view we were looking through, kept exactly */
+      const keep = { z: V.z, px: V.px, py: V.py };
+      setActiveVp(sh, null);
+      gotoSheet(null);
+      Object.assign(V, keep);
+      const direct = snapPoint(scr[0] + 2, scr[1] + 2, null);
+      const kDirect = ST.snap && ST.snap.k;
+      return { kThrough, kDirect,
+               gap: Math.hypot(through[0]-direct[0], through[1]-direct[1]),
+               snapped: !!kThrough };`);
+    eq(r.snapped, true, 'a snap must actually engage through the window');
+    eq(r.kThrough, r.kDirect, 'and find the same KIND of point as in model space');
+    ok(r.gap < 1e-9, 'and the same point exactly, off by ' + r.gap + 'mm');
+  });
+
+  t('a viewport has eight grips and resizing never rescales the drawing', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'wall', a:[0,0], b:[8000,0], wt:'gen100', layer:'A-WALL'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0], vp = sh.viewports[0];
+      fitSheet();
+      sh.selVp = vp.id;
+      const pts = vpGripPts(sh, vp);
+      const hit = !!vpGripAt(sh, pts[2][0], pts[2][1]);
+      const miss = vpGripAt(sh, pts[2][0] + 40, pts[2][1] + 40) === null;
+      const w0 = vp.w, h0 = vp.h, sc0 = vp.scale, c0 = vp.centre.slice();
+      vpApplyGrip(sh, vp, 2, vp.x + vp.w - 40, vp.y + vp.h - 30);
+      const narrowed = w0 - vp.w, shortened = h0 - vp.h;
+      const scaleHeld = vp.scale === sc0;
+      const centreHeld = Math.hypot(vp.centre[0]-c0[0], vp.centre[1]-c0[1]);
+      /* a sliver is refused outright rather than snapped to a minimum */
+      const w1 = vp.w;
+      vpApplyGrip(sh, vp, 2, vp.x + 2, vp.y + 2);
+      return { n: pts.length, hit, miss, narrowed, shortened, scaleHeld,
+               centreHeld, sliverRefused: vp.w === w1 };`);
+    eq(r.n, 8, 'four corners and four edges');
+    eq(r.hit, true); eq(r.miss, true, 'and they must not pick from 40px away');
+    close(r.narrowed, 40, 1e-9); close(r.shortened, 30, 1e-9);
+    eq(r.scaleHeld, true, 'resizing a window must NEVER change the drawing scale');
+    ok(r.centreHeld < 1e-6, 'the model under the window must not slide as it resizes');
+    eq(r.sliverRefused, true, 'a viewport too small to see is refused, not clamped');
+  });
+
+  t('PAGESETUP changes the paper and keeps the layout composed', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'wall', a:[0,0], b:[8000,0], wt:'gen100', layer:'A-WALL'});
+      cancelCmd();
+      dispatch('LAYOUT'); dispatch('N'); dispatch('A-101');
+      const sh = DOC.sheets[0], vp = sh.viewports[0];
+      const p0 = [sh.w, sh.h], v0 = [vp.x, vp.y, vp.w, vp.h], s0 = vp.scale;
+      applyPageSetup(sh, { size: 'A1', landscape: true,
+        project: 'Riverside House', number: 'A-101', rev: 'C' });
+      const k = sh.w / p0[0];
+      return {
+        paper: [sh.w, sh.h],
+        project: sh.title.project, number: sh.title.number, rev: sh.title.rev,
+        scaleKept: vp.scale === s0,
+        vpScaled: Math.abs(vp.w / v0[2] - k) < 1e-9,
+        onPaper: vp.x >= -1e-9 && vp.y >= -1e-9 &&
+                 vp.x + vp.w <= sh.w + 1e-6 && vp.y + vp.h <= sh.h + 1e-6,
+        plotHead: sheetSVG(sh).slice(0, 120) };`);
+    eq(r.paper.join('x'), '841x594', 'A1 landscape');
+    eq(r.project, 'Riverside House'); eq(r.number, 'A-101'); eq(r.rev, 'C');
+    eq(r.scaleKept, true, 'a drawing does not change scale because the paper did');
+    eq(r.vpScaled, true, 'the viewports move with the paper so the layout stays composed');
+    eq(r.onPaper, true, 'and none of them ends up off the page');
+    ok(/width="841mm"/.test(r.plotHead), 'and the plot follows the new sheet');
   });
 };

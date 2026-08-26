@@ -217,11 +217,32 @@ stage.addEventListener('pointerdown', ev => {
   downScr = scr; moved = false; pend = null;
   /* Pan on the middle button, on a held spacebar, and for the whole of the
      PAN command. The right button is AutoCAD's shortcut menu, not a pan. */
+  /* On the page — not inside a window — the left button selects and drags
+     viewports. Inside one, the pointer belongs to the model and this is
+     skipped entirely. */
+  const _psh = (typeof curSheet === 'function') ? curSheet() : null;
+  if (_psh && !insideVp() && ev.button === 0 && !ev.altKey && !ST.panReady && !ST.panCmd && !CMD) {
+    const g = vpGripAt(_psh, scr[0], scr[1]);
+    if (g) {
+      ST.vpDrag = { vp: g.vp, grip: g.grip };
+      stage.setPointerCapture && stage.setPointerCapture(ev.pointerId);
+      begin();
+      return;
+    }
+    const hit = vpPickAt(_psh, scr[0], scr[1]);
+    if (hit) {
+      if (_psh.selVp !== hit.id) { _psh.selVp = hit.id; draw(); }
+      const pp = s2paper(_psh, scr[0], scr[1]);
+      ST.vpDrag = { vp: hit, grip: -1, ox: pp[0] - hit.x, oy: pp[1] - hit.y };
+      stage.setPointerCapture && stage.setPointerCapture(ev.pointerId);
+      begin();
+      return;
+    }
+    if (_psh.selVp) { _psh.selVp = null; draw(); }
+  }
   if (ev.button === 1 || (ev.button === 0 && (ev.altKey || ST.panReady || ST.panCmd))) {
     cancelAnim();
-    const _pv = (typeof activeVp === 'function') ? activeVp() : null;
-    ST.panning = { x: scr[0], y: scr[1], px: V.px, py: V.py,
-                   vpc: _pv ? _pv.centre.slice() : null };
+    ST.panning = { x: scr[0], y: scr[1], px: V.px, py: V.py };
     ST.panDragged = false; navCursor(); return;
   }
   /* ZOOM real time: drag up to magnify, anchored where the drag started */
@@ -268,18 +289,24 @@ stage.addEventListener('pointermove', ev => {
     zoomAt(c[0], c[1], (pinch.z * f) / V.z); pinch.d = d; pinch.z = V.z;
     return;
   }
-  if (ST.panning) {
-    const _av = (typeof activeVp === 'function') ? activeVp() : null;
-    if (_av && ST.panning.vpc) {
-      /* the paper stays put; the model slides behind it, so a drag of n pixels
-         moves n pixels' worth of model — which is what a window has to mean */
-      const k = (_av.scale || 1) * (V.z || 1);
-      if (k > 0) {
-        _av.centre[0] = ST.panning.vpc[0] - (scr[0] - ST.panning.x) / k;
-        _av.centre[1] = ST.panning.vpc[1] + (scr[1] - ST.panning.y) / k;
+  if (ST.vpDrag) {
+    const sh = curSheet();
+    if (sh) {
+      const pp = s2paper(sh, scr[0], scr[1]);
+      const d = ST.vpDrag;
+      if (d.grip < 0) {
+        /* moving the window takes its view with it: the same model stays in
+           frame, which is what dragging a view on a sheet has to mean */
+        d.vp.x = clamp(pp[0] - d.ox, 0, sh.w - d.vp.w);
+        d.vp.y = clamp(pp[1] - d.oy, 0, sh.h - d.vp.h);
+      } else {
+        vpApplyGrip(sh, d.vp, d.grip, pp[0], pp[1]);
       }
-      moved = true; ST.panDragged = true; draw(); return;
+      moved = true; draw();
     }
+    return;
+  }
+  if (ST.panning) {
     /* 1:1 and absolute — recomputed from the press point every move, so a pan
        can never accumulate drift however long the drag runs */
     V.px = ST.panning.px + (scr[0] - ST.panning.x);
@@ -316,6 +343,12 @@ stage.addEventListener('pointermove', ev => {
 stage.addEventListener('pointerup', ev => {
   ptrs.delete(ev.pointerId);
   if (ptrs.size < 2) pinch = null;
+  if (ST.vpDrag) {
+    const d = ST.vpDrag; ST.vpDrag = null;
+    commit(d.grip < 0 ? 'Move viewport' : 'Resize viewport');
+    downPt = null; downScr = null; pend = null; draw();
+    return;
+  }
   if (ST.panning) { ST.panning = null; navCursor(); downPt = null; downScr = null; pend = null; return; }
   if (ST.rtdrag) { ST.rtdrag = null; navCursor(); downPt = null; downScr = null; pend = null; return; }  const scr = localXY(ev);
   const p = ST.cur || s2w(scr[0], scr[1]);
@@ -409,12 +442,9 @@ stage.addEventListener('wheel', ev => {
              : (px >= 120 && px % 120 === 0) ? 120 : 100;
   const notches = clamp(ev.deltaY / unit, -4, 4);
   if (!notches) return;
-  /* inside a viewport the wheel moves the model behind the paper, not the
-     paper on the screen */
-  const _sh = (typeof curSheet === 'function') ? curSheet() : null;
-  const _avp = _sh && typeof activeVp === 'function' ? activeVp() : null;
-  if (_avp) vpZoomAt(_sh, _avp, scr[0], scr[1], wheelFactor(notches));
-  else zoomAt(scr[0], scr[1], wheelFactor(notches));
+  /* No special case for viewports: inside one, V already IS the model view, so
+     the ordinary zoom moves the model behind the paper by construction. */
+  zoomAt(scr[0], scr[1], wheelFactor(notches));
   ST.cur = snapPoint(scr[0], scr[1], refPoint());
   syncCoord(); syncDyn();
 }, { passive: false });

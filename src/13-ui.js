@@ -1981,6 +1981,7 @@ function sheetTabMenu(sh, anchor) {
       begin(); sh.name = String(n).trim() || sh.name; commit('Rename layout');
       buildSheetTabs(); draw();
     }],
+    ['Sheet setup…', () => { gotoSheet(sh.id); META.pagesetup.fn(); }],
     ['Plot\u2026', () => { gotoSheet(sh.id); plotSheet(sh); }],
     ['Delete', () => {
       begin();
