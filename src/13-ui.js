@@ -90,6 +90,10 @@ const IC = {
   eye: '<path d="M1.5 8s2.6-4 6.5-4 6.5 4 6.5 4-2.6 4-6.5 4-6.5-4-6.5-4z"/><circle cx="8" cy="8" r="1.6"/>',
   eyeoff: '<path d="M2 2l12 12"/><path d="M6.2 6.3A2 2 0 0 0 8 10a2 2 0 0 0 1.7-1"/><path d="M4.2 4.4C2.6 5.6 1.5 8 1.5 8s2.6 4 6.5 4c1 0 1.9-.2 2.7-.6M12 4.9c1.6 1.2 2.5 3.1 2.5 3.1s-.5.8-1.4 1.7"/>',
   lock: '<rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>',
+  snow: '<path d="M8 1.5v13M2.4 4.8l11.2 6.4M13.6 4.8L2.4 11.2"/>',
+  sun: '<circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/>',
+  plot: '<rect x="2" y="6" width="12" height="6" rx="1"/><path d="M4.5 6V2.5h7V6M5 12v2h6v-2"/>',
+  noplot: '<rect x="2" y="6" width="12" height="6" rx="1"/><path d="M4.5 6V2.5h7V6"/><path d="M2 2l12 12"/>',
   unlock: '<rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 4.9-.6"/>',
 };
 const svg = (k, vb) => `<svg viewBox="0 0 ${vb || 20} ${vb || 20}">${IC[k] || ''}</svg>`;
@@ -471,7 +475,19 @@ function buildLayers() {
     const lk = el('span', 'ic' + (l.lock ? ' off' : ''), svg(l.lock ? 'lock' : 'unlock', 16));
     lk.title = l.lock ? 'Unlock layer' : 'Lock layer';
     lk.onclick = ev => { ev.stopPropagation(); begin(); touchLayers(); l.lock = !l.lock; commit(); draw(); buildLayers(); };
-    row.append(sw, nm, eye, lk);
+    const fz = el('span', 'ic' + (l.frozen ? ' off' : ''), svg(l.frozen ? 'snow' : 'sun', 16));
+    fz.title = l.frozen ? 'Thaw layer' : 'Freeze layer — hidden and left out of the extents';
+    fz.onclick = ev => {
+      ev.stopPropagation();
+      /* the current layer cannot be frozen: you would be drawing into
+         something you cannot see */
+      if (!l.frozen && l.name === DOC.cur) return toast('The current layer cannot be frozen');
+      begin(); touchLayers(); l.frozen = !l.frozen; commit(); draw(); buildLayers();
+    };
+    const pl = el('span', 'ic' + (l.plot === false ? ' off' : ''), svg(l.plot === false ? 'noplot' : 'plot', 16));
+    pl.title = l.plot === false ? 'This layer does not plot' : 'This layer plots';
+    pl.onclick = ev => { ev.stopPropagation(); begin(); touchLayers(); l.plot = l.plot === false; commit(); draw(); buildLayers(); };
+    row.append(sw, nm, eye, fz, lk, pl);
     row.onclick = () => {
       DOC.cur = l.name;
       if (SEL.size) { begin(); selEnts().forEach(e => { mut(e); e.layer = l.name; }); commit('Moved to ' + l.name); }

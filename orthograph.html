@@ -737,7 +737,13 @@ const DOC = {
 const SEL = new Set();
 
 function newLayer(name, color) {
-  return { name, color: color || '#d7dee8', on: true, lock: false, lw: 0.25, lt: 'solid' };
+  /* frozen is not the same as off, and plot is not the same as either:
+       off      — not drawn, not plotted, but still counted in the extents
+       frozen   — not drawn, not plotted, not counted, cannot be current
+       plot off — drawn on screen and deliberately absent from the paper,
+                  which is what construction lines and viewport frames want */
+  return { name, color: color || '#d7dee8', on: true, lock: false,
+           frozen: false, plot: true, lw: 0.25, lt: 'solid' };
 }
 function layer(n) { return DOC.layers.find(l => l.name === n) || DOC.layers[0]; }
 function hasLayer(n) { return DOC.layers.some(l => l.name === n); }
@@ -820,13 +826,14 @@ function resetDoc() {
   DOC.ents.clear(); DOC.cur = '0'; UID = 1;
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
-  DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1;
+  DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];
   /* a document straight off the shelf has nothing unsaved in it */
   DOC.savedSeq = HIST.seq;
   idxInvalidate(); HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;
   /* The shape cache is keyed by entity id and UID has just gone back to 1, so
      anything left in it now belongs to a drawing that no longer exists. */
   if (typeof shapeCacheClear === 'function') shapeCacheClear();
+  if (typeof layerMapClear === 'function') layerMapClear();
 }
 
 /* ============================================================
@@ -1130,8 +1137,15 @@ function redo() {
 function entColor(e) { return e.color || layer(e.layer).color; }
 function entLt(e) { return e.lt || layer(e.layer).lt || 'solid'; }
 function entLw(e) { return e.lw != null ? e.lw : layer(e.layer).lw; }
-function visible(e) { const l = layer(e.layer); return l.on; }
-function pickable(e) { const l = layer(e.layer); return l.on && !l.lock; }
+function visible(e) { const l = layer(e.layer); return l.on && !l.frozen; }
+function pickable(e) { const l = layer(e.layer); return l.on && !l.frozen && !l.lock; }
+/** Counted when working out how big the drawing is. An off layer still counts,
+    a frozen one does not — which is the practical difference between them and
+    the reason both exist. */
+function inExtents(e) { return !layer(e.layer).frozen; }
+/** Drawn on paper. A layer can be visible on screen and deliberately absent
+    from the plot; that is what a non-plotting layer is for. */
+function plottable(e) { const l = layer(e.layer); return l.on && !l.frozen && l.plot !== false; }
 function selEnts() { return [...SEL].map(i => DOC.ents.get(i)).filter(Boolean); }
 
 /* ===== 02-geom.js ===== */
@@ -3446,7 +3460,7 @@ function fit(list, anim) {
     fitSheet();
     return { z: V.z, px: V.px, py: V.py, rot: 0 };
   }
-  const b = bboxAll(list || [...DOC.ents.values()].filter(visible));
+  const b = bboxAll(list || [...DOC.ents.values()].filter(inExtents));
   const to = b ? viewForBox(b) : { z: 1, px: V.w / 2, py: V.h / 2, rot: V.rot };
   if (anim) pushView();
   animView(to, anim);
@@ -3457,7 +3471,7 @@ function zoomAll(anim) {
   /* ZOOM All on a sheet is the sheet: there are no drawing limits on paper */
   const shA = (typeof curSheet === 'function') ? curSheet() : null;
   if (shA && !insideVp()) { if (anim) pushView(); fitSheet(); return; }
-  const b = bboxAll([...DOC.ents.values()].filter(visible));
+  const b = bboxAll([...DOC.ents.values()].filter(inExtents));
   const L = DOC.limits;
   let box = b;
   if (L && L.length === 4) {
@@ -3573,6 +3587,11 @@ function lwPx(mm) {
    go stale, because it is thrown away at the end of the frame. */
 const FALLBACK_LAYER = { name: '0', color: '#d7dee8', on: true, lock: false, lw: LW_DEFAULT, lt: 'solid' };
 const LAYM = new Map();
+/** Drop the per-frame layer map. Like the shape cache, it holds references
+    into the document, so replacing the document must invalidate it — paint()
+    rebuilds it every frame, which hides this in the app but not anywhere that
+    resolves a layer without painting first. */
+function layerMapClear() { LAYM.clear(); }
 function frameLayers() {
   LAYM.clear();
   const L = DOC.layers || [];
@@ -3583,7 +3602,12 @@ function flay(n) {
   if (!LAYM.size) frameLayers();
   return LAYM.get(n) || (DOC.layers && DOC.layers[0]) || FALLBACK_LAYER;
 }
-const fvis = e => flay(e.layer).on;
+/* The draw path's fast visibility test. It MUST agree with visible() in
+   01-doc: this is a second copy of the same rule kept for speed, and when
+   freeze was added only the slow one learned about it, so frozen layers went
+   on being drawn while every other part of the program agreed they were
+   hidden. A test now asserts the two answer identically. */
+const fvis = e => { const l = flay(e.layer); return l.on && !l.frozen; };
 const fcol = e => e.color || flay(e.layer).color;
 const flt = e => e.lt || flay(e.layer).lt || 'solid';
 const flw = e => (e.lw != null ? e.lw : flay(e.layer).lw);
@@ -11192,6 +11216,185 @@ function doWallSplit(c, d) {
   hint('Click the wall you want to split · <em>Esc</em> cancel');
 }
 
+/* ===== 09b-layer.js ===== */
+/* ============================================================
+   Layer tools — LAYISO, LAYOFF, LAYFRZ, LAYMCUR and friends,
+   plus named layer states.
+
+   A layer panel is fine for housekeeping and useless in the
+   middle of drawing: what a draughtsman actually does is point
+   at something and say "hide that", "make that current", "show
+   me only this". These are AutoCAD's names for exactly that, and
+   they are the commands that make a busy drawing workable.
+   ============================================================ */
+
+/** the layer of whatever is under a pick, or null with a message */
+function layerAtPick(p, why) {
+  const e = pickAt(p, 10);
+  if (!e) { echo('Nothing there'); return null; }
+  const l = layer(e.layer);
+  if (!l) { echo('That object has no layer'); return null; }
+  return l;
+}
+/** every layer that any of these entities sits on */
+function layersOf(ents) {
+  const set = new Set();
+  for (const e of ents) set.add(e.layer);
+  return [...set];
+}
+
+defc('layoff', {
+  group: 'view', hint: 'Pick something on the layer to hide · <em>Enter</em> to stop',
+  point(c, p) {
+    const l = layerAtPick(p); if (!l) return;
+    if (l.name === DOC.cur) return echo('That is the current layer — draw somewhere else first');
+    begin(); touchLayers(); l.on = false; commit('Layer ' + l.name + ' off');
+    SEL.clear(); syncUI(); draw();
+  },
+});
+defc('layfrz', {
+  group: 'view', hint: 'Pick something on the layer to freeze · <em>Enter</em> to stop',
+  point(c, p) {
+    const l = layerAtPick(p); if (!l) return;
+    /* freezing what you are drawing on would leave you working blind */
+    if (l.name === DOC.cur) return echo('The current layer cannot be frozen');
+    begin(); touchLayers(); l.frozen = true; commit('Layer ' + l.name + ' frozen');
+    SEL.clear(); syncUI(); draw();
+  },
+});
+defc('laymcur', {
+  group: 'view', hint: 'Pick something on the layer to make current',
+  point(c, p) {
+    const l = layerAtPick(p); if (!l) return;
+    if (l.frozen) return echo('A frozen layer cannot be made current');
+    DOC.cur = l.name;
+    cliPrint('Current layer is now ' + l.name);
+    SEL.clear(); syncUI(); draw(); endCmd();
+  },
+});
+defm('LAYON', () => {
+  begin(); touchLayers();
+  for (const l of DOC.layers) l.on = true;
+  commit('All layers on');
+  syncUI(); draw();
+}, { group: 'view' });
+defm('LAYTHW', () => {
+  begin(); touchLayers();
+  for (const l of DOC.layers) l.frozen = false;
+  commit('All layers thawed');
+  syncUI(); draw();
+}, { group: 'view' });
+
+/* ---------------- isolate ----------------
+   LAYISO hides everything except the layers you pointed at, and LAYUNISO puts
+   it back. Putting it back is the whole trick: the state before isolating is
+   remembered, so unisolating restores exactly what was on and off rather than
+   turning everything on and destroying the setup you had. */
+let LAYISO_PREV = null;
+defc('layiso', {
+  group: 'view', needSel: false,
+  hint: 'Pick what to keep visible · <em>Enter</em> when done',
+  init(c) { c.keep = new Set(SEL.size ? layersOf(selEnts()) : []); },
+  point(c, p) {
+    const l = layerAtPick(p); if (!l) return;
+    c.keep.add(l.name);
+    echo('Keeping ' + [...c.keep].join(', '));
+  },
+  enter(c) {
+    if (!c.keep.size) { echo('Nothing picked'); return endCmd(); }
+    LAYISO_PREV = DOC.layers.map(l => ({ name: l.name, on: l.on, frozen: l.frozen }));
+    begin(); touchLayers();
+    for (const l of DOC.layers) if (!c.keep.has(l.name)) l.on = false;
+    /* the current layer has to be one you can see, or the next thing drawn
+       vanishes the moment it is made */
+    if (!c.keep.has(DOC.cur)) DOC.cur = [...c.keep][0];
+    commit('Isolated ' + [...c.keep].join(', '));
+    SEL.clear(); syncUI(); draw(); endCmd();
+  },
+});
+defm('LAYUNISO', () => {
+  if (!LAYISO_PREV) { echo('Nothing was isolated'); return; }
+  begin(); touchLayers();
+  for (const rec of LAYISO_PREV) {
+    const l = DOC.layers.find(x => x.name === rec.name);
+    if (l) { l.on = rec.on; l.frozen = rec.frozen; }
+  }
+  commit('Un-isolated');
+  LAYISO_PREV = null;
+  syncUI(); draw();
+}, { group: 'view' });
+
+/* ---------------- named layer states ----------------
+   A drawing has moods: everything on for coordination, structure only for a
+   frame plan, services off for a GA. Saving those by name is the difference
+   between a set of layer settings you can return to and one you rebuild by
+   hand every time. */
+function layerStates() { return DOC.layerStates || (DOC.layerStates = []); }
+function saveLayerState(name) {
+  const n = String(name || '').trim();
+  if (!n) return false;
+  const snap = DOC.layers.map(l => ({
+    name: l.name, on: l.on, frozen: l.frozen, lock: l.lock,
+    plot: l.plot, color: l.color, lw: l.lw, lt: l.lt,
+  }));
+  const list = layerStates();
+  const at = list.findIndex(s => s.name.toLowerCase() === n.toLowerCase());
+  const rec = { name: n, cur: DOC.cur, layers: snap };
+  if (at >= 0) list[at] = rec; else list.push(rec);
+  return true;
+}
+/** Restore a state. Layers that did not exist when it was saved are left
+    exactly as they are rather than guessed at — a state is a record of what it
+    saw, not a claim about everything that came after. */
+function restoreLayerState(name) {
+  const n = String(name || '').trim().toLowerCase();
+  const rec = layerStates().find(s => s.name.toLowerCase() === n);
+  if (!rec) return false;
+  begin(); touchLayers();
+  for (const snap of rec.layers) {
+    const l = DOC.layers.find(x => x.name === snap.name);
+    if (!l) continue;
+    l.on = snap.on; l.frozen = snap.frozen; l.lock = snap.lock;
+    l.plot = snap.plot; l.color = snap.color; l.lw = snap.lw; l.lt = snap.lt;
+  }
+  if (rec.cur && DOC.layers.some(l => l.name === rec.cur && !l.frozen)) DOC.cur = rec.cur;
+  commit('Layer state ' + rec.name);
+  syncUI(); draw();
+  return true;
+}
+defc('layerstate', {
+  key: 'layerstate', group: 'view',
+  hint: '<em>S</em> save · <em>R</em> restore · <em>D</em> delete · <em>?</em> list',
+  init(c) { c.data = {}; },
+  text(c, s) {
+    const raw = String(s).trim(), k = raw.toLowerCase(), d = c.data;
+    if (d.await === 'save') {
+      begin(); saveLayerState(raw); commit('Save layer state');
+      cliPrint('Layer state "' + raw + '" saved'); return true;
+    }
+    if (d.await === 'restore') {
+      if (!restoreLayerState(raw)) cliPrint('No layer state called "' + raw + '".', 'err');
+      return true;
+    }
+    if (d.await === 'delete') {
+      const before = layerStates().length;
+      DOC.layerStates = layerStates().filter(x => x.name.toLowerCase() !== k);
+      cliPrint(DOC.layerStates.length < before ? 'Deleted "' + raw + '"' : 'No such state');
+      return true;
+    }
+    if (k === 's' || k === 'save') { d.await = 'save'; hint('Name for this layer state:'); return true; }
+    if (k === 'r' || k === 'restore') { d.await = 'restore'; hint('Layer state to restore:'); return true; }
+    if (k === 'd' || k === 'delete') { d.await = 'delete'; hint('Layer state to delete:'); return true; }
+    if (k === '?' || k === 'list') {
+      const l = layerStates();
+      cliPrint(l.length ? l.map(x => x.name + '  (' + x.layers.length + ' layers)').join('\n')
+                        : 'No layer states saved yet.');
+      return true;
+    }
+    return false;
+  },
+});
+
 /* ===== 10-dxf.js ===== */
 /* ============================================================
    ORTHOGRAPH — 10 DXF in and out
@@ -12016,7 +12219,8 @@ function svgEntityBody(lwMul) {
       out.push(`<circle cx="${s.c[0]}" cy="${-s.c[1]}" r="${s.r}" ${st}/>`);
     }
   };
-  const ordered = [...DOC.ents.values()].filter(visible);
+  /* what goes on paper, which is not the same as what is on screen */
+  const ordered = [...DOC.ents.values()].filter(plottable);
   ordered.sort((a, x) => ((a.t === 'hatch' || a.t === 'room') ? 0 : 1) - ((x.t === 'hatch' || x.t === 'room') ? 0 : 1));
   for (const e of ordered) {
     const col = ink(entColor(e));
@@ -12198,6 +12402,7 @@ function saveNative() {
     wallTypes: DOC.wallTypes, doorTypes: DOC.doorTypes, winTypes: DOC.winTypes,
     levels: DOC.levels, curLevel: DOC.curLevel,
     sheets: DOC.sheets || [], curSheet: DOC.curSheet,
+    layerStates: DOC.layerStates || [],
     ents: [...DOC.ents.values()].map(roomForSave),
   });
 }
@@ -12246,6 +12451,7 @@ function loadNative(txt) {
   DOC.curLevel = d.curLevel || 0;
   /* Sheets postdate version 2, so an older file simply has none — that is a
      document with no paper space, not a broken one. */
+  DOC.layerStates = Array.isArray(d.layerStates) ? d.layerStates : [];
   DOC.sheets = Array.isArray(d.sheets) ? d.sheets.filter(sh => sh && sh.w > 0 && sh.h > 0) : [];
   DOC.curSheet = DOC.sheets.some(sh => sh.id === d.curSheet) ? d.curSheet : null;
   SHEET_UID = Math.max(1, ...DOC.sheets.map(sh => (sh.id || 0) + 1),
@@ -13280,6 +13486,10 @@ const IC = {
   eye: '<path d="M1.5 8s2.6-4 6.5-4 6.5 4 6.5 4-2.6 4-6.5 4-6.5-4-6.5-4z"/><circle cx="8" cy="8" r="1.6"/>',
   eyeoff: '<path d="M2 2l12 12"/><path d="M6.2 6.3A2 2 0 0 0 8 10a2 2 0 0 0 1.7-1"/><path d="M4.2 4.4C2.6 5.6 1.5 8 1.5 8s2.6 4 6.5 4c1 0 1.9-.2 2.7-.6M12 4.9c1.6 1.2 2.5 3.1 2.5 3.1s-.5.8-1.4 1.7"/>',
   lock: '<rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>',
+  snow: '<path d="M8 1.5v13M2.4 4.8l11.2 6.4M13.6 4.8L2.4 11.2"/>',
+  sun: '<circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/>',
+  plot: '<rect x="2" y="6" width="12" height="6" rx="1"/><path d="M4.5 6V2.5h7V6M5 12v2h6v-2"/>',
+  noplot: '<rect x="2" y="6" width="12" height="6" rx="1"/><path d="M4.5 6V2.5h7V6"/><path d="M2 2l12 12"/>',
   unlock: '<rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 4.9-.6"/>',
 };
 const svg = (k, vb) => `<svg viewBox="0 0 ${vb || 20} ${vb || 20}">${IC[k] || ''}</svg>`;
@@ -13661,7 +13871,19 @@ function buildLayers() {
     const lk = el('span', 'ic' + (l.lock ? ' off' : ''), svg(l.lock ? 'lock' : 'unlock', 16));
     lk.title = l.lock ? 'Unlock layer' : 'Lock layer';
     lk.onclick = ev => { ev.stopPropagation(); begin(); touchLayers(); l.lock = !l.lock; commit(); draw(); buildLayers(); };
-    row.append(sw, nm, eye, lk);
+    const fz = el('span', 'ic' + (l.frozen ? ' off' : ''), svg(l.frozen ? 'snow' : 'sun', 16));
+    fz.title = l.frozen ? 'Thaw layer' : 'Freeze layer — hidden and left out of the extents';
+    fz.onclick = ev => {
+      ev.stopPropagation();
+      /* the current layer cannot be frozen: you would be drawing into
+         something you cannot see */
+      if (!l.frozen && l.name === DOC.cur) return toast('The current layer cannot be frozen');
+      begin(); touchLayers(); l.frozen = !l.frozen; commit(); draw(); buildLayers();
+    };
+    const pl = el('span', 'ic' + (l.plot === false ? ' off' : ''), svg(l.plot === false ? 'noplot' : 'plot', 16));
+    pl.title = l.plot === false ? 'This layer does not plot' : 'This layer plots';
+    pl.onclick = ev => { ev.stopPropagation(); begin(); touchLayers(); l.plot = l.plot === false; commit(); draw(); buildLayers(); };
+    row.append(sw, nm, eye, fz, lk, pl);
     row.onclick = () => {
       DOC.cur = l.name;
       if (SEL.size) { begin(); selEnts().forEach(e => { mut(e); e.layer = l.name; }); commit('Moved to ' + l.name); }

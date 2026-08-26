@@ -33,7 +33,8 @@ function svgEntityBody(lwMul) {
       out.push(`<circle cx="${s.c[0]}" cy="${-s.c[1]}" r="${s.r}" ${st}/>`);
     }
   };
-  const ordered = [...DOC.ents.values()].filter(visible);
+  /* what goes on paper, which is not the same as what is on screen */
+  const ordered = [...DOC.ents.values()].filter(plottable);
   ordered.sort((a, x) => ((a.t === 'hatch' || a.t === 'room') ? 0 : 1) - ((x.t === 'hatch' || x.t === 'room') ? 0 : 1));
   for (const e of ordered) {
     const col = ink(entColor(e));
@@ -215,6 +216,7 @@ function saveNative() {
     wallTypes: DOC.wallTypes, doorTypes: DOC.doorTypes, winTypes: DOC.winTypes,
     levels: DOC.levels, curLevel: DOC.curLevel,
     sheets: DOC.sheets || [], curSheet: DOC.curSheet,
+    layerStates: DOC.layerStates || [],
     ents: [...DOC.ents.values()].map(roomForSave),
   });
 }
@@ -263,6 +265,7 @@ function loadNative(txt) {
   DOC.curLevel = d.curLevel || 0;
   /* Sheets postdate version 2, so an older file simply has none — that is a
      document with no paper space, not a broken one. */
+  DOC.layerStates = Array.isArray(d.layerStates) ? d.layerStates : [];
   DOC.sheets = Array.isArray(d.sheets) ? d.sheets.filter(sh => sh && sh.w > 0 && sh.h > 0) : [];
   DOC.curSheet = DOC.sheets.some(sh => sh.id === d.curSheet) ? d.curSheet : null;
   SHEET_UID = Math.max(1, ...DOC.sheets.map(sh => (sh.id || 0) + 1),

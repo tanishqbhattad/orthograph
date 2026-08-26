@@ -218,7 +218,7 @@ function fit(list, anim) {
     fitSheet();
     return { z: V.z, px: V.px, py: V.py, rot: 0 };
   }
-  const b = bboxAll(list || [...DOC.ents.values()].filter(visible));
+  const b = bboxAll(list || [...DOC.ents.values()].filter(inExtents));
   const to = b ? viewForBox(b) : { z: 1, px: V.w / 2, py: V.h / 2, rot: V.rot };
   if (anim) pushView();
   animView(to, anim);
@@ -229,7 +229,7 @@ function zoomAll(anim) {
   /* ZOOM All on a sheet is the sheet: there are no drawing limits on paper */
   const shA = (typeof curSheet === 'function') ? curSheet() : null;
   if (shA && !insideVp()) { if (anim) pushView(); fitSheet(); return; }
-  const b = bboxAll([...DOC.ents.values()].filter(visible));
+  const b = bboxAll([...DOC.ents.values()].filter(inExtents));
   const L = DOC.limits;
   let box = b;
   if (L && L.length === 4) {
@@ -345,6 +345,11 @@ function lwPx(mm) {
    go stale, because it is thrown away at the end of the frame. */
 const FALLBACK_LAYER = { name: '0', color: '#d7dee8', on: true, lock: false, lw: LW_DEFAULT, lt: 'solid' };
 const LAYM = new Map();
+/** Drop the per-frame layer map. Like the shape cache, it holds references
+    into the document, so replacing the document must invalidate it — paint()
+    rebuilds it every frame, which hides this in the app but not anywhere that
+    resolves a layer without painting first. */
+function layerMapClear() { LAYM.clear(); }
 function frameLayers() {
   LAYM.clear();
   const L = DOC.layers || [];
@@ -355,7 +360,12 @@ function flay(n) {
   if (!LAYM.size) frameLayers();
   return LAYM.get(n) || (DOC.layers && DOC.layers[0]) || FALLBACK_LAYER;
 }
-const fvis = e => flay(e.layer).on;
+/* The draw path's fast visibility test. It MUST agree with visible() in
+   01-doc: this is a second copy of the same rule kept for speed, and when
+   freeze was added only the slow one learned about it, so frozen layers went
+   on being drawn while every other part of the program agreed they were
+   hidden. A test now asserts the two answer identically. */
+const fvis = e => { const l = flay(e.layer); return l.on && !l.frozen; };
 const fcol = e => e.color || flay(e.layer).color;
 const flt = e => e.lt || flay(e.layer).lt || 'solid';
 const flw = e => (e.lw != null ? e.lw : flay(e.layer).lw);

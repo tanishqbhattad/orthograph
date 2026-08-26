@@ -31,7 +31,13 @@ const DOC = {
 const SEL = new Set();
 
 function newLayer(name, color) {
-  return { name, color: color || '#d7dee8', on: true, lock: false, lw: 0.25, lt: 'solid' };
+  /* frozen is not the same as off, and plot is not the same as either:
+       off      — not drawn, not plotted, but still counted in the extents
+       frozen   — not drawn, not plotted, not counted, cannot be current
+       plot off — drawn on screen and deliberately absent from the paper,
+                  which is what construction lines and viewport frames want */
+  return { name, color: color || '#d7dee8', on: true, lock: false,
+           frozen: false, plot: true, lw: 0.25, lt: 'solid' };
 }
 function layer(n) { return DOC.layers.find(l => l.name === n) || DOC.layers[0]; }
 function hasLayer(n) { return DOC.layers.some(l => l.name === n); }
@@ -114,13 +120,14 @@ function resetDoc() {
   DOC.ents.clear(); DOC.cur = '0'; UID = 1;
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
-  DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1;
+  DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];
   /* a document straight off the shelf has nothing unsaved in it */
   DOC.savedSeq = HIST.seq;
   idxInvalidate(); HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;
   /* The shape cache is keyed by entity id and UID has just gone back to 1, so
      anything left in it now belongs to a drawing that no longer exists. */
   if (typeof shapeCacheClear === 'function') shapeCacheClear();
+  if (typeof layerMapClear === 'function') layerMapClear();
 }
 
 /* ============================================================
@@ -424,6 +431,13 @@ function redo() {
 function entColor(e) { return e.color || layer(e.layer).color; }
 function entLt(e) { return e.lt || layer(e.layer).lt || 'solid'; }
 function entLw(e) { return e.lw != null ? e.lw : layer(e.layer).lw; }
-function visible(e) { const l = layer(e.layer); return l.on; }
-function pickable(e) { const l = layer(e.layer); return l.on && !l.lock; }
+function visible(e) { const l = layer(e.layer); return l.on && !l.frozen; }
+function pickable(e) { const l = layer(e.layer); return l.on && !l.frozen && !l.lock; }
+/** Counted when working out how big the drawing is. An off layer still counts,
+    a frozen one does not — which is the practical difference between them and
+    the reason both exist. */
+function inExtents(e) { return !layer(e.layer).frozen; }
+/** Drawn on paper. A layer can be visible on screen and deliberately absent
+    from the plot; that is what a non-plotting layer is for. */
+function plottable(e) { const l = layer(e.layer); return l.on && !l.frozen && l.plot !== false; }
 function selEnts() { return [...SEL].map(i => DOC.ents.get(i)).filter(Boolean); }
