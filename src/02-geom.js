@@ -211,8 +211,38 @@ function xf(e, fn) {
     case 'pline': case 'spline': E.pts = E.pts.map(fn); break;
     case 'point': E.p = fn(E.p); break;
     case 'text': {
-      const p2 = fn(E.p), q = fn(add(E.p, [Math.cos(E.rot || 0), Math.sin(E.rot || 0)]));
-      E.rot = ang(p2, q); E.h *= dist(p2, q); E.p = p2; break;
+      /* Text is the one thing that must survive a mirror still readable.
+         AutoCAD calls this MIRRTEXT and has defaulted it to 0 — keep it
+         readable — since 2000, because mirroring half a plan otherwise turns
+         every room name into mirror writing.
+
+         xf only ever receives a point function, so it cannot be told a mirror
+         from a rotation: the reflection is detected from HANDEDNESS, by seeing
+         whether the text's up vector changes which side of the baseline it
+         falls on. That matters — a deliberate ROTATE of 180 degrees must be
+         left alone, and it is, because a rotation preserves handedness. */
+      const c0 = Math.cos(E.rot || 0), s0 = Math.sin(E.rot || 0);
+      const p2 = fn(E.p);
+      const q = fn(add(E.p, [c0, s0]));           /* along the baseline */
+      const u = fn(add(E.p, [-s0, c0]));          /* and up from it     */
+      E.h *= dist(p2, q);
+      let r = ang(p2, q);
+      const bx = q[0] - p2[0], by = q[1] - p2[1];
+      const ux = u[0] - p2[0], uy = u[1] - p2[1];
+      const reflected = (bx * uy - by * ux) < 0;
+      if (reflected && !(typeof VS !== 'undefined' && VS.mirrtext)) {
+        /* of the two directions along the mirrored baseline, take the one that
+           reads left to right; if that reverses the run, the anchor has to
+           follow or the text lands on the wrong side of its insertion point */
+        if (Math.cos(r) < -1e-12) {
+          r += Math.PI;
+          E.anchor = E.anchor === 'r' ? 'l' : E.anchor === 'l' || !E.anchor ? 'r' : E.anchor;
+        }
+      }
+      /* keep it in (-pi, pi] so a mirrored text does not report 360 degrees */
+      r = Math.atan2(Math.sin(r), Math.cos(r));
+      E.rot = Math.abs(r) < 1e-12 ? 0 : r;
+      E.p = p2; break;
     }
     case 'circle': { const c2 = fn(E.c), q = fn(add(E.c, [E.r, 0])); E.c = c2; E.r = dist(c2, q); break; }
     case 'arc': {

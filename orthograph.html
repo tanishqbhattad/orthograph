@@ -1348,8 +1348,38 @@ function xf(e, fn) {
     case 'pline': case 'spline': E.pts = E.pts.map(fn); break;
     case 'point': E.p = fn(E.p); break;
     case 'text': {
-      const p2 = fn(E.p), q = fn(add(E.p, [Math.cos(E.rot || 0), Math.sin(E.rot || 0)]));
-      E.rot = ang(p2, q); E.h *= dist(p2, q); E.p = p2; break;
+      /* Text is the one thing that must survive a mirror still readable.
+         AutoCAD calls this MIRRTEXT and has defaulted it to 0 — keep it
+         readable — since 2000, because mirroring half a plan otherwise turns
+         every room name into mirror writing.
+
+         xf only ever receives a point function, so it cannot be told a mirror
+         from a rotation: the reflection is detected from HANDEDNESS, by seeing
+         whether the text's up vector changes which side of the baseline it
+         falls on. That matters — a deliberate ROTATE of 180 degrees must be
+         left alone, and it is, because a rotation preserves handedness. */
+      const c0 = Math.cos(E.rot || 0), s0 = Math.sin(E.rot || 0);
+      const p2 = fn(E.p);
+      const q = fn(add(E.p, [c0, s0]));           /* along the baseline */
+      const u = fn(add(E.p, [-s0, c0]));          /* and up from it     */
+      E.h *= dist(p2, q);
+      let r = ang(p2, q);
+      const bx = q[0] - p2[0], by = q[1] - p2[1];
+      const ux = u[0] - p2[0], uy = u[1] - p2[1];
+      const reflected = (bx * uy - by * ux) < 0;
+      if (reflected && !(typeof VS !== 'undefined' && VS.mirrtext)) {
+        /* of the two directions along the mirrored baseline, take the one that
+           reads left to right; if that reverses the run, the anchor has to
+           follow or the text lands on the wrong side of its insertion point */
+        if (Math.cos(r) < -1e-12) {
+          r += Math.PI;
+          E.anchor = E.anchor === 'r' ? 'l' : E.anchor === 'l' || !E.anchor ? 'r' : E.anchor;
+        }
+      }
+      /* keep it in (-pi, pi] so a mirrored text does not report 360 degrees */
+      r = Math.atan2(Math.sin(r), Math.cos(r));
+      E.rot = Math.abs(r) < 1e-12 ? 0 : r;
+      E.p = p2; break;
     }
     case 'circle': { const c2 = fn(E.c), q = fn(add(E.c, [E.r, 0])); E.c = c2; E.r = dist(c2, q); break; }
     case 'arc': {
@@ -3213,6 +3243,7 @@ const V = { z: 1, px: 0, py: 0, w: 0, h: 0, dpr: 1, rot: 0, kx: 1, ky: 1 };
    expects when they type them. */
 const VS = {
   ltScale: 1,             /* LTSCALE — multiplies every dash pattern           */
+  mirrtext: 0,            /* MIRRTEXT — 0 keeps mirrored text readable         */
   gridMajor: 5,           /* GRIDMAJOR — minor lines between two major ones    */
   gridSub: true,          /* adaptive subdivision below the nominal spacing    */
   zoomFactor: 60,         /* ZOOMFACTOR — wheel step, per AutoCAD's 3..100     */
@@ -9446,21 +9477,26 @@ defc('copy', {
   },
 });
 defc('rotate', {
-  needSel: true, group: 'modify', hint: 'Base point', init: c => { c.pts = []; c.refA = null; },
+  needSel: true, group: 'modify', hint: 'Base point',
+  init: c => { c.pts = []; c.refA = null; c.copy = false; },
   text(c, s) {
+    /* Copy is offered before the base point too, which is how it is usually
+       typed: ROTATE, C, then pick. */
+    if (/^c$/i.test(s)) { c.copy = true; echo('Rotating a copy — the original stays'); return true; }
     if (c.pts.length !== 1) return false;
     if (/^r$/i.test(s)) { c.mode = 'ref'; hint('Reference angle — click two points or type it'); return true; }
     const v = parseFloat(s);
     if (isNaN(v)) return false;
     if (c.mode === 'ref' && c.refA === null) { c.refA = rad(v); hint('New angle'); return true; }
     const a = c.refA === null ? rad(v) : rad(v) - c.refA;
-    begin(); selEnts().forEach(e => xf(e, T.rot(c.pts[0], a))); commit('Rotate'); endCmd(); return true;
+    applyRotate(c, a); return true;
   },
   point(c, p) {
-    if (!c.pts.length) { c.pts.push(p); c.src = selEnts().map(clone); hint('Rotation angle · click or type degrees · <em>R</em> reference'); return; }
+    if (!c.pts.length) { c.pts.push(p); c.src = selEnts().map(clone);
+      hint('Rotation angle · click or type degrees · <em>R</em> reference · <em>C</em> copy'); return; }
     if (c.mode === 'ref' && c.refA === null) { c.refA = ang(c.pts[0], p); hint('New angle'); return; }
     const a = ang(c.pts[0], p) - (c.refA || 0);
-    begin(); selEnts().forEach(e => xf(e, T.rot(c.pts[0], a))); commit('Rotate'); endCmd();
+    applyRotate(c, a);
   },
   preview(c, p) {
     if (c.pts.length !== 1) return null;
@@ -9470,8 +9506,10 @@ defc('rotate', {
   },
 });
 defc('scale', {
-  needSel: true, group: 'modify', hint: 'Base point', init: c => { c.pts = []; c.d0 = null; c.refL = null; },
+  needSel: true, group: 'modify', hint: 'Base point',
+  init: c => { c.pts = []; c.d0 = null; c.refL = null; c.copy = false; },
   text(c, s) {
+    if (/^c$/i.test(s)) { c.copy = true; echo('Scaling a copy — the original stays'); return true; }
     if (c.pts.length !== 1) return false;
     if (/^r$/i.test(s)) { c.mode = 'ref'; hint('Reference length'); return true; }
     if (c.mode === 'ref' && c.refL === null) { const v = parseLen(s); if (isNaN(v) || v <= 0) return false; c.refL = v; hint('New length'); return true; }
@@ -9485,7 +9523,7 @@ defc('scale', {
     if (!c.pts.length) {
       c.pts.push(p); c.src = selEnts().map(clone);
       c.d0 = Math.max(dist(p, ST.cur || p), 1e-9);
-      hint('Scale factor · drag, type a number, or <em>R</em> reference'); return;
+      hint('Scale factor · drag, type a number · <em>R</em> reference · <em>C</em> copy'); return;
     }
     if (c.mode === 'ref' && c.refL === null) { c.refL = Math.max(dist(c.pts[0], p), 1e-9); hint('New length'); return; }
     applyScale(c, scaleFactor(c, p));
@@ -9501,8 +9539,28 @@ function scaleFactor(c, p) {
   if (!c.d0) c.d0 = Math.max(dist(c.pts[0], p), 1e-9);
   return Math.max(dist(c.pts[0], p) / c.d0, 1e-9);
 }
-function applyScale(c, f) {
-  begin(); selEnts().forEach(e => xf(e, T.scale(c.pts[0], f))); commit('Scale'); endCmd();
+function applyScale(c, f) { applyXf(c, T.scale(c.pts[0], f), 'Scale'); }
+function applyRotate(c, a) { applyXf(c, T.rot(c.pts[0], a), 'Rotate'); }
+/** Move the selection, or leave it where it is and transform a copy — which is
+    what AutoCAD's Copy option on ROTATE and SCALE does. The new objects become
+    the selection afterwards, because that is what you almost always want to
+    act on next. */
+function applyXf(c, fn, label) {
+  begin();
+  if (c.copy) {
+    const made = [];
+    for (const e of selEnts()) {
+      const n = clone(e); delete n.id;
+      made.push(addEnt(xf(n, fn)));
+    }
+    SEL.clear();
+    for (const n of made) if (n && n.id != null) SEL.add(n.id);
+    commit(label + ' copy');
+  } else {
+    selEnts().forEach(e => xf(e, fn));
+    commit(label);
+  }
+  endCmd();
 }
 defc('mirror', {
   needSel: true, group: 'modify', hint: 'First point of the mirror line', init: c => { c.pts = []; c.keep = true; },

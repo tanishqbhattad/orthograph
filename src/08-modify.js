@@ -38,21 +38,26 @@ defc('copy', {
   },
 });
 defc('rotate', {
-  needSel: true, group: 'modify', hint: 'Base point', init: c => { c.pts = []; c.refA = null; },
+  needSel: true, group: 'modify', hint: 'Base point',
+  init: c => { c.pts = []; c.refA = null; c.copy = false; },
   text(c, s) {
+    /* Copy is offered before the base point too, which is how it is usually
+       typed: ROTATE, C, then pick. */
+    if (/^c$/i.test(s)) { c.copy = true; echo('Rotating a copy — the original stays'); return true; }
     if (c.pts.length !== 1) return false;
     if (/^r$/i.test(s)) { c.mode = 'ref'; hint('Reference angle — click two points or type it'); return true; }
     const v = parseFloat(s);
     if (isNaN(v)) return false;
     if (c.mode === 'ref' && c.refA === null) { c.refA = rad(v); hint('New angle'); return true; }
     const a = c.refA === null ? rad(v) : rad(v) - c.refA;
-    begin(); selEnts().forEach(e => xf(e, T.rot(c.pts[0], a))); commit('Rotate'); endCmd(); return true;
+    applyRotate(c, a); return true;
   },
   point(c, p) {
-    if (!c.pts.length) { c.pts.push(p); c.src = selEnts().map(clone); hint('Rotation angle · click or type degrees · <em>R</em> reference'); return; }
+    if (!c.pts.length) { c.pts.push(p); c.src = selEnts().map(clone);
+      hint('Rotation angle · click or type degrees · <em>R</em> reference · <em>C</em> copy'); return; }
     if (c.mode === 'ref' && c.refA === null) { c.refA = ang(c.pts[0], p); hint('New angle'); return; }
     const a = ang(c.pts[0], p) - (c.refA || 0);
-    begin(); selEnts().forEach(e => xf(e, T.rot(c.pts[0], a))); commit('Rotate'); endCmd();
+    applyRotate(c, a);
   },
   preview(c, p) {
     if (c.pts.length !== 1) return null;
@@ -62,8 +67,10 @@ defc('rotate', {
   },
 });
 defc('scale', {
-  needSel: true, group: 'modify', hint: 'Base point', init: c => { c.pts = []; c.d0 = null; c.refL = null; },
+  needSel: true, group: 'modify', hint: 'Base point',
+  init: c => { c.pts = []; c.d0 = null; c.refL = null; c.copy = false; },
   text(c, s) {
+    if (/^c$/i.test(s)) { c.copy = true; echo('Scaling a copy — the original stays'); return true; }
     if (c.pts.length !== 1) return false;
     if (/^r$/i.test(s)) { c.mode = 'ref'; hint('Reference length'); return true; }
     if (c.mode === 'ref' && c.refL === null) { const v = parseLen(s); if (isNaN(v) || v <= 0) return false; c.refL = v; hint('New length'); return true; }
@@ -77,7 +84,7 @@ defc('scale', {
     if (!c.pts.length) {
       c.pts.push(p); c.src = selEnts().map(clone);
       c.d0 = Math.max(dist(p, ST.cur || p), 1e-9);
-      hint('Scale factor · drag, type a number, or <em>R</em> reference'); return;
+      hint('Scale factor · drag, type a number · <em>R</em> reference · <em>C</em> copy'); return;
     }
     if (c.mode === 'ref' && c.refL === null) { c.refL = Math.max(dist(c.pts[0], p), 1e-9); hint('New length'); return; }
     applyScale(c, scaleFactor(c, p));
@@ -93,8 +100,28 @@ function scaleFactor(c, p) {
   if (!c.d0) c.d0 = Math.max(dist(c.pts[0], p), 1e-9);
   return Math.max(dist(c.pts[0], p) / c.d0, 1e-9);
 }
-function applyScale(c, f) {
-  begin(); selEnts().forEach(e => xf(e, T.scale(c.pts[0], f))); commit('Scale'); endCmd();
+function applyScale(c, f) { applyXf(c, T.scale(c.pts[0], f), 'Scale'); }
+function applyRotate(c, a) { applyXf(c, T.rot(c.pts[0], a), 'Rotate'); }
+/** Move the selection, or leave it where it is and transform a copy — which is
+    what AutoCAD's Copy option on ROTATE and SCALE does. The new objects become
+    the selection afterwards, because that is what you almost always want to
+    act on next. */
+function applyXf(c, fn, label) {
+  begin();
+  if (c.copy) {
+    const made = [];
+    for (const e of selEnts()) {
+      const n = clone(e); delete n.id;
+      made.push(addEnt(xf(n, fn)));
+    }
+    SEL.clear();
+    for (const n of made) if (n && n.id != null) SEL.add(n.id);
+    commit(label + ' copy');
+  } else {
+    selEnts().forEach(e => xf(e, fn));
+    commit(label);
+  }
+  endCmd();
 }
 defc('mirror', {
   needSel: true, group: 'modify', hint: 'First point of the mirror line', init: c => { c.pts = []; c.keep = true; },
