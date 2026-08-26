@@ -251,4 +251,111 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.origY, 0, 'the original stays put');
     eq(r.copyY, 2500, 'and the copy lands at the displacement');
   });
+
+  group('B2 — TRIM and EXTEND at more than one object a time');
+
+  /* Clicking one object at a time is fine for a stray line and hopeless for a
+     grid of them. This is the case the Fence option exists for. */
+  t('a fence trims every object it crosses, in one step', () => {
+    const r = R(`${SETUP}
+      for (let i = 0; i < 5; i++)
+        addEnt({t:'line', a:[i*1000, -500], b:[i*1000, 2500], layer:'0'});
+      addEnt({t:'line', a:[-500,0], b:[4500,0], layer:'0'});
+      addEnt({t:'line', a:[-500,2000], b:[4500,2000], layer:'0'});
+      cancelCmd();
+      startCmd('trim');
+      dispatch('F');
+      cmdPoint([-200, 2300]);
+      cmdPoint([4200, 2300]);
+      cmdEnter();
+      const verts = [...DOC.ents.values()].filter(e => Math.abs(e.a[0]-e.b[0]) < 1e-9);
+      const tops = verts.map(e => Math.max(e.a[1], e.b[1]));
+      endCmd(true);
+      return { n: verts.length, tops, maxTop: Math.max(...tops) };`);
+    eq(r.n, 5, 'all five verticals survive as single pieces');
+    close(r.maxTop, 2000, 1e-9,
+      'and every stub above the boundary is gone, highest end at ' + r.maxTop);
+  });
+
+  t('one fence stroke is a single undo step', () => {
+    const r = R(`${SETUP}
+      for (let i = 0; i < 4; i++)
+        addEnt({t:'line', a:[i*1000, -500], b:[i*1000, 2500], layer:'0'});
+      addEnt({t:'line', a:[-500,2000], b:[3500,2000], layer:'0'});
+      cancelCmd();
+      const before = [...DOC.ents.values()].filter(e => Math.abs(e.a[0]-e.b[0]) < 1e-9)
+                        .map(e => Math.max(e.a[1], e.b[1]));
+      startCmd('trim'); dispatch('F');
+      cmdPoint([-200, 2300]); cmdPoint([3200, 2300]); cmdEnter();
+      endCmd(true);
+      const cut = [...DOC.ents.values()].filter(e => Math.abs(e.a[0]-e.b[0]) < 1e-9)
+                     .map(e => Math.max(e.a[1], e.b[1]));
+      undo();
+      const back = [...DOC.ents.values()].filter(e => Math.abs(e.a[0]-e.b[0]) < 1e-9)
+                      .map(e => Math.max(e.a[1], e.b[1])).sort((a,b)=>a-b);
+      return { before: before.sort((a,b)=>a-b), cutMax: Math.max(...cut), back };`);
+    close(r.cutMax, 2000, 1e-9, 'the fence cut them');
+    eq(r.back.join(','), r.before.join(','),
+      'and ONE undo brings all four back, not four undos');
+  });
+
+  t('a crossing window trims what it crosses', () => {
+    const r = R(`${SETUP}
+      for (let i = 0; i < 4; i++)
+        addEnt({t:'line', a:[i*1000, -500], b:[i*1000, 2500], layer:'0'});
+      addEnt({t:'line', a:[-500,2000], b:[3500,2000], layer:'0'});
+      cancelCmd();
+      startCmd('trim');
+      dispatch('C');
+      cmdPoint([-200, 2200]);
+      cmdPoint([3200, 2400]);
+      const verts = [...DOC.ents.values()].filter(e => Math.abs(e.a[0]-e.b[0]) < 1e-9);
+      endCmd(true);
+      return { n: verts.length, maxTop: Math.max(...verts.map(e => Math.max(e.a[1], e.b[1]))) };`);
+    eq(r.n, 4);
+    close(r.maxTop, 2000, 1e-9, 'the window cut the stubs, highest end ' + r.maxTop);
+  });
+
+  /* EXTEND is the same command with the sense reversed, built from one
+     definition so the two cannot drift apart. */
+  t('a fence extends every object it crosses', () => {
+    const r = R(`${SETUP}
+      /* three short verticals, all stopping short of a boundary at y = 2000 */
+      for (let i = 0; i < 3; i++)
+        addEnt({t:'line', a:[i*1000, 0], b:[i*1000, 1200], layer:'0'});
+      addEnt({t:'line', a:[-500,2000], b:[2500,2000], layer:'0'});
+      cancelCmd();
+      startCmd('extend');
+      dispatch('F');
+      cmdPoint([-200, 1100]);
+      cmdPoint([2200, 1100]);
+      cmdEnter();
+      const verts = [...DOC.ents.values()].filter(e => Math.abs(e.a[0]-e.b[0]) < 1e-9);
+      const tops = verts.map(e => Math.max(e.a[1], e.b[1]));
+      endCmd(true);
+      return { n: verts.length, tops };`);
+    eq(r.n, 3, 'extending must not create or destroy objects');
+    ok(r.tops.every(v => Math.abs(v - 2000) < 1e-9),
+      'all three reach the boundary, got ' + r.tops.join(','));
+  });
+
+  t('Undo inside TRIM takes back the last cut without leaving the command', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,-500], b:[0,2500], layer:'0'});
+      addEnt({t:'line', a:[-500,2000], b:[500,2000], layer:'0'});
+      cancelCmd();
+      startCmd('trim');
+      cmdPoint([0, 2300]);
+      const v1 = [...DOC.ents.values()].filter(e => Math.abs(e.a[0]-e.b[0]) < 1e-9)[0];
+      const cutTop = Math.max(v1.a[1], v1.b[1]);
+      dispatch('U');
+      const v2 = [...DOC.ents.values()].filter(e => Math.abs(e.a[0]-e.b[0]) < 1e-9)[0];
+      const backTop = Math.max(v2.a[1], v2.b[1]);
+      const running = !!CMD;
+      endCmd(true);
+      return { cutTop, backTop, running };`);
+    close(r.cutTop, 2000, 1e-9, 'the cut happened');
+    close(r.backTop, 2500, 1e-9, 'and U put it back, got ' + r.backTop);
+    eq(r.running, true, 'without dropping out of TRIM');
+  });
 };

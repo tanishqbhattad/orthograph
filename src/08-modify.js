@@ -233,35 +233,140 @@ defc('offset', {
   },
   done() { SEL.clear(); },
 });
-defc('trim', {
-  group: 'modify', hint: 'Click the piece to remove · hold <em>Shift</em> to extend instead',
-  point(c, p) {
-    const e = pickAt(p, 10, x => !GEOM[x.t]);
-    if (!e) return;
-    const others = [...DOC.ents.values()].filter(x => x.id !== e.id && visible(x) && !GEOM[x.t]);
-    if (ST.shift) {
-      const n = extendTo(e, p, others);
-      if (n) { begin(); mut(e); Object.assign(e, n); commit('Extend'); } else echo('No boundary in that direction');
-      return;
+/* ---------------- trim and extend ----------------
+   Clicking one object at a time is fine for a stray line and hopeless for a
+   grid of them. Fence drags a line through everything to cut, and Crossing
+   does the same with a box — between them they are most of what TRIM is used
+   for on a real drawing. A crossing window is just a closed fence, so both go
+   through one path.
+
+   The cutting edges stay implicit: every visible object is a boundary, which
+   is what AutoCAD's Quick mode does and has been its default since 2021. */
+function trimBoundaries(exceptId) {
+  return [...DOC.ents.values()].filter(x => x.id !== exceptId && visible(x) && !GEOM[x.t]);
+}
+/** every object a fence polyline crosses, with the point it crosses at */
+function fenceHits(pts, closed) {
+  const fence = { t: 'pline', pts: closed ? pts.concat([pts[0]]) : pts, id: -1 };
+  const out = [];
+  for (const e of DOC.ents.values()) {
+    if (!visible(e) || GEOM[e.t] || e.t === 'dim' || e.t === 'text') continue;
+    let xs = [];
+    try { xs = intersect(e, fence, false) || []; } catch (err) { xs = []; }
+    if (xs.length) out.push({ e, at: xs[0] });
+  }
+  return out;
+}
+/** the rectangle of a crossing window, as a fence */
+function boxFence(p0, p1) {
+  return [[p0[0], p0[1]], [p1[0], p0[1]], [p1[0], p1[1]], [p0[0], p1[1]]];
+}
+/** Trim or extend everything a fence touches, in one undo step. Returns how
+    many objects actually changed, so the command can say something useful
+    rather than leaving you guessing whether it did anything. */
+function applyFence(hits, extending) {
+  if (!hits.length) return 0;
+  let n = 0;
+  begin();
+  for (const { e, at } of hits) {
+    if (!DOC.ents.get(e.id)) continue;             /* already consumed by a trim */
+    const others = trimBoundaries(e.id);
+    if (extending) {
+      const nx = extendTo(e, at, others);
+      if (nx) { mut(e); Object.assign(e, nx); n++; }
+    } else {
+      const parts = trimAt(e, at, others);
+      if (!parts) continue;
+      const meta = { layer: e.layer, color: e.color, lt: e.lt, lw: e.lw };
+      delEnt(e.id);
+      parts.forEach(x => addEnt(Object.assign(x, meta)));
+      n++;
     }
-    const parts = trimAt(e, p, others);
-    if (!parts) return echo('No cutting edge crosses that object');
-    begin(); const meta = { layer: e.layer, color: e.color, lt: e.lt, lw: e.lw };
-    delEnt(e.id);
-    parts.forEach(n => addEnt(Object.assign(n, meta)));
-    commit('Trim');
-  },
-});
-defc('extend', {
-  group: 'modify', hint: 'Click near the end you want to extend',
-  point(c, p) {
-    const e = pickAt(p, 10, x => !GEOM[x.t]); if (!e) return;
-    const others = [...DOC.ents.values()].filter(x => x.id !== e.id && visible(x) && !GEOM[x.t]);
-    const n = extendTo(e, p, others);
-    if (n) { begin(); mut(e); Object.assign(e, n); commit('Extend'); }
-    else echo('No boundary in that direction');
-  },
-});
+  }
+  commit(extending ? 'Extend' : 'Trim');
+  return n;
+}
+/* TRIM and EXTEND are the same command with the sense reversed, so they are
+   built from one definition rather than two that drift apart. */
+function trimLike(extending) {
+  return {
+    group: 'modify',
+    hint: extending
+      ? 'Click near the end to extend · <em>F</em> fence · <em>C</em> crossing · hold <em>Shift</em> to trim'
+      : 'Click the piece to remove · <em>F</em> fence · <em>C</em> crossing · <em>R</em> erase · hold <em>Shift</em> to extend',
+    init(c) { c.mode = null; c.fence = []; },
+    text(c, s) {
+      const k = String(s).trim().toLowerCase();
+      if (k === 'f') { c.mode = 'fence'; c.fence = []; hint('Draw a line through what you want to cut · <em>Enter</em> to apply'); return true; }
+      if (k === 'c') { c.mode = 'cross'; c.fence = []; hint('First corner of the crossing window'); return true; }
+      if (!extending && k === 'r') { c.mode = 'erase'; hint('Pick objects to erase outright · <em>Enter</em> to stop'); return true; }
+      if (k === 'u') {
+        /* Undo inside the command takes back the last cut without leaving it */
+        undo(); hint('Taken back — carry on'); return true;
+      }
+      return false;
+    },
+    point(c, p) {
+      const shift = ST.shift;
+      const ext = extending ? !shift : shift;
+      if (c.mode === 'fence') { c.fence.push(p); hint('Another fence point · <em>Enter</em> to apply'); draw(); return; }
+      if (c.mode === 'cross') {
+        c.fence.push(p);
+        if (c.fence.length < 2) { hint('Opposite corner'); return; }
+        const hits = fenceHits(boxFence(c.fence[0], c.fence[1]), true);
+        const n = applyFence(hits, ext);
+        echo(n ? (ext ? 'Extended ' : 'Trimmed ') + n : 'Nothing crossed that window');
+        c.fence = []; hint('First corner of the crossing window');
+        return;
+      }
+      if (c.mode === 'erase') {
+        const e = pickAt(p, 10, x => !GEOM[x.t]);
+        if (!e) return;
+        begin(); eraseEnt(e.id); commit('Erase');
+        return;
+      }
+      const e = pickAt(p, 10, x => !GEOM[x.t]);
+      if (!e) return;
+      const others = trimBoundaries(e.id);
+      if (ext) {
+        const n = extendTo(e, p, others);
+        if (n) { begin(); mut(e); Object.assign(e, n); commit('Extend'); }
+        else echo('No boundary in that direction');
+        return;
+      }
+      const parts = trimAt(e, p, others);
+      if (!parts) return echo('No cutting edge crosses that object');
+      begin();
+      const meta = { layer: e.layer, color: e.color, lt: e.lt, lw: e.lw };
+      delEnt(e.id);
+      parts.forEach(n => addEnt(Object.assign(n, meta)));
+      commit('Trim');
+    },
+    enter(c) {
+      if (c.mode === 'fence' && c.fence.length >= 2) {
+        const hits = fenceHits(c.fence, false);
+        const n = applyFence(hits, extending);
+        echo(n ? (extending ? 'Extended ' : 'Trimmed ') + n : 'The fence crossed nothing');
+        c.fence = [];
+        hint('Draw another fence · <em>Enter</em> again to finish');
+        return;
+      }
+      endCmd();
+    },
+    preview(c) {
+      if (c.mode === 'fence' && c.fence.length) ST.tracks = pairs(c.fence);
+      return null;
+    },
+  };
+}
+defc('trim', trimLike(false));
+defc('extend', trimLike(true));
+/** consecutive pairs of a point run, for drawing the fence as it is built */
+function pairs(pts) {
+  const out = [];
+  for (let i = 1; i < pts.length; i++) out.push([pts[i - 1], pts[i]]);
+  return out;
+}
 defc('lengthen', {
   group: 'modify', hint: 'Type <em>DE</em> delta, <em>T</em> total, <em>P</em> percent — then pick an object end',
   init: c => { c.mode = 'de'; c.val = null; },
