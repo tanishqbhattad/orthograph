@@ -1719,7 +1719,7 @@ defc('undocmd', {
     const k = String(s).trim().toLowerCase();
     if (c.ctl) {
       if (k === 'a') { HIST.depth = 200; cliPrint('Undo: all'); }
-      else if (k === 'n') { HIST.depth = 0; HIST.past.length = 0; cliPrint('Undo: none'); }
+      else if (k === 'n') { HIST.depth = 0; HIST.past.length = 0; HIST.weight = 0; cliPrint('Undo: none'); }
       else if (k === 'o') { HIST.depth = 1; cliPrint('Undo: one'); }
       else { cliPrint('Invalid option keyword.', 'err'); return true; }
       endCmd(); return true;

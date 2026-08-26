@@ -750,7 +750,9 @@ function doExport() {
   $('#eDxf').onclick = () => { closeModal(); doSave(); };
   $('#eSvg').onclick = () => { closeModal(); download('drawing.svg', exportSVG(), 'image/svg+xml'); toast('Saved drawing.svg'); };
   $('#ePng').onclick = () => { closeModal(); exportPNG(2400).toBlob(b => { download('drawing.png', b); toast('Saved drawing.png'); }); };
-  $('#eJson').onclick = () => { closeModal(); download('drawing.ocad', saveNative(), 'application/json'); toast('Saved drawing.ocad'); };
+  $('#eJson').onclick = () => { closeModal(); download('drawing.ocad', saveNative(), 'application/json');
+    /* the work has reached a file, so there is nothing left to recover */
+    markSaved(); toast('Saved drawing.ocad'); };
   $('#eDwg').onclick = () => { closeModal(); doSaveDWG(); };
 }
 function readFile(f) {
@@ -759,7 +761,7 @@ function readFile(f) {
   r.onload = () => {
     try {
       const txt = String(r.result);
-      if (/\.ocad$|\.json$/i.test(f.name) || txt.trim().startsWith('{')) loadNative(txt);
+      if (/\.ocad$|\.json$/i.test(f.name) || txt.trim().startsWith('{')) { loadNative(txt); markSaved(); }
       else importDXF(txt);
     } catch (e) { console.error(e); toast('Could not read that file'); }
   };
@@ -842,7 +844,7 @@ function boot() {
   DOC.gridStep = 100; DOC.snapStep = 100; DOC.textH = 200;
   buildRail();
   seed();
-  HIST.past.length = 0; HIST.future.length = 0;
+  HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;
   document.querySelectorAll('.mode').forEach(b => b.onclick = () => setMode(b.dataset.mode));
   document.querySelectorAll('.tg').forEach(b => b.onclick = () => tgl(b.dataset.tg));
   $('#addLay').onclick = () => {
@@ -885,5 +887,49 @@ function boot() {
   hint('Type ? for the shortcut list. Ctrl+D swaps Drafting and Architecture.');
   setTimeout(() => hint(''), 7000);
   echo('Ready');
+  offerRecovery();
+  autosaveStart();
+  /* A tab closes faster than any timer fires, so take the last chance. Both
+     events are used: visibilitychange is the one that actually fires on mobile
+     and on a killed tab, beforeunload is the one that can still warn. */
+  if (typeof window !== 'undefined') {
+    window.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') autosaveNow('hidden');
+    });
+    window.addEventListener('beforeunload', ev => {
+      autosaveNow('unload');
+      if (!docDirty()) return;
+      /* the browser shows its own wording; returning a string is what asks */
+      ev.preventDefault();
+      ev.returnValue = '';
+      return '';
+    });
+  }
+}
+/** If a previous session left work behind, say so and let the person choose.
+    Restoring silently would be worse than losing it: they would not know which
+    drawing they were looking at. */
+function offerRecovery() {
+  const rec = autosaveFound();
+  if (!rec) return;
+  const when = agoText(Date.now() - (rec.at || Date.now()));
+  const size = rec.doc ? Math.round(rec.doc.length / 1024) : 0;
+  modal(
+    '<h3>Recover unsaved work?</h3>' +
+    '<p>Orthograph closed with a drawing still unsaved, autosaved <b>' + esc(when) + '</b>' +
+    (size ? ' (' + size + ' KB)' : '') + '.</p>' +
+    '<p>Opening it will replace what is on screen now.</p>',
+    () => {
+      if (autosaveRestore(rec)) {
+        fit();
+        cliPrint('Recovered the autosaved drawing. It has not been saved to a file yet.');
+      } else {
+        cliPrint('That autosave could not be read.', 'err');
+      }
+    },
+    { okLabel: 'Recover', cancelLabel: 'Discard', onCancel: () => {
+        autosaveClear();
+        cliPrint('Autosave discarded.');
+      } });
 }
 if (typeof ORTHO_HEADLESS === 'undefined') boot();

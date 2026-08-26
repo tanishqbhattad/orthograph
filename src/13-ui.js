@@ -1280,10 +1280,16 @@ function pickColor(cur, cb, allowByLayer) {
 
 /* ---------- modal ---------- */
 let _ok = null;
-function modal(html, ok) {
-  clearNode($('#card')).innerHTML = html + `<div class="acts"><button class="btn" id="mc">Cancel</button><button class="btn pri" id="mo">Apply</button></div>`;
+/* opts: { okLabel, cancelLabel, onCancel }. A dialog that asks a real question
+   needs to name its answers — "Apply / Cancel" is meaningless when the choice
+   is between recovering a drawing and throwing it away. */
+function modal(html, ok, opts) {
+  const o = opts || {};
+  clearNode($('#card')).innerHTML = html + `<div class="acts"><button class="btn" id="mc">` +
+    esc(o.cancelLabel || 'Cancel') + `</button><button class="btn pri" id="mo">` +
+    esc(o.okLabel || 'Apply') + `</button></div>`;
   $('#modal').classList.add('show'); _ok = ok;
-  $('#mc').onclick = closeModal;
+  $('#mc').onclick = () => { const f = o.onCancel; closeModal(); if (f) f(); };
   $('#mo').onclick = () => { const f = _ok; closeModal(); if (f) f(); };
   const first = $('#card input,#card textarea,#card select');
   if (first && first.tagName !== 'SELECT') { first.focus(); if (first.select) first.select(); }

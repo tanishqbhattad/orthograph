@@ -115,7 +115,12 @@ function resetDoc() {
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1;
-  idxInvalidate(); HIST.past.length = 0; HIST.future.length = 0;
+  /* a document straight off the shelf has nothing unsaved in it */
+  DOC.savedSeq = HIST.seq;
+  idxInvalidate(); HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;
+  /* The shape cache is keyed by entity id and UID has just gone back to 1, so
+     anything left in it now belongs to a drawing that no longer exists. */
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
 }
 
 /* ============================================================
@@ -205,7 +210,31 @@ function query(x0, y0, x1, y1) {
 /* `seq` stamps every patch so UNDO Mark/Back can name a point in the journal
    that survives undo and redo; `group` tags the patches of a BEgin/End group
    so the whole group undoes as one operation. */
-const HIST = { past: [], future: [], depth: 200, seq: 0, group: 0, groupSeq: 0, marks: [] };
+/* depth caps how MANY steps are kept; weight caps how much they may hold.
+   A count alone is not a memory limit: one MOVE of ten thousand walls is a
+   single patch carrying twenty thousand clones, and two hundred of those will
+   exhaust a tab long before the step count looks alarming. */
+const HIST = { past: [], future: [], depth: 200, seq: 0, group: 0, groupSeq: 0, marks: [],
+               weight: 0, maxWeight: 400000 };
+/** roughly how many entity-clones a patch is carrying */
+function patchWeight(p) {
+  return (p.chg ? p.chg.length * 2 : 0) + (p.add ? p.add.length : 0) +
+         (p.del ? p.del.length : 0) + (p.lay ? 8 : 1);
+}
+/** Trim the oldest steps until the journal fits both limits. The newest step is
+    never dropped, however big: taking back what you just did is the one thing
+    undo must always manage. */
+function histTrim() {
+  while (HIST.past.length > HIST.depth) {
+    const p = HIST.past.shift();
+    HIST.weight -= patchWeight(p);
+  }
+  while (HIST.past.length > 1 && HIST.weight > HIST.maxWeight) {
+    const p = HIST.past.shift();
+    HIST.weight -= patchWeight(p);
+  }
+  if (HIST.weight < 0) HIST.weight = 0;
+}
 const JN = { on: false, before: new Map(), added: new Set(), removed: new Map(), layers: null, cur: null, uid: 0 };
 
 function begin() {
@@ -318,8 +347,11 @@ function commit(label) {
     p.seq = ++HIST.seq;
     if (HIST.group) p.grp = HIST.group;
     HIST.past.push(p);
-    if (HIST.past.length > HIST.depth) HIST.past.shift();
+    HIST.weight += patchWeight(p);
+    histTrim();
+    for (const f of HIST.future) HIST.weight -= patchWeight(f);
     HIST.future.length = 0;
+    if (HIST.weight < 0) HIST.weight = 0;
   }
   if (label) echo(label);
   if (typeof syncUI === 'function') syncUI();
@@ -357,6 +389,9 @@ function undoOne(from, to, forward) {
   const p = from.pop();
   applyPatch(p, forward);
   to.push(p);
+  /* weight tracks what `past` is holding, so it follows the patch either way */
+  HIST.weight += (to === HIST.past ? 1 : -1) * patchWeight(p);
+  if (HIST.weight < 0) HIST.weight = 0;
   return p.grp;
 }
 function undo() {
@@ -377,9 +412,11 @@ function redo() {
       undoOne(HIST.future, HIST.past, true);
     echo('Redo'); syncUI(); draw(); return;
   }
-  const p = HIST.future.pop();
-  applyPatch(p, true);
-  HIST.past.push(p);
+  /* through undoOne like every other path, so the journal's weight stays
+     honest — moving a patch by hand here let it drift down on every ungrouped
+     redo, and a drifting weight eventually trims steps that should have been
+     kept */
+  undoOne(HIST.future, HIST.past, true);
   echo('Redo'); syncUI(); draw();
 }
 

@@ -821,7 +821,12 @@ function resetDoc() {
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1;
-  idxInvalidate(); HIST.past.length = 0; HIST.future.length = 0;
+  /* a document straight off the shelf has nothing unsaved in it */
+  DOC.savedSeq = HIST.seq;
+  idxInvalidate(); HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;
+  /* The shape cache is keyed by entity id and UID has just gone back to 1, so
+     anything left in it now belongs to a drawing that no longer exists. */
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
 }
 
 /* ============================================================
@@ -911,7 +916,31 @@ function query(x0, y0, x1, y1) {
 /* `seq` stamps every patch so UNDO Mark/Back can name a point in the journal
    that survives undo and redo; `group` tags the patches of a BEgin/End group
    so the whole group undoes as one operation. */
-const HIST = { past: [], future: [], depth: 200, seq: 0, group: 0, groupSeq: 0, marks: [] };
+/* depth caps how MANY steps are kept; weight caps how much they may hold.
+   A count alone is not a memory limit: one MOVE of ten thousand walls is a
+   single patch carrying twenty thousand clones, and two hundred of those will
+   exhaust a tab long before the step count looks alarming. */
+const HIST = { past: [], future: [], depth: 200, seq: 0, group: 0, groupSeq: 0, marks: [],
+               weight: 0, maxWeight: 400000 };
+/** roughly how many entity-clones a patch is carrying */
+function patchWeight(p) {
+  return (p.chg ? p.chg.length * 2 : 0) + (p.add ? p.add.length : 0) +
+         (p.del ? p.del.length : 0) + (p.lay ? 8 : 1);
+}
+/** Trim the oldest steps until the journal fits both limits. The newest step is
+    never dropped, however big: taking back what you just did is the one thing
+    undo must always manage. */
+function histTrim() {
+  while (HIST.past.length > HIST.depth) {
+    const p = HIST.past.shift();
+    HIST.weight -= patchWeight(p);
+  }
+  while (HIST.past.length > 1 && HIST.weight > HIST.maxWeight) {
+    const p = HIST.past.shift();
+    HIST.weight -= patchWeight(p);
+  }
+  if (HIST.weight < 0) HIST.weight = 0;
+}
 const JN = { on: false, before: new Map(), added: new Set(), removed: new Map(), layers: null, cur: null, uid: 0 };
 
 function begin() {
@@ -1024,8 +1053,11 @@ function commit(label) {
     p.seq = ++HIST.seq;
     if (HIST.group) p.grp = HIST.group;
     HIST.past.push(p);
-    if (HIST.past.length > HIST.depth) HIST.past.shift();
+    HIST.weight += patchWeight(p);
+    histTrim();
+    for (const f of HIST.future) HIST.weight -= patchWeight(f);
     HIST.future.length = 0;
+    if (HIST.weight < 0) HIST.weight = 0;
   }
   if (label) echo(label);
   if (typeof syncUI === 'function') syncUI();
@@ -1063,6 +1095,9 @@ function undoOne(from, to, forward) {
   const p = from.pop();
   applyPatch(p, forward);
   to.push(p);
+  /* weight tracks what `past` is holding, so it follows the patch either way */
+  HIST.weight += (to === HIST.past ? 1 : -1) * patchWeight(p);
+  if (HIST.weight < 0) HIST.weight = 0;
   return p.grp;
 }
 function undo() {
@@ -1083,9 +1118,11 @@ function redo() {
       undoOne(HIST.future, HIST.past, true);
     echo('Redo'); syncUI(); draw(); return;
   }
-  const p = HIST.future.pop();
-  applyPatch(p, true);
-  HIST.past.push(p);
+  /* through undoOne like every other path, so the journal's weight stays
+     honest — moving a patch by hand here let it drift down on every ungrouped
+     redo, and a drifting weight eventually trims steps that should have been
+     kept */
+  undoOne(HIST.future, HIST.past, true);
   echo('Redo'); syncUI(); draw();
 }
 
@@ -3533,6 +3570,11 @@ let SHPCh = null;
     invalidate its neighbourhood — but only its neighbourhood. Clearing the
     whole cache on every mutation put a 600-wall plan at four frames a second
     while dragging. */
+/** Throw away every cached shape. Must be called whenever the document is
+    replaced: the cache is keyed by entity id, and resetDoc() puts UID back to
+    1, so without this the first entities of a newly opened drawing are drawn
+    with the geometry of the ones they replaced. */
+function shapeCacheClear() { SHPC.clear(); DIRTY.clear(); }
 function shapeCacheSync() {
   if (SHPCh !== DOC.wallHatch) { SHPC.clear(); SHPCh = DOC.wallHatch; DIRTY.clear(); return; }
   if (!DIRTY.size) return;
@@ -3560,7 +3602,22 @@ function shapeCacheSync() {
     for (const v of wallsInBox([b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad])) SHPC.delete(v.id);
   }
 }
+/* Level of detail. A wall thinner than about a pixel on screen cannot show
+   its two faces, its mitres or its poche: every one of those marks lands on
+   the same pixel as the centreline. Solving that geometry is work whose entire
+   output is invisible — and on a drawing zoomed out to twelve thousand walls
+   it is nearly all of the work. Draw the centreline instead.
+
+   This is a DRAW-path decision only. entShapes has exactly one caller, and
+   picking, snapping, export and plotting all go through shapes() directly, so
+   nothing that has to be exact is affected by it. */
+const LOD_PX = 1.1;
+let LOD = true;
 function entShapes(e) {
+  if (LOD && e.t === 'wall' && typeof wallT === 'function' &&
+      Math.abs(wallT(e) * V.z) < LOD_PX && e.a && e.b) {
+    return [{ pts: [e.a, e.b] }];
+  }
   if (e.id == null || DOC.ents.get(e.id) !== e) return shapes(e, SHAPE_TOL) || [];
   const hit = SHPC.get(e.id);
   if (hit !== undefined) return hit.shapes;
@@ -8483,7 +8540,7 @@ defc('undocmd', {
     const k = String(s).trim().toLowerCase();
     if (c.ctl) {
       if (k === 'a') { HIST.depth = 200; cliPrint('Undo: all'); }
-      else if (k === 'n') { HIST.depth = 0; HIST.past.length = 0; cliPrint('Undo: none'); }
+      else if (k === 'n') { HIST.depth = 0; HIST.past.length = 0; HIST.weight = 0; cliPrint('Undo: none'); }
       else if (k === 'o') { HIST.depth = 1; cliPrint('Undo: one'); }
       else { cliPrint('Invalid option keyword.', 'err'); return true; }
       endCmd(); return true;
@@ -11921,6 +11978,126 @@ function download(name, text, mime) {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
+/* ============================================================
+   Autosave and crash recovery
+   ------------------------------------------------------------
+   Until now this program had none: no autosave, no recovery,
+   not even a warning on closing the tab. A browser CAD app that
+   can produce an issuable drawing and then lose it to a stray
+   Ctrl-W is not one anybody should trust with real work.
+
+   The store is behind an indirection so it can be tested without
+   a browser, and so a machine with storage disabled degrades to
+   "autosave is off" rather than to an exception on every edit.
+   ============================================================ */
+const AUTOSAVE = {
+  key: 'orthograph.autosave.v1',
+  every: 20000,          /* ms between attempts; only writes when dirty      */
+  on: true,
+  last: 0,
+  failed: false,
+  timer: null,
+  bytes: 0,
+  limit: 4 * 1024 * 1024, /* stay under the usual 5MB localStorage ceiling   */
+};
+/** the backing store, swappable so tests need no browser */
+let STORE = (typeof localStorage !== 'undefined') ? localStorage : null;
+function setStore(s) { STORE = s; }
+
+/** Unsaved work is simply "the journal has moved since the last save". The
+    sequence number was already being kept for undo, so this costs nothing. */
+function docDirty() { return HIST.seq !== (DOC.savedSeq | 0); }
+function markSaved() { DOC.savedSeq = HIST.seq; autosaveClear(); }
+
+function autosaveNow(reason) {
+  if (!AUTOSAVE.on || !STORE) return false;
+  if (!docDirty()) return false;
+  let payload;
+  try {
+    payload = JSON.stringify({
+      v: 1, at: Date.now(), seq: HIST.seq,
+      name: DOC.name || '', reason: reason || 'timer',
+      doc: saveNative(),
+    });
+  } catch (e) { return false; }
+  /* A drawing too big for the store is a real situation, not an error to
+     swallow: say so once and stop trying, rather than throwing on every edit
+     or silently pretending the work is safe. */
+  if (payload.length > AUTOSAVE.limit) {
+    if (!AUTOSAVE.failed) {
+      AUTOSAVE.failed = true;
+      if (typeof cliPrint === 'function')
+        cliPrint('This drawing is too large to autosave. Save it to a file.', 'err');
+    }
+    return false;
+  }
+  try {
+    STORE.setItem(AUTOSAVE.key, payload);
+    AUTOSAVE.last = Date.now();
+    AUTOSAVE.bytes = payload.length;
+    AUTOSAVE.failed = false;
+    return true;
+  } catch (e) {
+    if (!AUTOSAVE.failed) {
+      AUTOSAVE.failed = true;
+      if (typeof cliPrint === 'function')
+        cliPrint('Autosave failed — browser storage is full or blocked. Save manually.', 'err');
+    }
+    return false;
+  }
+}
+function autosaveClear() {
+  if (!STORE) return;
+  try { STORE.removeItem(AUTOSAVE.key); } catch (e) { /* nothing to do */ }
+  AUTOSAVE.bytes = 0;
+}
+/** what is sitting in the store, or null. Never throws: a corrupt autosave
+    must not stop the program from starting, which is the one moment it would
+    do the most damage. */
+function autosaveFound() {
+  if (!STORE) return null;
+  let raw;
+  try { raw = STORE.getItem(AUTOSAVE.key); } catch (e) { return null; }
+  if (!raw) return null;
+  try {
+    const o = JSON.parse(raw);
+    if (!o || typeof o.doc !== 'string') return null;
+    return o;
+  } catch (e) {
+    try { STORE.removeItem(AUTOSAVE.key); } catch (e2) { /* ignore */ }
+    return null;
+  }
+}
+/** how long ago, in words a person reads without doing arithmetic */
+function agoText(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + (s === 1 ? ' second ago' : ' seconds ago');
+  const m = Math.round(s / 60);
+  if (m < 60) return m + (m === 1 ? ' minute ago' : ' minutes ago');
+  const h = Math.round(m / 60);
+  return h + (h === 1 ? ' hour ago' : ' hours ago');
+}
+/** restore an autosave. Returns true when the drawing actually came back. */
+function autosaveRestore(rec) {
+  const o = rec || autosaveFound();
+  if (!o) return false;
+  try {
+    loadNative(o.doc);
+    /* the restored drawing is unsaved by definition: it never reached a file */
+    DOC.savedSeq = -1;
+    if (typeof syncUI === 'function') syncUI();
+    if (typeof draw === 'function') draw();
+    return true;
+  } catch (e) { return false; }
+}
+function autosaveStart() {
+  if (AUTOSAVE.timer || typeof setInterval !== 'function') return;
+  AUTOSAVE.timer = setInterval(() => autosaveNow('timer'), AUTOSAVE.every);
+}
+function autosaveStop() {
+  if (AUTOSAVE.timer) { clearInterval(AUTOSAVE.timer); AUTOSAVE.timer = null; }
+}
+
 /* ===== 12-dwg.js ===== */
 /* ============================================================
    ORTHOGRAPH — 12 DWG reader (R13 – R2000), experimental
@@ -14004,10 +14181,16 @@ function pickColor(cur, cb, allowByLayer) {
 
 /* ---------- modal ---------- */
 let _ok = null;
-function modal(html, ok) {
-  clearNode($('#card')).innerHTML = html + `<div class="acts"><button class="btn" id="mc">Cancel</button><button class="btn pri" id="mo">Apply</button></div>`;
+/* opts: { okLabel, cancelLabel, onCancel }. A dialog that asks a real question
+   needs to name its answers — "Apply / Cancel" is meaningless when the choice
+   is between recovering a drawing and throwing it away. */
+function modal(html, ok, opts) {
+  const o = opts || {};
+  clearNode($('#card')).innerHTML = html + `<div class="acts"><button class="btn" id="mc">` +
+    esc(o.cancelLabel || 'Cancel') + `</button><button class="btn pri" id="mo">` +
+    esc(o.okLabel || 'Apply') + `</button></div>`;
   $('#modal').classList.add('show'); _ok = ok;
-  $('#mc').onclick = closeModal;
+  $('#mc').onclick = () => { const f = o.onCancel; closeModal(); if (f) f(); };
   $('#mo').onclick = () => { const f = _ok; closeModal(); if (f) f(); };
   const first = $('#card input,#card textarea,#card select');
   if (first && first.tagName !== 'SELECT') { first.focus(); if (first.select) first.select(); }
@@ -15491,7 +15674,9 @@ function doExport() {
   $('#eDxf').onclick = () => { closeModal(); doSave(); };
   $('#eSvg').onclick = () => { closeModal(); download('drawing.svg', exportSVG(), 'image/svg+xml'); toast('Saved drawing.svg'); };
   $('#ePng').onclick = () => { closeModal(); exportPNG(2400).toBlob(b => { download('drawing.png', b); toast('Saved drawing.png'); }); };
-  $('#eJson').onclick = () => { closeModal(); download('drawing.ocad', saveNative(), 'application/json'); toast('Saved drawing.ocad'); };
+  $('#eJson').onclick = () => { closeModal(); download('drawing.ocad', saveNative(), 'application/json');
+    /* the work has reached a file, so there is nothing left to recover */
+    markSaved(); toast('Saved drawing.ocad'); };
   $('#eDwg').onclick = () => { closeModal(); doSaveDWG(); };
 }
 function readFile(f) {
@@ -15500,7 +15685,7 @@ function readFile(f) {
   r.onload = () => {
     try {
       const txt = String(r.result);
-      if (/\.ocad$|\.json$/i.test(f.name) || txt.trim().startsWith('{')) loadNative(txt);
+      if (/\.ocad$|\.json$/i.test(f.name) || txt.trim().startsWith('{')) { loadNative(txt); markSaved(); }
       else importDXF(txt);
     } catch (e) { console.error(e); toast('Could not read that file'); }
   };
@@ -15583,7 +15768,7 @@ function boot() {
   DOC.gridStep = 100; DOC.snapStep = 100; DOC.textH = 200;
   buildRail();
   seed();
-  HIST.past.length = 0; HIST.future.length = 0;
+  HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;
   document.querySelectorAll('.mode').forEach(b => b.onclick = () => setMode(b.dataset.mode));
   document.querySelectorAll('.tg').forEach(b => b.onclick = () => tgl(b.dataset.tg));
   $('#addLay').onclick = () => {
@@ -15626,6 +15811,50 @@ function boot() {
   hint('Type ? for the shortcut list. Ctrl+D swaps Drafting and Architecture.');
   setTimeout(() => hint(''), 7000);
   echo('Ready');
+  offerRecovery();
+  autosaveStart();
+  /* A tab closes faster than any timer fires, so take the last chance. Both
+     events are used: visibilitychange is the one that actually fires on mobile
+     and on a killed tab, beforeunload is the one that can still warn. */
+  if (typeof window !== 'undefined') {
+    window.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') autosaveNow('hidden');
+    });
+    window.addEventListener('beforeunload', ev => {
+      autosaveNow('unload');
+      if (!docDirty()) return;
+      /* the browser shows its own wording; returning a string is what asks */
+      ev.preventDefault();
+      ev.returnValue = '';
+      return '';
+    });
+  }
+}
+/** If a previous session left work behind, say so and let the person choose.
+    Restoring silently would be worse than losing it: they would not know which
+    drawing they were looking at. */
+function offerRecovery() {
+  const rec = autosaveFound();
+  if (!rec) return;
+  const when = agoText(Date.now() - (rec.at || Date.now()));
+  const size = rec.doc ? Math.round(rec.doc.length / 1024) : 0;
+  modal(
+    '<h3>Recover unsaved work?</h3>' +
+    '<p>Orthograph closed with a drawing still unsaved, autosaved <b>' + esc(when) + '</b>' +
+    (size ? ' (' + size + ' KB)' : '') + '.</p>' +
+    '<p>Opening it will replace what is on screen now.</p>',
+    () => {
+      if (autosaveRestore(rec)) {
+        fit();
+        cliPrint('Recovered the autosaved drawing. It has not been saved to a file yet.');
+      } else {
+        cliPrint('That autosave could not be read.', 'err');
+      }
+    },
+    { okLabel: 'Recover', cancelLabel: 'Discard', onCancel: () => {
+        autosaveClear();
+        cliPrint('Autosave discarded.');
+      } });
 }
 if (typeof ORTHO_HEADLESS === 'undefined') boot();
 

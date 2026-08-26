@@ -283,3 +283,123 @@ function download(name, text, mime) {
   document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
+
+/* ============================================================
+   Autosave and crash recovery
+   ------------------------------------------------------------
+   Until now this program had none: no autosave, no recovery,
+   not even a warning on closing the tab. A browser CAD app that
+   can produce an issuable drawing and then lose it to a stray
+   Ctrl-W is not one anybody should trust with real work.
+
+   The store is behind an indirection so it can be tested without
+   a browser, and so a machine with storage disabled degrades to
+   "autosave is off" rather than to an exception on every edit.
+   ============================================================ */
+const AUTOSAVE = {
+  key: 'orthograph.autosave.v1',
+  every: 20000,          /* ms between attempts; only writes when dirty      */
+  on: true,
+  last: 0,
+  failed: false,
+  timer: null,
+  bytes: 0,
+  limit: 4 * 1024 * 1024, /* stay under the usual 5MB localStorage ceiling   */
+};
+/** the backing store, swappable so tests need no browser */
+let STORE = (typeof localStorage !== 'undefined') ? localStorage : null;
+function setStore(s) { STORE = s; }
+
+/** Unsaved work is simply "the journal has moved since the last save". The
+    sequence number was already being kept for undo, so this costs nothing. */
+function docDirty() { return HIST.seq !== (DOC.savedSeq | 0); }
+function markSaved() { DOC.savedSeq = HIST.seq; autosaveClear(); }
+
+function autosaveNow(reason) {
+  if (!AUTOSAVE.on || !STORE) return false;
+  if (!docDirty()) return false;
+  let payload;
+  try {
+    payload = JSON.stringify({
+      v: 1, at: Date.now(), seq: HIST.seq,
+      name: DOC.name || '', reason: reason || 'timer',
+      doc: saveNative(),
+    });
+  } catch (e) { return false; }
+  /* A drawing too big for the store is a real situation, not an error to
+     swallow: say so once and stop trying, rather than throwing on every edit
+     or silently pretending the work is safe. */
+  if (payload.length > AUTOSAVE.limit) {
+    if (!AUTOSAVE.failed) {
+      AUTOSAVE.failed = true;
+      if (typeof cliPrint === 'function')
+        cliPrint('This drawing is too large to autosave. Save it to a file.', 'err');
+    }
+    return false;
+  }
+  try {
+    STORE.setItem(AUTOSAVE.key, payload);
+    AUTOSAVE.last = Date.now();
+    AUTOSAVE.bytes = payload.length;
+    AUTOSAVE.failed = false;
+    return true;
+  } catch (e) {
+    if (!AUTOSAVE.failed) {
+      AUTOSAVE.failed = true;
+      if (typeof cliPrint === 'function')
+        cliPrint('Autosave failed — browser storage is full or blocked. Save manually.', 'err');
+    }
+    return false;
+  }
+}
+function autosaveClear() {
+  if (!STORE) return;
+  try { STORE.removeItem(AUTOSAVE.key); } catch (e) { /* nothing to do */ }
+  AUTOSAVE.bytes = 0;
+}
+/** what is sitting in the store, or null. Never throws: a corrupt autosave
+    must not stop the program from starting, which is the one moment it would
+    do the most damage. */
+function autosaveFound() {
+  if (!STORE) return null;
+  let raw;
+  try { raw = STORE.getItem(AUTOSAVE.key); } catch (e) { return null; }
+  if (!raw) return null;
+  try {
+    const o = JSON.parse(raw);
+    if (!o || typeof o.doc !== 'string') return null;
+    return o;
+  } catch (e) {
+    try { STORE.removeItem(AUTOSAVE.key); } catch (e2) { /* ignore */ }
+    return null;
+  }
+}
+/** how long ago, in words a person reads without doing arithmetic */
+function agoText(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + (s === 1 ? ' second ago' : ' seconds ago');
+  const m = Math.round(s / 60);
+  if (m < 60) return m + (m === 1 ? ' minute ago' : ' minutes ago');
+  const h = Math.round(m / 60);
+  return h + (h === 1 ? ' hour ago' : ' hours ago');
+}
+/** restore an autosave. Returns true when the drawing actually came back. */
+function autosaveRestore(rec) {
+  const o = rec || autosaveFound();
+  if (!o) return false;
+  try {
+    loadNative(o.doc);
+    /* the restored drawing is unsaved by definition: it never reached a file */
+    DOC.savedSeq = -1;
+    if (typeof syncUI === 'function') syncUI();
+    if (typeof draw === 'function') draw();
+    return true;
+  } catch (e) { return false; }
+}
+function autosaveStart() {
+  if (AUTOSAVE.timer || typeof setInterval !== 'function') return;
+  AUTOSAVE.timer = setInterval(() => autosaveNow('timer'), AUTOSAVE.every);
+}
+function autosaveStop() {
+  if (AUTOSAVE.timer) { clearInterval(AUTOSAVE.timer); AUTOSAVE.timer = null; }
+}

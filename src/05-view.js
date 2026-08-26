@@ -372,6 +372,11 @@ let SHPCh = null;
     invalidate its neighbourhood — but only its neighbourhood. Clearing the
     whole cache on every mutation put a 600-wall plan at four frames a second
     while dragging. */
+/** Throw away every cached shape. Must be called whenever the document is
+    replaced: the cache is keyed by entity id, and resetDoc() puts UID back to
+    1, so without this the first entities of a newly opened drawing are drawn
+    with the geometry of the ones they replaced. */
+function shapeCacheClear() { SHPC.clear(); DIRTY.clear(); }
 function shapeCacheSync() {
   if (SHPCh !== DOC.wallHatch) { SHPC.clear(); SHPCh = DOC.wallHatch; DIRTY.clear(); return; }
   if (!DIRTY.size) return;
@@ -399,7 +404,22 @@ function shapeCacheSync() {
     for (const v of wallsInBox([b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad])) SHPC.delete(v.id);
   }
 }
+/* Level of detail. A wall thinner than about a pixel on screen cannot show
+   its two faces, its mitres or its poche: every one of those marks lands on
+   the same pixel as the centreline. Solving that geometry is work whose entire
+   output is invisible — and on a drawing zoomed out to twelve thousand walls
+   it is nearly all of the work. Draw the centreline instead.
+
+   This is a DRAW-path decision only. entShapes has exactly one caller, and
+   picking, snapping, export and plotting all go through shapes() directly, so
+   nothing that has to be exact is affected by it. */
+const LOD_PX = 1.1;
+let LOD = true;
 function entShapes(e) {
+  if (LOD && e.t === 'wall' && typeof wallT === 'function' &&
+      Math.abs(wallT(e) * V.z) < LOD_PX && e.a && e.b) {
+    return [{ pts: [e.a, e.b] }];
+  }
   if (e.id == null || DOC.ents.get(e.id) !== e) return shapes(e, SHAPE_TOL) || [];
   const hit = SHPC.get(e.id);
   if (hit !== undefined) return hit.shapes;
