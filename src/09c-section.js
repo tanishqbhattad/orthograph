@@ -183,6 +183,15 @@ function sectionGeometry(sec) {
     }
   }
 
+  /* ---------------- stairs ----------------
+     A section through a stairwell that draws the walls, the floors and then
+     nothing where the stair is says the building has no way up. */
+  for (const e of DOC.ents.values()) {
+    if (e.t !== 'stair' || !inSection(e)) continue;
+    if (typeof stairCrossing !== 'function') break;
+    for (const part of stairCrossing(sec, F, e, depth)) parts.push(part);
+  }
+
   /* the storey datums, drawn right across so the section reads as a building
      rather than a row of unrelated posts */
   const datums = [];
@@ -193,10 +202,94 @@ function sectionGeometry(sec) {
   return { frame: F, parts, datums, span: F.L, cuts: cuts.length };
 }
 
+/* ------------------------------------------------------------
+   A stair in section.
+
+   Each flight is drawn as its own profile: stepped along the top, and closed
+   underneath along the soffit, which is how a stair is drawn and also what
+   makes it read as a stair rather than as a staircase of loose lines.
+
+   The flight is placed by PROJECTING it onto the section line, the same way a
+   wall beyond the cut is. A flight running along the line is seen side-on and
+   the steps are drawn. A flight running across it is seen end-on — there are
+   no steps to see from there, and drawing them would be an invention — so it
+   comes out as the plain rectangle you would actually be looking at.
+   ------------------------------------------------------------ */
+function stairCrossing(sec, F, st, depth) {
+  const P = (typeof stairPath === 'function') ? stairPath(st) : null;
+  if (!P) return [];
+  const C = P.C;
+  const rise = C.rise || 175;
+  const base = levelElev(st.lvl);
+  const w = st.w || 1000;
+  const n = [F.n[0] * F.look, F.n[1] * F.look];
+  const out = [];
+  /* how many risers each flight climbs, and the height it starts at */
+  const flights = C.kind === 'straight'
+    ? [{ leg: P.legs[0], risers: C.risers, from: 0 }]
+    : [{ leg: P.legs[0], risers: C.r1, from: 0 },
+       { leg: P.legs[1], risers: C.r2, from: C.r1 }];
+
+  for (const fl of flights) {
+    const [a, b] = fl.leg;
+    if (!a || !b) continue;
+    /* in view at all? measured the way the section looks, like a seen wall */
+    const dA = (a[0] - F.a[0]) * n[0] + (a[1] - F.a[1]) * n[1];
+    const dB = (b[0] - F.a[0]) * n[0] + (b[1] - F.a[1]) * n[1];
+    const half = w / 2;
+    if (dA < -half - 1e-6 && dB < -half - 1e-6) continue;      /* behind the viewer */
+    if (dA > depth && dB > depth) continue;                    /* past the view depth */
+
+    const xA = (a[0] - F.a[0]) * F.u[0] + (a[1] - F.a[1]) * F.u[1];
+    const xB = (b[0] - F.a[0]) * F.u[0] + (b[1] - F.a[1]) * F.u[1];
+    const lo = base + fl.from * rise;
+    const hi = base + (fl.from + fl.risers) * rise;
+
+    /* end-on: the flight has no extent along the line, so there is no profile
+       to draw. Its width is what you see. */
+    if (Math.abs(xB - xA) < w * 0.5) {
+      const c = (xA + xB) / 2;
+      const x0 = clamp(c - half, 0, F.L), x1 = clamp(c + half, 0, F.L);
+      if (x1 - x0 < 1e-6) continue;
+      out.push({ kind: 'stair', e: st,
+                 pts: [[x0, lo], [x1, lo], [x1, hi], [x0, hi]] });
+      continue;
+    }
+
+    const xs = clamp(xA, 0, F.L), xe = clamp(xB, 0, F.L);
+    if (Math.abs(xe - xs) < 1e-6) continue;
+    const R = Math.max(1, Math.round(fl.risers));
+    const dx = (xe - xs) / R;
+    const pts = [[xs, lo]];
+    for (let i = 1; i <= R; i++) {
+      const y = lo + (hi - lo) * i / R;
+      pts.push([xs + dx * (i - 1), y]);        /* up the riser */
+      pts.push([xs + dx * i, y]);              /* along the tread */
+    }
+    /* close along the soffit, which is the sloping underside of the flight */
+    pts.push([xe, lo]);
+    out.push({ kind: 'stair', e: st, pts, closed: true });
+  }
+
+  /* the landing is a flat plate at the top of the first flight */
+  if (P.landing && C.kind !== 'straight') {
+    const xs = P.landing.map(q => (q[0] - F.a[0]) * F.u[0] + (q[1] - F.a[1]) * F.u[1]);
+    const ds = P.landing.map(q => (q[0] - F.a[0]) * n[0] + (q[1] - F.a[1]) * n[1]);
+    if (!(Math.max(...ds) < -1e-6 || Math.min(...ds) > depth)) {
+      const x0 = clamp(Math.min(...xs), 0, F.L), x1 = clamp(Math.max(...xs), 0, F.L);
+      const y = base + C.r1 * rise;
+      if (x1 - x0 > 1e-6)
+        out.push({ kind: 'stair', e: st,
+                   pts: [[x0, y - 200], [x1, y - 200], [x1, y], [x0, y]], closed: true });
+    }
+  }
+  return out;
+}
+
 /** Place a cut section into the drawing as ordinary geometry, at `at`. */
 function placeSection(sec, at) {
   const G = sectionGeometry(sec);
-  if (!G || !G.parts.length) { cliPrint('The section line crosses no walls.', 'err'); return 0; }
+  if (!G || !G.parts.length) { cliPrint('The section line crosses nothing.', 'err'); return 0; }
   const lay = hasLayer('A-SECT') ? 'A-SECT' : DOC.cur;
   const P = (x, y) => [at[0] + x, at[1] + y];
   begin();
@@ -217,6 +310,14 @@ function placeSection(sec, at) {
     if (p.kind === 'seen') {
       /* outlined, never poched: poche means CUT, and a face you are merely
          looking at must not read as one you sliced through */
+      addEnt({ t: 'pline', closed: true, pts: p.pts.map(q => P(q[0], q[1])),
+               layer: lay, lw: 0.13 });
+      n++;
+      continue;
+    }
+    if (p.kind === 'stair') {
+      /* outlined, not poched: the profile is projected onto the section line
+         rather than sliced by it, so it is something seen, not something cut */
       addEnt({ t: 'pline', closed: true, pts: p.pts.map(q => P(q[0], q[1])),
                layer: lay, lw: 0.13 });
       n++;

@@ -218,8 +218,10 @@ noticed months later.
 - Splines are drawn through fit points (Catmull-Rom) and exported as clamped B-splines;
   imported NURBS are evaluated properly but stored tessellated.
 - Poche is one fill for all cut walls, not per layer of the wall's structure.
-- Stairs do not yet appear in sections, and openings do not cut slabs.
-- Grid bubbles are labelled and can be turned off per end; there are no level datum markers.
+- Stairs in section are projected onto the section line rather than sliced by it,
+  so a flight is drawn as what you would see rather than as a true cut.
+- Grid bubbles are labelled and can be turned off per end. Storey datums are drawn
+  in sections but there is no datum symbol for use in a plan.
 - Door and window types carry size and swing, not fire, acoustic or finish data.
 - Schedules place as tables in the drawing; there is no CSV export.
 - No ordinate or arc-length dimensions, and no annotative scaling.

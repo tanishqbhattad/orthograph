@@ -842,7 +842,11 @@ function drawShapes(e, col, mode) {
       let a = S ? S.pocheA : '2e';
       if (role === 'pocheGhost') a = alphaMul(a, GHOST_POCHE_MUL);
       ctx.beginPath(); pathPts(s.pts, true);
-      ctx.fillStyle = col + a; ctx.fill();
+      /* a shape may carry voids — a slab with a stairwell in it. Even-odd so
+         the inner rings subtract rather than paint over. */
+      let odd = false;
+      if (s.holes) for (const h of s.holes) if (h && h.length > 2) { pathPts(h, true); odd = true; }
+      ctx.fillStyle = col + a; ctx.fill(odd ? 'evenodd' : 'nonzero');
       continue;
     }
     if (s.pts) {

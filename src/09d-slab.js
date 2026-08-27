@@ -30,15 +30,36 @@ function roofRise(rf, p) {
   return Math.max(0, d) * Math.tan(pitch);
 }
 
+/** the voids in a slab: a stairwell, a lift shaft, a double-height space */
+function slabHoles(f) {
+  const h = f && f.holes;
+  if (!Array.isArray(h)) return [];
+  return h.filter(r => Array.isArray(r) && r.length > 2);
+}
+/** is p inside one of the voids, and therefore NOT on the slab */
+function inSlabHole(f, p) {
+  for (const r of slabHoles(f)) if (pointInPoly(p, r)) return true;
+  return false;
+}
 /* a slab's length is the way round it; roof inherits this below */
 GEOM.floor = {
   len: f => polyLen(f.pts || [], true),
+  /* the void comes off the area: a floor with a stairwell in it is not a
+     floor you can lay, price or stand on across the whole of its outline */
+  area(f) {
+    let a = Math.abs(polyArea(f.pts || []));
+    for (const r of slabHoles(f)) a -= Math.abs(polyArea(r));
+    return Math.max(0, a);
+  },
   shapes(f) {
     const pts = f.pts || [];
     if (pts.length < 3) return [];
+    const holes = slabHoles(f);
     const out = [{ pts, closed: true, role: 'face' }];
-    /* a slab reads as a slab, not as an outline someone left lying about */
-    if (f.hatch !== false) out.push({ pts, closed: true, role: 'poche' });
+    for (const r of holes) out.push({ pts: r, closed: true, role: 'face' });
+    /* a slab reads as a slab, not as an outline someone left lying about.
+       The fill carries its voids so it is not painted straight over them. */
+    if (f.hatch !== false) out.push({ pts, closed: true, role: 'poche', holes });
     return out;
   },
   bbox(f) {
@@ -53,11 +74,35 @@ GEOM.floor = {
   dist(p, f) {
     const pts = f.pts || [];
     if (pts.length < 3) return Infinity;
+    /* Over a void you are looking THROUGH the slab, so the slab is not there
+       to be picked — but its rim is, or a hole could never be reshaped. */
+    if (inSlabHole(f, p)) {
+      let d = Infinity;
+      for (const r of slabHoles(f)) d = Math.min(d, polyDist(p, r, true));
+      return d;
+    }
     return pointInPoly(p, pts) ? 0 : polyDist(p, pts, true);
   },
-  grips: f => (f.pts || []).map((p, i) => ({ p, k: i })),
-  grip(f, k, p) { if (f.pts && f.pts[k]) f.pts[k] = p; },
-  xf(f, fn) { f.pts = (f.pts || []).map(fn); },
+  /* holes get grips too, keyed 'h<ring>:<corner>', so a stairwell can be
+     resized without being deleted and drawn again */
+  grips(f) {
+    const g = (f.pts || []).map((p, i) => ({ p, k: i }));
+    slabHoles(f).forEach((r, hi) => r.forEach((p, i) => g.push({ p, k: 'h' + hi + ':' + i })));
+    return g;
+  },
+  grip(f, k, p) {
+    if (typeof k === 'string' && k[0] === 'h') {
+      const [hi, i] = k.slice(1).split(':').map(Number);
+      const r = f.holes && f.holes[hi];
+      if (r && r[i]) r[i] = p;
+      return;
+    }
+    if (f.pts && f.pts[k]) f.pts[k] = p;
+  },
+  xf(f, fn) {
+    f.pts = (f.pts || []).map(fn);
+    if (Array.isArray(f.holes)) f.holes = f.holes.map(r => r.map(fn));
+  },
 };
 GEOM.roof = Object.assign({}, GEOM.floor, {
   shapes(rf) {
@@ -122,6 +167,66 @@ defc('roof', {
     return ring ? [pv({ t: 'pline', pts: ring, closed: true })] : null;
   },
 });
+/* ------------------------------------------------------------
+   SLABHOLE — a void through a floor or roof.
+
+   A stairwell is the reason this exists: without it the floor runs straight
+   across the opening the stair comes through, and both the plan and the
+   section say the storey is sealed.
+
+   Picking inside an enclosed space traces it, exactly as FLOOR does, so a
+   stairwell already walled on all sides is one click. Otherwise pick the
+   corners.
+   ------------------------------------------------------------ */
+function slabAt(p) {
+  /* the smallest slab under the point wins: a void is cut in the thing you
+     are pointing at, and a roof over a floor should not swallow the pick */
+  let best = null, bestA = Infinity;
+  for (const e of DOC.ents.values()) {
+    if (e.t !== 'floor' && e.t !== 'roof') continue;
+    if (!visible(e) || !pointInPoly(p, e.pts || [])) continue;
+    const a = Math.abs(polyArea(e.pts || []));
+    if (a < bestA) { bestA = a; best = e; }
+  }
+  return best;
+}
+function cutSlabHole(f, ring) {
+  if (!f || !ring || ring.length < 3) return false;
+  /* a void has to be IN the slab, or it is not a void in it */
+  const c = ring.reduce((a, q) => [a[0] + q[0] / ring.length, a[1] + q[1] / ring.length], [0, 0]);
+  if (!pointInPoly(c, f.pts || [])) {
+    cliPrint('That opening is not inside the slab.', 'err');
+    return false;
+  }
+  begin();
+  mut(f);
+  f.holes = (f.holes || []).concat([ring.map(q => q.slice())]);
+  commit('Slab opening');
+  cliPrint('Opening cut — ' + fmtArea(Math.abs(polyArea(ring))) + ' through the ' + f.t + '.');
+  return true;
+}
+defc('slabhole', {
+  key: 'slabhole', group: 'arch',
+  hint: 'Click inside the opening, or pick its corners then <em>Enter</em>',
+  init(c) { c.pts = []; c.f = null; },
+  point(c, p) {
+    if (!c.pts.length) {
+      c.f = slabAt(p);
+      if (!c.f) return echo('No floor or roof under that point');
+    }
+    traceOrPick(c, p, ring => { cutSlabHole(c.f, ring); endCmd(); });
+  },
+  enter(c) {
+    if (c.pts.length > 2 && c.f) cutSlabHole(c.f, c.pts);
+    endCmd();
+  },
+  preview(c, p) {
+    if (c.pts.length) return [pv({ t: 'pline', pts: [...c.pts, p], closed: true })];
+    const ring = (typeof roomTrace === 'function') ? roomTrace(p, DOC.curLevel) : null;
+    return ring ? [pv({ t: 'pline', pts: ring, closed: true })] : null;
+  },
+});
+
 function makeSlab(kind, pts) {
   const isRoof = kind === 'roof';
   ensureLayer(isRoof ? 'A-ROOF' : 'A-FLOR', isRoof ? '#c99a6b' : '#8fa3b8');
@@ -169,10 +274,15 @@ function slabCrossing(sec, F, f) {
   if (pts.length < 3) return null;
   /* every place the section line enters or leaves the slab outline */
   const hits = [];
-  for (let i = 0; i < pts.length; i++) {
-    const A = pts[i], B = pts[(i + 1) % pts.length];
-    const X = xSegSeg(sec.a, sec.b, A, B);
-    if (X) hits.push((X[0] - F.a[0]) * F.u[0] + (X[1] - F.a[1]) * F.u[1]);
+  /* the outline AND every void: a section across a stairwell has to show the
+     floor stopping at the void and starting again on the far side */
+  const rings = [pts].concat(slabHoles(f));
+  for (const ring of rings) {
+    for (let i = 0; i < ring.length; i++) {
+      const A = ring[i], B = ring[(i + 1) % ring.length];
+      const X = xSegSeg(sec.a, sec.b, A, B);
+      if (X) hits.push((X[0] - F.a[0]) * F.u[0] + (X[1] - F.a[1]) * F.u[1]);
+    }
   }
   if (hits.length < 2) return null;
   hits.sort((a, b) => a - b);
