@@ -148,7 +148,8 @@ out of those three numbers.
 
 **Schedules.** Doors and windows are marked (D-01, W-01…) in reading order, marks are
 stable when new openings are added, and `DOORSCHEDULE`/`WINDOWSCHEDULE` place a real
-table that counts only the current storey. Rooms schedule the same way.
+table that counts only the current storey, carrying fire rating, acoustic rating and
+finish alongside the sizes. Rooms schedule the same way.
 Every schedule writes out as CSV — from the Export dialog, or `TABLEEXPORT` for
 the ones you have selected — because a schedule is a thing somebody orders from.
 
@@ -238,7 +239,8 @@ noticed months later.
   so a flight is drawn as what you would see rather than as a true cut.
 - Grid bubbles are labelled and can be turned off per end. Storey datums are drawn
   in sections but there is no datum symbol for use in a plan.
-- Door and window types carry size and swing, not fire, acoustic or finish data.
+- Fire, acoustic and finish are recorded and scheduled but not checked: nothing
+  verifies that a door onto a protected stair actually has a rating.
 - Schedules export as CSV, one file per schedule; there is no live link back
   from a spreadsheet into the drawing.
 - An arc-length dimension has no DXF R2000 equivalent, so it exports as flattened

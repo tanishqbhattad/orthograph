@@ -148,6 +148,44 @@ const openingGeom = mk => ({
     o.pos = clamp(dot(sub(p2, w.a), wallU(w)), 0, wallLen(w));
   },
 });
+/* ------------------------------------------------------------
+   What an opening has to BE, as against how big it is.
+
+   A door is specified by its fire rating, its acoustic rating and its finish
+   at least as much as by being 900 wide, and a schedule without them is one
+   you can neither order from nor get past building control.
+
+   They live on the TYPE, because that is what gets specified once and used
+   forty times, with a per-opening override, because the one door onto the
+   protected stair is always different. Nothing is defaulted: a fire rating is
+   what a drawing is checked against, and a plausible guess would be a number
+   nobody chose in a document somebody signs.
+   ------------------------------------------------------------ */
+const OPEN_SPEC_KEYS = ['fire', 'acoustic', 'finish'];
+function openingSpec(o) {
+  const ty = (o && o.t === 'window') ? winTypeOf(o) : doorTypeOf(o);
+  const out = {};
+  for (const k of OPEN_SPEC_KEYS) {
+    const own = o ? o[k] : null;
+    const fromType = ty ? ty[k] : null;
+    out[k] = own != null && own !== '' ? own : (fromType != null && fromType !== '' ? fromType : null);
+  }
+  return out;
+}
+/** the type an opening actually has, or null — NOT the library's first entry,
+    which is what makes an 1800 window report itself as a 600 one */
+function doorTypeOf(o) {
+  if (!o || !o.dt) return null;
+  return (DOC.doorTypes || []).find(x => x.id === o.dt) || null;
+}
+function winTypeOf(o) {
+  if (!o || !o.wtp) return null;
+  return (DOC.winTypes || []).find(x => x.id === o.wtp) || null;
+}
+/** how a fire rating is written on a drawing: FD30, not 30 */
+function fireText(v) { return v == null || v === '' ? '\u2014' : 'FD' + v; }
+function specText(v) { return v == null || v === '' ? '\u2014' : String(v); }
+
 GEOM.door = openingGeom(doorShapes);
 GEOM.window = openingGeom(windowShapes);
 /* an opening is as long as the hole it makes */

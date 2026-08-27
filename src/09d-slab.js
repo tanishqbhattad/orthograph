@@ -375,16 +375,24 @@ function openingTagShapes(o) {
 /* ---------------- schedules ---------------- */
 function openingScheduleRows(kind, lvl) {
   const isDoor = kind === 'door';
-  const rows = [['Mark', isDoor ? 'Door' : 'Window', 'W', 'H', 'Wall']];
+  /* Fire, acoustic and finish are columns whether or not anything fills them.
+     A door schedule with no fire column is the one that comes back from
+     building control, and an em dash says "not specified" out loud where a
+     blank cell only looks like nobody got round to the table. */
+  const rows = [['Mark', isDoor ? 'Door' : 'Window', 'W', 'H', 'Wall']
+    .concat(isDoor ? ['Fire', 'Acoustic Rw', 'Finish'] : ['Acoustic Rw', 'Finish'])];
   for (const o of openingsOfKind(kind, lvl)) {
     const host = DOC.ents.get(o.host);
+    const S = openingSpec(o);
     rows.push([
       o.mark || '—',
       openingTypeName(o, isDoor),
       fmt(openW(o)),
       fmt(openH(o)),
       host ? ((wallType(host.wt) || {}).name || '—') : '—',
-    ]);
+    ].concat(isDoor
+      ? [fireText(S.fire), specText(S.acoustic), specText(S.finish)]
+      : [specText(S.acoustic), specText(S.finish)]));
   }
   return rows;
 }
@@ -393,8 +401,10 @@ function placeOpeningSchedule(kind, p) {
   if (rows.length < 2) { cliPrint('No ' + kind + 's on this level.', 'err'); return 0; }
   const h = DOC.textH || 2.5;
   begin();
+  const align = ['l', 'l', 'r', 'r', 'l'].concat(
+    kind === 'door' ? ['l', 'r', 'l'] : ['r', 'l']);
   addEnt({ t: 'table', p: p.slice(), rows, colW: fitColumns(rows, h), h,
-           align: ['l', 'l', 'r', 'r', 'l'], kind: kind + 's', layer: annoLayer('TEXT') });
+           align, kind: kind + 's', layer: annoLayer('TEXT') });
   commit((kind === 'door' ? 'Door' : 'Window') + ' schedule');
   return rows.length - 1;
 }

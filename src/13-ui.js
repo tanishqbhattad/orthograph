@@ -1282,6 +1282,27 @@ function openingProps(w, e, set, upd, kind) {
     ro(w, 'From far end', fmt(Math.max(wallLen(host) - e.pos, 0)));
     btnRow(w, '', 'Select the wall', () => { SEL.clear(); SEL.add(host.id); syncUI(); draw(); });
   } else ro(w, 'Wall', 'missing');
+  /* Specification. Blank means "as the type says"; typing here overrides the
+     type for this one opening, which is how the door onto the stair gets its
+     own rating without a type of its own. */
+  grpRow(w, 'Specification');
+  const S = openingSpec(e);
+  const specRow = (label, key, fmtV) => {
+    const own = e[key];
+    const shown = own != null && own !== '' ? String(own)
+                : (S[key] != null ? (fmtV ? fmtV(S[key]) : String(S[key])) + '  (type)' : '');
+    txtRow(w, label, shown, v => {
+      begin(); mut(e);
+      const t = String(v).replace(/\s*\(type\)\s*$/, '').trim();
+      if (!t) delete e[key];
+      else if (key === 'finish') e[key] = t;
+      else { const n = parseFloat(t.replace(/^FD/i, '')); if (isFinite(n)) e[key] = n; else delete e[key]; }
+      commit('Specification'); upd();
+    });
+  };
+  if (kind === 'door') specRow('Fire', 'fire', v => 'FD' + v);
+  specRow('Acoustic Rw', 'acoustic');
+  specRow('Finish', 'finish');
   if (kind === 'door') {
     selRow(w, 'Leaf', [['single', 'single'], ['double', 'double'], ['slide', 'sliding'], ['pocket', 'pocket'], ['bifold', 'bifold'], ['opening', 'opening only']],
       e.k || (doorType(e.dt) || {}).k || 'single', v => { begin(); mut(e); e.k = v; commit(); upd(); });

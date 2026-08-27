@@ -3384,6 +3384,44 @@ const openingGeom = mk => ({
     o.pos = clamp(dot(sub(p2, w.a), wallU(w)), 0, wallLen(w));
   },
 });
+/* ------------------------------------------------------------
+   What an opening has to BE, as against how big it is.
+
+   A door is specified by its fire rating, its acoustic rating and its finish
+   at least as much as by being 900 wide, and a schedule without them is one
+   you can neither order from nor get past building control.
+
+   They live on the TYPE, because that is what gets specified once and used
+   forty times, with a per-opening override, because the one door onto the
+   protected stair is always different. Nothing is defaulted: a fire rating is
+   what a drawing is checked against, and a plausible guess would be a number
+   nobody chose in a document somebody signs.
+   ------------------------------------------------------------ */
+const OPEN_SPEC_KEYS = ['fire', 'acoustic', 'finish'];
+function openingSpec(o) {
+  const ty = (o && o.t === 'window') ? winTypeOf(o) : doorTypeOf(o);
+  const out = {};
+  for (const k of OPEN_SPEC_KEYS) {
+    const own = o ? o[k] : null;
+    const fromType = ty ? ty[k] : null;
+    out[k] = own != null && own !== '' ? own : (fromType != null && fromType !== '' ? fromType : null);
+  }
+  return out;
+}
+/** the type an opening actually has, or null — NOT the library's first entry,
+    which is what makes an 1800 window report itself as a 600 one */
+function doorTypeOf(o) {
+  if (!o || !o.dt) return null;
+  return (DOC.doorTypes || []).find(x => x.id === o.dt) || null;
+}
+function winTypeOf(o) {
+  if (!o || !o.wtp) return null;
+  return (DOC.winTypes || []).find(x => x.id === o.wtp) || null;
+}
+/** how a fire rating is written on a drawing: FD30, not 30 */
+function fireText(v) { return v == null || v === '' ? '\u2014' : 'FD' + v; }
+function specText(v) { return v == null || v === '' ? '\u2014' : String(v); }
+
 GEOM.door = openingGeom(doorShapes);
 GEOM.window = openingGeom(windowShapes);
 /* an opening is as long as the hole it makes */
@@ -14040,16 +14078,24 @@ function openingTagShapes(o) {
 /* ---------------- schedules ---------------- */
 function openingScheduleRows(kind, lvl) {
   const isDoor = kind === 'door';
-  const rows = [['Mark', isDoor ? 'Door' : 'Window', 'W', 'H', 'Wall']];
+  /* Fire, acoustic and finish are columns whether or not anything fills them.
+     A door schedule with no fire column is the one that comes back from
+     building control, and an em dash says "not specified" out loud where a
+     blank cell only looks like nobody got round to the table. */
+  const rows = [['Mark', isDoor ? 'Door' : 'Window', 'W', 'H', 'Wall']
+    .concat(isDoor ? ['Fire', 'Acoustic Rw', 'Finish'] : ['Acoustic Rw', 'Finish'])];
   for (const o of openingsOfKind(kind, lvl)) {
     const host = DOC.ents.get(o.host);
+    const S = openingSpec(o);
     rows.push([
       o.mark || '—',
       openingTypeName(o, isDoor),
       fmt(openW(o)),
       fmt(openH(o)),
       host ? ((wallType(host.wt) || {}).name || '—') : '—',
-    ]);
+    ].concat(isDoor
+      ? [fireText(S.fire), specText(S.acoustic), specText(S.finish)]
+      : [specText(S.acoustic), specText(S.finish)]));
   }
   return rows;
 }
@@ -14058,8 +14104,10 @@ function placeOpeningSchedule(kind, p) {
   if (rows.length < 2) { cliPrint('No ' + kind + 's on this level.', 'err'); return 0; }
   const h = DOC.textH || 2.5;
   begin();
+  const align = ['l', 'l', 'r', 'r', 'l'].concat(
+    kind === 'door' ? ['l', 'r', 'l'] : ['r', 'l']);
   addEnt({ t: 'table', p: p.slice(), rows, colW: fitColumns(rows, h), h,
-           align: ['l', 'l', 'r', 'r', 'l'], kind: kind + 's', layer: annoLayer('TEXT') });
+           align, kind: kind + 's', layer: annoLayer('TEXT') });
   commit((kind === 'door' ? 'Door' : 'Window') + ' schedule');
   return rows.length - 1;
 }
@@ -17763,6 +17811,27 @@ function openingProps(w, e, set, upd, kind) {
     ro(w, 'From far end', fmt(Math.max(wallLen(host) - e.pos, 0)));
     btnRow(w, '', 'Select the wall', () => { SEL.clear(); SEL.add(host.id); syncUI(); draw(); });
   } else ro(w, 'Wall', 'missing');
+  /* Specification. Blank means "as the type says"; typing here overrides the
+     type for this one opening, which is how the door onto the stair gets its
+     own rating without a type of its own. */
+  grpRow(w, 'Specification');
+  const S = openingSpec(e);
+  const specRow = (label, key, fmtV) => {
+    const own = e[key];
+    const shown = own != null && own !== '' ? String(own)
+                : (S[key] != null ? (fmtV ? fmtV(S[key]) : String(S[key])) + '  (type)' : '');
+    txtRow(w, label, shown, v => {
+      begin(); mut(e);
+      const t = String(v).replace(/\s*\(type\)\s*$/, '').trim();
+      if (!t) delete e[key];
+      else if (key === 'finish') e[key] = t;
+      else { const n = parseFloat(t.replace(/^FD/i, '')); if (isFinite(n)) e[key] = n; else delete e[key]; }
+      commit('Specification'); upd();
+    });
+  };
+  if (kind === 'door') specRow('Fire', 'fire', v => 'FD' + v);
+  specRow('Acoustic Rw', 'acoustic');
+  specRow('Finish', 'finish');
   if (kind === 'door') {
     selRow(w, 'Leaf', [['single', 'single'], ['double', 'double'], ['slide', 'sliding'], ['pocket', 'pocket'], ['bifold', 'bifold'], ['opening', 'opening only']],
       e.k || (doorType(e.dt) || {}).k || 'single', v => { begin(); mut(e); e.k = v; commit(); upd(); });

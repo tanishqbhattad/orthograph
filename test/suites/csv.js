@@ -87,7 +87,8 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
                header: got ? got.text.split(/\\r?\\n/)[0] : '' };`);
     ok(r.name && /\.csv$/.test(r.name), 'it writes a .csv, got ' + r.name);
     ok(r.mime && /csv/.test(r.mime), 'with a csv mime type, got ' + r.mime);
-    eq(r.header, 'Mark,Door,W,H,Wall', 'the schedule header survives');
+    eq(r.header, 'Mark,Door,W,H,Wall,Fire,Acoustic Rw,Finish',
+      'the schedule header survives, specification columns and all');
     eq(r.lines, 3, 'a header and two doors');
   });
 

@@ -97,7 +97,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       markOpenings('door');
       const rows = openingScheduleRows('door', 0);
       return { header: rows[0], rows: rows.slice(1).map(x => x.join('|')) };`);
-    eq(r.header.join(','), 'Mark,Door,W,H,Wall');
+    eq(r.header.join(','), 'Mark,Door,W,H,Wall,Fire,Acoustic Rw,Finish');
     ok(r.rows.some(x => /D-01\|Single 900\|900\|2100\|Stud partition 140/.test(x)),
       'the partition door reads right: ' + r.rows.join('  //  '));
     ok(r.rows.some(x => /Double 1500\|1500\|2100\|Cavity 300/.test(x)),
