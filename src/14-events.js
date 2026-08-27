@@ -31,6 +31,53 @@ function toast(s) {
   t.textContent = s; t.classList.add('show');
   clearTimeout(_tt); _tt = setTimeout(() => t.classList.remove('show'), 2800);
 }
+/** How far one arrow press moves the crosshair.
+
+    With snap on it is one snap step, because that is the grid the drawing is
+    already being made on and anything else would land between the points a
+    mouse can reach. With snap off there is no such grid, so it is ten screen
+    pixels converted to model units — a step you can see at any zoom, rather
+    than a fixed distance that is a crawl zoomed out and a leap zoomed in. */
+function crosshairStepSize(coarse, fine) {
+  let d = (VS.snapgrid && DOC.snapStep > 0) ? DOC.snapStep : 10 / (V.z || 1);
+  if (coarse) d *= 10;
+  if (fine) d /= 10;
+  return d;
+}
+function crosshairStep(key, coarse, fine) {
+  const d = crosshairStepSize(coarse, fine);
+  const p = (ST.cur || [0, 0]).slice();
+  if (key === 'ArrowRight') p[0] += d;
+  else if (key === 'ArrowLeft') p[0] -= d;
+  else if (key === 'ArrowUp') p[1] += d;
+  else if (key === 'ArrowDown') p[1] -= d;
+  ST.cur = p;
+  /* everything a mouse move does, so snapping, tracking and the preview all
+     behave as they would under the cursor rather than only the marker moving */
+  const scr = w2s(p);
+  ST.px = scr[0]; ST.py = scr[1];
+  ST.snap = (typeof snapAt === 'function') ? snapAt(scr[0], scr[1], refPoint()) : ST.snap;
+  if (typeof hoverAt === 'function') hoverAt(p);
+  if (typeof cmdMove === 'function' && CMD) cmdMove(p);
+  if (typeof showCoords === 'function') showCoords(p);
+  draw();
+  return p;
+}
+/** The click. A running command gets the point; otherwise it selects what is
+    under the crosshair, which is the half of picking that typing a coordinate
+    could never do. */
+function crosshairPick() {
+  const p = (ST.cur || [0, 0]).slice();
+  const snapped = (ST.snap && ST.snap.p) ? ST.snap.p.slice() : p;
+  if (CMD) { cmdPoint(snapped); draw(); return true; }
+  const hit = (typeof pickAt === 'function') ? pickAt(p, 10) : null;
+  if (!hit) { selClearAll(); syncUI(); draw(); return false; }
+  if (!ST.shift) SEL.clear();
+  SEL.add(hit.id);
+  syncUI(); draw();
+  return true;
+}
+
 function syncUI() {
   if (typeof buildSheetTabs === 'function') buildSheetTabs();
   buildLayers(); buildLevels(); buildProps(); syncTools();
@@ -610,6 +657,30 @@ window.addEventListener('keydown', ev => {
     if (!cancelCmd()) { selClearAll(); syncUI(); }
     ST.rtzoom = false; ST.rtdrag = null; ST.panReady = false; navCursor();
     bandCancel(); gripMenuClose(); hint(''); draw(); return;  }
+  /* ---------------- driving the crosshair from the keyboard ----------------
+     Coordinates could always be typed, so a keyboard user could draw
+     precisely. What they could not do is AIM: move the crosshair to see what
+     it snaps to, hover something to read it, or pick an object that already
+     exists. Everything downstream of picking was mouse-only because picking
+     was.
+
+     Below the in-a-field guard, deliberately: the arrows belong to the
+     command line's caret and history whenever it has focus, and taking them
+     would make the command line unusable. */
+  if (!inField && /^Arrow(Up|Down|Left|Right)$/.test(ev.key)
+      && !ev.ctrlKey && !ev.metaKey && !acOpen()) {
+    ev.preventDefault();
+    crosshairStep(ev.key, ev.shiftKey, ev.altKey);
+    return;
+  }
+  /* Ctrl+Enter is the click. Plain Enter repeats the last command — muscle
+     memory older than this program — so it cannot be taken for picking. */
+  if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey) && !inField) {
+    ev.preventDefault();
+    crosshairPick();
+    return;
+  }
+
   /* The drafting toggles are hoisted above the in-a-field guard on purpose.
      Typing any letter focuses the command line, so with them below it F8 would
      be dead for the whole of every command — which is exactly when a drafter
@@ -917,6 +988,8 @@ function boot() {
   echo('Ready');
   offerRecovery();
   autosaveStart();
+  /* a machine that asks for more contrast gets it without being told twice */
+  if (typeof contrastWanted === 'function' && contrastWanted()) setContrast(true);
   /* A tab closes faster than any timer fires, so take the last chance. Both
      events are used: visibilitychange is the one that actually fires on mobile
      and on a killed tab, beforeunload is the one that can still warn. */

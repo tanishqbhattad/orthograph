@@ -667,6 +667,20 @@ defvar('TAGS', {
   get: () => VS.tags ? 1 : 0,
   set(v) { VS.tags = v ? 1 : 0; draw(); },
 });
+defvar('CONTRAST', {
+  desc: 'High-contrast palette: 1 on, 0 the default drawing colours',
+  get: () => VS.contrast ? 1 : 0,
+  set(v) { setContrast(!!v); },
+});
+defc('contrast', {
+  key: 'contrast', group: 'view',
+  hint: 'Toggle the high-contrast palette',
+  init() {
+    const on = setContrast(!VS.contrast);
+    cliPrint('High contrast ' + (on ? 'on' : 'off') + '.');
+    endCmd();
+  },
+});
 
 /** TABLE — the command the rail was already offering. B4 built the table
     ENTITY and never gave it a way in, so the button pointed at nothing. */

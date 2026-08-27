@@ -44,6 +44,47 @@ const CO = {
      crossing is green and dashed. This is pure muscle memory — get the two
      the wrong way round and every draughtsman notices inside a second. */
   selWin: '#6ba8ff', selCross: '#4ee6a8',};
+
+/* ---------------- high contrast ----------------
+   The default palette is AutoCAD's model space, tuned so that white geometry
+   on 33/40/48 is readable without glare. That trade is the right one for most
+   eyes and the wrong one for some: a 1px grid at 3:1 against its background is
+   a grid you cannot find.
+
+   This is the same drawing at a contrast somebody can actually use — black
+   ground, geometry at full white, and every accent pushed until it clears
+   WCAG AA against that ground. It is a swap of the SAME keys rather than a
+   second table consulted at every draw: nothing downstream has to know the
+   theme exists, and a colour nobody has thought about cannot silently go
+   undefined. The defaults are kept so it can be turned off exactly. */
+const CO_DEFAULT = Object.assign({}, CO);
+const CO_HIGH = {
+  bg: '#000000',
+  gridm: '#4a5666', gridM: '#8b9bb0',
+  axisX: '#ff6b6b', axisY: '#5ee88a',
+  sel: '#ffd400', hot: '#ffffff', snap: '#00ffb2', prev: '#8ec5ff',
+  grip: '#5c9bff', gripHover: '#ffc0c0', gripHot: '#ff3b3b', tx: '#e8eef6',
+  cross: '#ffffff', ucsX: '#ff6b6b', ucsY: '#5ee88a',
+  selWin: '#8ec5ff', selCross: '#00ffb2',
+};
+/** Does this machine ask for more contrast? A machine that cannot be asked is
+    not assumed to want it — same rule as reduced motion. */
+function contrastWanted() {
+  try {
+    if (typeof matchMedia !== 'function') return false;
+    return !!(matchMedia('(prefers-contrast: more)') || {}).matches;
+  } catch (e) { return false; }
+}
+function setContrast(on) {
+  const from = on ? CO_HIGH : CO_DEFAULT;
+  /* every key of the default palette is written, so a key the high-contrast
+     table forgot falls back to the default rather than becoming undefined */
+  for (const k of Object.keys(CO_DEFAULT)) CO[k] = from[k] != null ? from[k] : CO_DEFAULT[k];
+  VS.contrast = on ? 1 : 0;
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
+  if (typeof draw === 'function') draw();
+  return VS.contrast;
+}
 function w2s(p) {
   if (!V.rot) return [p[0] * V.z + V.px, -p[1] * V.z + V.py];
   const c = Math.cos(V.rot), s = Math.sin(V.rot);

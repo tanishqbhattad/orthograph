@@ -93,6 +93,13 @@ system variables reachable through `SETVAR`. Coordinates take every AutoCAD form
 absolute, relative `@dx,dy`, polar `@dist<angle`, direct distance entry and the
 `#` override.
 
+The drawing can be driven without a mouse. The arrows move the crosshair — one snap
+step, ten with Shift, a tenth with Alt — and Ctrl+Enter is the click: it gives a running
+command its point, or selects whatever is under the crosshair. The arrows belong to the
+command line whenever it has focus, so neither half gets in the other one's way. CONTRAST
+swaps in a high-contrast palette, and a machine asking for one through prefers-contrast
+gets it without being told twice.
+
 Selection follows the same rules: left-to-right windows (blue, solid, encloses),
 right-to-left crosses (green, dashed, touches), with live preview of what the box
 would take, lasso, fence, cycling through overlapping objects, and grips that go
@@ -232,7 +239,8 @@ noticed months later.
 - No ordinate or arc-length dimensions, and no annotative scaling.
 - No fields, and no stacked fractions in text.
 - Blocks have no attribute manager, in-place reference editing or dynamic parameters.
-- The crosshair cannot be moved from the keyboard, and there is no high-contrast theme.
+- Keyboard picking is Ctrl+Enter rather than a rebindable key, and the
+  high-contrast palette is one alternative rather than a set you can edit.
 
 ## Licence
 

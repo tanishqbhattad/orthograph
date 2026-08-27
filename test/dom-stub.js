@@ -1,6 +1,26 @@
 /* Minimal DOM good enough to load the bundle headlessly.
    Deliberately dependency-free so `node test/run.js` always works. */
 'use strict';
+/* Which tag each id in the shell actually is.
+
+   Every element used to be invented as a <div>, so #cmd — a real <input> —
+   answered DIV. That made "is a text field focused" untestable, which is the
+   guard the whole of this program's key routing turns on: the arrows belong
+   to the command line while it has focus and to the crosshair otherwise, and
+   headlessly both halves looked identical. Read from the shell so the stub
+   cannot drift from the markup it is standing in for. */
+const TAG_OF = (() => {
+  const map = {};
+  try {
+    const fs = require('fs'), path = require('path');
+    const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'shell.html'), 'utf8');
+    const re = /<([a-zA-Z][\w-]*)\b[^>]*?\bid="([^"]+)"/g;
+    let m;
+    while ((m = re.exec(html))) map[m[2]] = m[1].toLowerCase();
+  } catch (e) { /* no shell to read: everything stays a div, as before */ }
+  return map;
+})();
+
 function makeCtx() {
   /* `sets` records assignments to the drawing state — fillStyle, strokeStyle,
      lineWidth — because WHAT was painted is as much a rendering fact as
@@ -159,7 +179,10 @@ function install(g) {
   const doc = {
     body: new El('body'),
     createElement: t => new El(t),
-    getElementById: id => { if (!byId.has(id)) { const e = new El('div'); e.id = id; byId.set(id, e); } return byId.get(id); },
+    getElementById: id => {
+      if (!byId.has(id)) { const e = new El(TAG_OF[id] || 'div'); e.id = id; byId.set(id, e); }
+      return byId.get(id);
+    },
     querySelector: s => (s && s[0] === '#') ? doc.getElementById(s.slice(1)) : new El('div'),
     /* Walks the tree for #id, .class and tag selectors. It returned [] before,
        which quietly made every DOM-structure assertion vacuously true: a test
