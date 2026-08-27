@@ -4,7 +4,7 @@
 architecture layer on top. No build step required to *use* it — `orthograph.html` is a
 single self-contained file. Open it in any browser.
 
-111 commands, 93 acad.pgp aliases, 738 tests.
+111 commands, 93 acad.pgp aliases, 746 tests.
 
 ## Layout
 
@@ -63,7 +63,7 @@ node tools/serve.js            # → http://127.0.0.1:8017/
 
 ```
 node build.js                  # → orthograph.html
-node test/run.js               # 738 tests
+node test/run.js               # 746 tests
 node test/run.js wall          # run a subset by name
 node tools/verify.js           # behavioural checks + drag latency
 
@@ -86,6 +86,10 @@ Candidates are ranked by **distance to the cursor**, with priority buying only a
 bounded head start — so a perpendicular under the crosshair is not stolen by an
 endpoint eight pixels away, which is the failure that makes most snap engines
 tiring to use.
+
+Any length or coordinate field takes arithmetic — `1200+225`, `3600/7`, `(1200+300)/2`,
+and `2m+30cm` with a unit on each part. Anything it cannot read in full is refused
+rather than truncated, which is how `1200+225` used to draw a 1200 wall.
 
 The command line is the real one: acad.pgp aliases, prompts whose bracketed
 keywords are typed by their capital, transparent commands, `U`/`REDO`, and live

@@ -82,16 +82,88 @@ function fmt(v, u, dp) {
 }
 function parseLen(s) {
   s = String(s).trim().replace(/,/g, '.'); if (!s) return NaN;
-  /* 4'-6 1/2"  |  4' 6"  |  4' */
+  /* 4'-6 1/2"  |  4' 6"  |  4' — before arithmetic, because the hyphen in
+     4'-6" is a separator and the slash in 6 1/2" is a fraction, and both would
+     otherwise be read as operators */
   let m = s.match(/^(-?[\d.]+)\s*'\s*-?\s*([\d.]+)?(?:\s+(\d+)\/(\d+))?"?$/);
   if (m) return ((+m[1]) * 12 + (+(m[2] || 0)) + (m[3] ? +m[3] / +m[4] : 0)) * 25.4;
   /* 6 1/2" */
   m = s.match(/^(-?\d+)\s+(\d+)\/(\d+)\s*"?$/);
   if (m) return ((+m[1]) + (+m[2]) / (+m[3])) * 25.4;
-  m = s.match(/^(-?[\d.]+)\s*(mm|cm|m|in|ft|"|')$/i);
-  if (m) { const u = { '"': 'in', "'": 'ft' }[m[2]] || m[2].toLowerCase(); return +m[1] * U[u]; }
-  const v = parseFloat(s);
-  return isNaN(v) ? NaN : v * U[DOC.units];
+  return evalLen(s);
+}
+/* ---------------- arithmetic in a length ----------------
+   This used to end in parseFloat(s), which stops at the first character it
+   does not understand and returns whatever it had. Typing 1200+225 at a
+   distance prompt drew a 1200 wall; 1200mmm drew 1200; 1200abc drew 1200. No
+   error, no warning — a plausible dimension, confidently wrong.
+
+   So: read the whole string or refuse it. A recursive-descent parser over
+   + - * / and parentheses, where a number may carry its own unit, and
+   anything left over at the end is a refusal rather than a truncation. */
+function evalLen(src) {
+  let i = 0;
+  const s = String(src);
+  const ws = () => { while (i < s.length && s[i] === ' ') i++; };
+  const fail = () => { throw new SyntaxError('not a length'); };
+
+  /* a number, optionally with a unit stuck to it: 300, 2m, 30cm, 6" */
+  const number = () => {
+    ws();
+    const m = /^[\d.]+/.exec(s.slice(i));
+    if (!m) fail();
+    const v = parseFloat(m[0]);
+    if (!isFinite(v)) fail();
+    /* "1200.5.5" is not a number: parseFloat would take 1200.5 and leave .5 */
+    if (String(m[0]).split('.').length > 2) fail();
+    i += m[0].length;
+    const u = /^\s*(mm|cm|m|in|ft|"|')/i.exec(s.slice(i));
+    if (u) {
+      i += u[0].length;
+      const k = { '"': 'in', "'": 'ft' }[u[1]] || u[1].toLowerCase();
+      return v * U[k];
+    }
+    return v * U[DOC.units];
+  };
+  const primary = () => {
+    ws();
+    if (s[i] === '(') { i++; const v = expr(); ws(); if (s[i] !== ')') fail(); i++; return v; }
+    if (s[i] === '-') { i++; return -primary(); }
+    if (s[i] === '+') { i++; return primary(); }
+    return number();
+  };
+  const term = () => {
+    let v = primary();
+    for (;;) {
+      ws();
+      const op = s[i];
+      if (op !== '*' && op !== '/') return v;
+      i++;
+      const r = primary();
+      /* a factor is a plain multiplier, not a length: 2*450 is 900mm, not
+         900 square millimetres, so the unit is divided back out */
+      if (op === '*') v = v * (r / U[DOC.units]);
+      else { if (!r) fail(); v = v / (r / U[DOC.units]); }
+    }
+  };
+  const expr = () => {
+    let v = term();
+    for (;;) {
+      ws();
+      const op = s[i];
+      if (op !== '+' && op !== '-') return v;
+      i++;
+      const r = term();
+      v = op === '+' ? v + r : v - r;
+    }
+  };
+  try {
+    const v = expr();
+    ws();
+    /* anything left over means we did not understand the whole thing */
+    if (i !== s.length || !isFinite(v)) return NaN;
+    return v;
+  } catch (e) { return NaN; }
 }
 /** Area, shown in the unit an architect actually wants: square metres for
     metric drawings and square feet for imperial, dropping to the small unit

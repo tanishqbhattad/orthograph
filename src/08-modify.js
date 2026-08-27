@@ -1061,7 +1061,18 @@ GEOM.hatch = {
   },
   grips: () => [],
   xf(h, fn) { h.loops = (h.loops || []).map(L => L.map(fn)); },
-  area: h => (h.loops || []).reduce((a, L) => a + polyArea(L), 0),
+  /* Signed, and the loops are ordered outer-first, so a hole subtracts.
+     This added them: a 20 square metre room with a square metre column in it
+     reported 21, while the fill — an even-odd clip — drew the column
+     correctly. The drawing and the number disagreed, which is the worst way
+     round to be wrong. */
+  area(h) {
+    const L = h.loops || [];
+    if (!L.length) return 0;
+    let a = Math.abs(polyArea(L[0]));
+    for (let i = 1; i < L.length; i++) a -= Math.abs(polyArea(L[i]));
+    return Math.max(0, a);
+  },
   len: h => (h.loops || []).reduce((a, L) => a + polyLen(L, true), 0),
 };
 
