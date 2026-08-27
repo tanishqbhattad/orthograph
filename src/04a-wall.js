@@ -479,7 +479,29 @@ function wallShapes(w) {
   /* the joined outline comes first so a renderer can lay the poche down before
      anything is drawn over it */
   const outline = [E0.plus, E1.minus, E1.plus, E0.minus];
-  const out = [{ pts: outline, closed: true, role: 'poche', hatch: wallHatchOn(w) }];
+  /* A compound wall is poched by layer. The bands are built from the SAME
+     interpolation as the layer lines drawn further down, between the mitred
+     end points rather than across a nominal thickness, so a band cannot
+     disagree with the line that bounds it and both stay mitred at a corner.
+     A wall with no layers keeps the single fill it always had. */
+  const out = [];
+  const pocheStack = wallLayerStack(w);
+  if (pocheStack) {
+    const lerpP = (A, B, f) => [A[0] + (B[0] - A[0]) * f, A[1] + (B[1] - A[1]) * f];
+    const tot = pocheStack.reduce((n, l) => n + l.t, 0) || 1;
+    let acc = 0;
+    for (const lay of pocheStack) {
+      const f0 = acc / tot, f1 = (acc + lay.t) / tot;
+      acc += lay.t;
+      out.push({
+        pts: [lerpP(E0.plus, E0.minus, f0), lerpP(E1.minus, E1.plus, f0),
+              lerpP(E1.minus, E1.plus, f1), lerpP(E0.plus, E0.minus, f1)],
+        closed: true, role: 'poche', hatch: wallHatchOn(w), mat: lay.fill || null,
+      });
+    }
+  } else {
+    out.push({ pts: outline, closed: true, role: 'poche', hatch: wallHatchOn(w) });
+  }
 
   /* the wall body across each window, ghosted */
   const Lc0 = { a: E0.plus, b: E1.minus }, Rc0 = { a: E0.minus, b: E1.plus };

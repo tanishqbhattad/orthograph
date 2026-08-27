@@ -116,7 +116,8 @@ Select anything and the right-hand panel edits its parameters live.
 
 Walls carry a compound structure: a type is a stack of layers with thicknesses, and the
 layer boundaries are drawn, so a cavity wall reads as a cavity wall rather than as two
-lines.
+lines. Each layer is poched at its own weight — brick dense, insulation nearly open — so
+the fill agrees with the lines drawn across it.
 
 ## Storeys, sheets and output
 
@@ -219,7 +220,8 @@ noticed months later.
 - DWG remains experimental and unverified against AutoCAD — use DXF.
 - Splines are drawn through fit points (Catmull-Rom) and exported as clamped B-splines;
   imported NURBS are evaluated properly but stored tessellated.
-- Poche is one fill for all cut walls, not per layer of the wall's structure.
+- Poche weight varies by material but is not hatched: there are no material
+  hatch patterns, so a printed section distinguishes layers by tone alone.
 - Stairs in section are projected onto the section line rather than sliced by it,
   so a flight is drawn as what you would see rather than as a true cut.
 - Grid bubbles are labelled and can be turned off per end. Storey datums are drawn

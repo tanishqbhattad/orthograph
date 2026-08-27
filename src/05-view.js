@@ -775,6 +775,28 @@ function strokeAs(col, lw, dash) {
   ctx.stroke();
 }
 
+/* How heavily each material is poched, as a multiplier on the poche alpha.
+   Not colour: colour belongs to the layer the wall is on, and a section that
+   recolours a wall by what it is made of stops reading as one drawing. Weight
+   is what a drawn section varies — brick dense, insulation nearly open — and
+   it survives being printed in black. A material nobody has defined is left
+   exactly as it was rather than being given an invented weight. */
+const POCHE_TONE = {
+  brick: 1.35,
+  block: 1.1,
+  concrete: 1.5,
+  structural: 1.5,
+  insulation: 0.45,
+  cavity: 0.3,
+  finish: 0.8,
+  timber: 0.95,
+};
+function pocheTone(mat) {
+  if (!mat) return 1;
+  const v = POCHE_TONE[String(mat).toLowerCase()];
+  return v == null ? 1 : v;
+}
+
 /* ---- wall poche ----
    The wall module owns the flag; the renderer only has to be defensive about
    the helper not existing yet. */
@@ -841,6 +863,8 @@ function drawShapes(e, col, mode) {
       if (spanPx(s.pts) < 1) continue;            /* thinner than a pixel: the face lines say it all */
       let a = S ? S.pocheA : '2e';
       if (role === 'pocheGhost') a = alphaMul(a, GHOST_POCHE_MUL);
+      /* a band that says what it is made of is drawn with that weight */
+      if (s.mat) a = alphaMul(a, pocheTone(s.mat));
       ctx.beginPath(); pathPts(s.pts, true);
       /* a shape may carry voids — a slab with a stairwell in it. Even-odd so
          the inner rings subtract rather than paint over. */

@@ -2902,7 +2902,29 @@ function wallShapes(w) {
   /* the joined outline comes first so a renderer can lay the poche down before
      anything is drawn over it */
   const outline = [E0.plus, E1.minus, E1.plus, E0.minus];
-  const out = [{ pts: outline, closed: true, role: 'poche', hatch: wallHatchOn(w) }];
+  /* A compound wall is poched by layer. The bands are built from the SAME
+     interpolation as the layer lines drawn further down, between the mitred
+     end points rather than across a nominal thickness, so a band cannot
+     disagree with the line that bounds it and both stay mitred at a corner.
+     A wall with no layers keeps the single fill it always had. */
+  const out = [];
+  const pocheStack = wallLayerStack(w);
+  if (pocheStack) {
+    const lerpP = (A, B, f) => [A[0] + (B[0] - A[0]) * f, A[1] + (B[1] - A[1]) * f];
+    const tot = pocheStack.reduce((n, l) => n + l.t, 0) || 1;
+    let acc = 0;
+    for (const lay of pocheStack) {
+      const f0 = acc / tot, f1 = (acc + lay.t) / tot;
+      acc += lay.t;
+      out.push({
+        pts: [lerpP(E0.plus, E0.minus, f0), lerpP(E1.minus, E1.plus, f0),
+              lerpP(E1.minus, E1.plus, f1), lerpP(E0.plus, E0.minus, f1)],
+        closed: true, role: 'poche', hatch: wallHatchOn(w), mat: lay.fill || null,
+      });
+    }
+  } else {
+    out.push({ pts: outline, closed: true, role: 'poche', hatch: wallHatchOn(w) });
+  }
 
   /* the wall body across each window, ghosted */
   const Lc0 = { a: E0.plus, b: E1.minus }, Rc0 = { a: E0.minus, b: E1.plus };
@@ -4603,6 +4625,28 @@ function strokeAs(col, lw, dash) {
   ctx.stroke();
 }
 
+/* How heavily each material is poched, as a multiplier on the poche alpha.
+   Not colour: colour belongs to the layer the wall is on, and a section that
+   recolours a wall by what it is made of stops reading as one drawing. Weight
+   is what a drawn section varies — brick dense, insulation nearly open — and
+   it survives being printed in black. A material nobody has defined is left
+   exactly as it was rather than being given an invented weight. */
+const POCHE_TONE = {
+  brick: 1.35,
+  block: 1.1,
+  concrete: 1.5,
+  structural: 1.5,
+  insulation: 0.45,
+  cavity: 0.3,
+  finish: 0.8,
+  timber: 0.95,
+};
+function pocheTone(mat) {
+  if (!mat) return 1;
+  const v = POCHE_TONE[String(mat).toLowerCase()];
+  return v == null ? 1 : v;
+}
+
 /* ---- wall poche ----
    The wall module owns the flag; the renderer only has to be defensive about
    the helper not existing yet. */
@@ -4669,6 +4713,8 @@ function drawShapes(e, col, mode) {
       if (spanPx(s.pts) < 1) continue;            /* thinner than a pixel: the face lines say it all */
       let a = S ? S.pocheA : '2e';
       if (role === 'pocheGhost') a = alphaMul(a, GHOST_POCHE_MUL);
+      /* a band that says what it is made of is drawn with that weight */
+      if (s.mat) a = alphaMul(a, pocheTone(s.mat));
       ctx.beginPath(); pathPts(s.pts, true);
       /* a shape may carry voids — a slab with a stairwell in it. Even-odd so
          the inner rings subtract rather than paint over. */

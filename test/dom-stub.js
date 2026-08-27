@@ -2,12 +2,21 @@
    Deliberately dependency-free so `node test/run.js` always works. */
 'use strict';
 function makeCtx() {
-  const trace = { calls: [], pts: [], counts: {} };
+  /* `sets` records assignments to the drawing state — fillStyle, strokeStyle,
+     lineWidth — because WHAT was painted is as much a rendering fact as
+     whether anything was. Without it a test can see four fills and not that
+     they were four different tones, which is the whole claim in a drawing
+     that poches a wall by what each layer is made of. */
+  const trace = { calls: [], pts: [], counts: {}, sets: [] };
   const rec = (name, args) => {
     trace.counts[name] = (trace.counts[name] || 0) + 1;
     if (name === 'moveTo' || name === 'lineTo') trace.pts.push([args[0], args[1]]);
     if (name === 'arc' || name === 'ellipse') trace.pts.push([args[0], args[1]]);
     if (name === 'fillText' || name === 'strokeText') trace.calls.push([name, args[0]]);
+    /* a fill takes the fill style standing at that moment: pair them up here,
+       or the order they were set in has to be reconstructed by the reader */
+    if (name === 'fill' || name === 'stroke')
+      trace.calls.push([name, name === 'fill' ? store.fillStyle : store.strokeStyle]);
   };
   const store = {
     __trace: trace,
@@ -22,7 +31,10 @@ function makeCtx() {
       if (k in t) return t[k];
       return (...args) => rec(k, args);
     },
-    set: (t, k, v) => { t[k] = v; return true; },
+    set: (t, k, v) => {
+      if (k === 'fillStyle' || k === 'strokeStyle' || k === 'lineWidth') trace.sets.push([k, v]);
+      t[k] = v; return true;
+    },
     has: () => true,
   });
 }
