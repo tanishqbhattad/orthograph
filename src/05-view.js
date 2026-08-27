@@ -703,6 +703,9 @@ function drawTextAt(str, p, h, rotAng, anchor, col) {
 }
 /* how heavy each architectural sub-line draws, as a multiple of the pen */
 const ROLE_W = { face: 1.55, jamb: 1.0, leaf: 1.0, swing: 0.75, glaz: 0.85, tread: 0.85,
+  /* a layer boundary is a thin line inside the wall: it must read as
+     construction, never compete with the face that encloses it */
+  wlayer: 0.6,
   cut: 0.8, arrow: 0.9, arrowhead: 0.9, room: 0.9, grid: 0.85, bubble: 1.0, cap: 1.55 };
 
 /* ============================================================

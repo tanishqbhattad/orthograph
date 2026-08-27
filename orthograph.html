@@ -758,10 +758,24 @@ function stdWallTypes() {
   return [
     { id: 'gen100', name: 'Generic 100', t: 100, fn: 'interior' },
     { id: 'part90', name: 'Stud partition 90', t: 90, fn: 'interior' },
-    { id: 'part140', name: 'Stud partition 140', t: 140, fn: 'interior' },
+    { id: 'part140', name: 'Stud partition 140', t: 140, fn: 'interior', layers: [
+      { name: 'Plasterboard', t: 12.5, fill: 'finish' },
+      { name: 'Studs + insulation', t: 115, fill: 'insulation' },
+      { name: 'Plasterboard', t: 12.5, fill: 'finish' },
+    ] },
     { id: 'brk115', name: 'Brick 115 (half)', t: 115, fn: 'interior' },
     { id: 'brk230', name: 'Brick 230 (full)', t: 230, fn: 'exterior' },
-    { id: 'cav300', name: 'Cavity 300', t: 300, fn: 'exterior' },
+    /* A cavity wall is not 300mm of one thing. Its layers are what a section
+       is drawn from, what a U-value is calculated from and what a builder is
+       told to build, so the type carries them and the plan draws them. */
+    { id: 'cav300', name: 'Cavity 300', t: 300, fn: 'exterior', layers: [
+      /* these must sum to the type's own thickness, or the stack is scaled to
+         fit and the shipped library quietly stops matching its own numbers */
+      { name: 'Brick outer leaf', t: 102.5, fill: 'brick' },
+      { name: 'Cavity + insulation', t: 85, fill: 'insulation' },
+      { name: 'Block inner leaf', t: 100, fill: 'block' },
+      { name: 'Plaster', t: 12.5, fill: 'finish' },
+    ] },
     { id: 'cmu190', name: 'Block 190', t: 190, fn: 'exterior' },
     { id: 'con150', name: 'Concrete 150', t: 150, fn: 'structural' },
     { id: 'con200', name: 'Concrete 200', t: 200, fn: 'structural' },
@@ -2576,6 +2590,20 @@ function wallHatchOn(w) {
   return DOC.wallHatch !== false;
 }
 
+/* ---------------- compound structure ----------------
+   A wall type may declare the layers it is built from. The stack is scaled to
+   the wall's actual thickness, so an override on one wall does not put the
+   layers out of proportion — a 300mm type drawn at 330 keeps the same ratios
+   rather than growing a 30mm gap nobody specified. */
+function wallLayerStack(w) {
+  const ty = (typeof wallType === 'function' && wallType(w.wt)) || null;
+  const ls = ty && ty.layers;
+  if (!Array.isArray(ls) || ls.length < 2) return null;
+  const total = ls.reduce((n, l) => n + (l.t || 0), 0);
+  if (!(total > 0)) return null;
+  const k = wallT(w) / total;
+  return ls.map(l => ({ name: l.name, fill: l.fill, t: (l.t || 0) * k }));
+}
 function wallShapes(w) {
   const L = wallLen(w);
   if (L < EPS) return [];
@@ -2638,6 +2666,34 @@ function wallShapes(w) {
       }
     }
   }
+  /* The boundaries between layers. Both faces are already mitred at every
+     junction, so a line interpolated between them is mitred too — no separate
+     junction solving, and a layer line cannot disagree with the face it sits
+     between. Openings cut them exactly as they cut the faces. */
+  const stack = wallLayerStack(w);
+  if (stack) {
+    const off = wallOffsets(w);
+    const thick = off[0] - off[1];
+    const lerpP = (A, B, f) => [A[0] + (B[0] - A[0]) * f, A[1] + (B[1] - A[1]) * f];
+    let acc = 0;
+    for (let i = 0; i < stack.length - 1; i++) {
+      acc += stack[i].t;
+      const f = thick > 1e-9 ? acc / thick : 0;
+      const A = lerpP(E0.plus, E0.minus, f), B = lerpP(E1.minus, E1.plus, f);
+      const carrier = { a: A, b: B };
+      const start = dot(sub(A, w.a), u), end = dot(sub(B, w.a), u);
+      const span = end - start;
+      if (span <= 1e-9) continue;
+      const rebase = c => [c[0] - start, c[1] - start];
+      for (const [s0, e0] of cutRuns(span, [...doorCuts, ...winCuts].map(rebase))) {
+        out.push({
+          pts: [faceAtD(carrier, w, u, n, start + s0), faceAtD(carrier, w, u, n, start + e0)],
+          role: 'wlayer',
+        });
+      }
+    }
+  }
+
   /* jambs at every opening edge, and caps at unjoined ends */
   const Lc = { a: E0.plus, b: E1.minus }, Rc = { a: E0.minus, b: E1.plus };
   for (const o of ops) {
@@ -4186,6 +4242,9 @@ function drawTextAt(str, p, h, rotAng, anchor, col) {
 }
 /* how heavy each architectural sub-line draws, as a multiple of the pen */
 const ROLE_W = { face: 1.55, jamb: 1.0, leaf: 1.0, swing: 0.75, glaz: 0.85, tread: 0.85,
+  /* a layer boundary is a thin line inside the wall: it must read as
+     construction, never compete with the face that encloses it */
+  wlayer: 0.6,
   cut: 0.8, arrow: 0.9, arrowhead: 0.9, room: 0.9, grid: 0.85, bubble: 1.0, cap: 1.55 };
 
 /* ============================================================

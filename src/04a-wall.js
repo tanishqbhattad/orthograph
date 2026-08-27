@@ -318,6 +318,20 @@ function wallHatchOn(w) {
   return DOC.wallHatch !== false;
 }
 
+/* ---------------- compound structure ----------------
+   A wall type may declare the layers it is built from. The stack is scaled to
+   the wall's actual thickness, so an override on one wall does not put the
+   layers out of proportion — a 300mm type drawn at 330 keeps the same ratios
+   rather than growing a 30mm gap nobody specified. */
+function wallLayerStack(w) {
+  const ty = (typeof wallType === 'function' && wallType(w.wt)) || null;
+  const ls = ty && ty.layers;
+  if (!Array.isArray(ls) || ls.length < 2) return null;
+  const total = ls.reduce((n, l) => n + (l.t || 0), 0);
+  if (!(total > 0)) return null;
+  const k = wallT(w) / total;
+  return ls.map(l => ({ name: l.name, fill: l.fill, t: (l.t || 0) * k }));
+}
 function wallShapes(w) {
   const L = wallLen(w);
   if (L < EPS) return [];
@@ -380,6 +394,34 @@ function wallShapes(w) {
       }
     }
   }
+  /* The boundaries between layers. Both faces are already mitred at every
+     junction, so a line interpolated between them is mitred too — no separate
+     junction solving, and a layer line cannot disagree with the face it sits
+     between. Openings cut them exactly as they cut the faces. */
+  const stack = wallLayerStack(w);
+  if (stack) {
+    const off = wallOffsets(w);
+    const thick = off[0] - off[1];
+    const lerpP = (A, B, f) => [A[0] + (B[0] - A[0]) * f, A[1] + (B[1] - A[1]) * f];
+    let acc = 0;
+    for (let i = 0; i < stack.length - 1; i++) {
+      acc += stack[i].t;
+      const f = thick > 1e-9 ? acc / thick : 0;
+      const A = lerpP(E0.plus, E0.minus, f), B = lerpP(E1.minus, E1.plus, f);
+      const carrier = { a: A, b: B };
+      const start = dot(sub(A, w.a), u), end = dot(sub(B, w.a), u);
+      const span = end - start;
+      if (span <= 1e-9) continue;
+      const rebase = c => [c[0] - start, c[1] - start];
+      for (const [s0, e0] of cutRuns(span, [...doorCuts, ...winCuts].map(rebase))) {
+        out.push({
+          pts: [faceAtD(carrier, w, u, n, start + s0), faceAtD(carrier, w, u, n, start + e0)],
+          role: 'wlayer',
+        });
+      }
+    }
+  }
+
   /* jambs at every opening edge, and caps at unjoined ends */
   const Lc = { a: E0.plus, b: E1.minus }, Rc = { a: E0.minus, b: E1.plus };
   for (const o of ops) {

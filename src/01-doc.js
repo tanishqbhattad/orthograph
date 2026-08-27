@@ -52,10 +52,24 @@ function stdWallTypes() {
   return [
     { id: 'gen100', name: 'Generic 100', t: 100, fn: 'interior' },
     { id: 'part90', name: 'Stud partition 90', t: 90, fn: 'interior' },
-    { id: 'part140', name: 'Stud partition 140', t: 140, fn: 'interior' },
+    { id: 'part140', name: 'Stud partition 140', t: 140, fn: 'interior', layers: [
+      { name: 'Plasterboard', t: 12.5, fill: 'finish' },
+      { name: 'Studs + insulation', t: 115, fill: 'insulation' },
+      { name: 'Plasterboard', t: 12.5, fill: 'finish' },
+    ] },
     { id: 'brk115', name: 'Brick 115 (half)', t: 115, fn: 'interior' },
     { id: 'brk230', name: 'Brick 230 (full)', t: 230, fn: 'exterior' },
-    { id: 'cav300', name: 'Cavity 300', t: 300, fn: 'exterior' },
+    /* A cavity wall is not 300mm of one thing. Its layers are what a section
+       is drawn from, what a U-value is calculated from and what a builder is
+       told to build, so the type carries them and the plan draws them. */
+    { id: 'cav300', name: 'Cavity 300', t: 300, fn: 'exterior', layers: [
+      /* these must sum to the type's own thickness, or the stack is scaled to
+         fit and the shipped library quietly stops matching its own numbers */
+      { name: 'Brick outer leaf', t: 102.5, fill: 'brick' },
+      { name: 'Cavity + insulation', t: 85, fill: 'insulation' },
+      { name: 'Block inner leaf', t: 100, fill: 'block' },
+      { name: 'Plaster', t: 12.5, fill: 'finish' },
+    ] },
     { id: 'cmu190', name: 'Block 190', t: 190, fn: 'exterior' },
     { id: 'con150', name: 'Concrete 150', t: 150, fn: 'structural' },
     { id: 'con200', name: 'Concrete 200', t: 200, fn: 'structural' },
