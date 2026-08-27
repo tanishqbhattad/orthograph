@@ -448,3 +448,142 @@ defm('LEVELDOWN', () => {
   if (i <= 0) return echo('Already on the bottom level');
   gotoLevel(ls[i - 1].id);
 }, { group: 'view' });
+
+/* ============================================================
+   Tables, and the room schedule
+   ------------------------------------------------------------
+   A schedule is not a picture of a table — it is the drawing
+   telling you what it contains. Rooms already know their names
+   and areas; a schedule reads them, so it cannot disagree with
+   the plan it came from. Rebuild it after moving a wall and the
+   number changes, because it was never a copy.
+   ============================================================ */
+GEOM.table = {
+  shapes(tb) {
+    const rows = tb.rows || [];
+    if (!rows.length) return [];
+    const h = tb.h || DOC.textH || 2.5;
+    const rh = h * 1.9;                       /* row height, with air */
+    const cols = tb.colW || [];
+    const total = cols.reduce((n, w) => n + w, 0);
+    const out = [];
+    const x0 = tb.p[0], yTop = tb.p[1];
+    /* the grid: one horizontal per row boundary, one vertical per column */
+    for (let i = 0; i <= rows.length; i++) {
+      const y = yTop - i * rh;
+      out.push({ pts: [[x0, y], [x0 + total, y]], role: i === 0 || i === 1 ? 'face' : 'jamb' });
+    }
+    let cx = x0;
+    for (let c = 0; c <= cols.length; c++) {
+      out.push({ pts: [[cx, yTop], [cx, yTop - rows.length * rh]], role: 'jamb' });
+      cx += cols[c] || 0;
+    }
+    /* the text, one shape per cell, inset from its own column */
+    rows.forEach((row, i) => {
+      let x = x0;
+      row.forEach((cell, c) => {
+        const w = cols[c] || 0;
+        const right = tb.align && tb.align[c] === 'r';
+        out.push({
+          text: String(cell == null ? '' : cell),
+          p: [right ? x + w - h * 0.5 : x + h * 0.5, yTop - (i + 1) * rh + rh * 0.55],
+          h, rot: 0, anchor: right ? 'r' : 'l',
+        });
+        x += w;
+      });
+    });
+    return out;
+  },
+  bbox(tb) {
+    const rows = tb.rows || [];
+    const rh = (tb.h || DOC.textH || 2.5) * 1.9;
+    const total = (tb.colW || []).reduce((n, w) => n + w, 0);
+    return [tb.p[0], tb.p[1] - rows.length * rh, tb.p[0] + total, tb.p[1]];
+  },
+  dist(p, tb) {
+    const b = GEOM.table.bbox(tb);
+    if (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) return 0;
+    return Math.hypot(Math.max(b[0] - p[0], 0, p[0] - b[2]),
+                      Math.max(b[1] - p[1], 0, p[1] - b[3]));
+  },
+  grips: tb => [{ p: tb.p, k: 'p' }],
+  grip(tb, k, p) { tb.p = p; },
+  xf(tb, fn) {
+    const p2 = fn(tb.p), q = fn(add(tb.p, [1, 0]));
+    const k = dist(p2, q);
+    tb.p = p2;
+    tb.h = (tb.h || DOC.textH || 2.5) * k;
+    tb.colW = (tb.colW || []).map(w => w * k);
+  },
+};
+
+/** every room on a level, in the order they read on the drawing: up the page,
+    then across, which is how anyone numbers a plan */
+function roomsOnLevel(lvl) {
+  const l = lvl == null ? (DOC.curLevel || 0) : lvl;
+  return [...DOC.ents.values()]
+    .filter(e => e.t === 'room' && (e.lvl || 0) === l)
+    .sort((a, b) => {
+      const ba = bbox(a), bb = bbox(b);
+      const dy = (bb[3] - ba[3]);
+      return Math.abs(dy) > 1e-6 ? dy : ba[0] - bb[0];
+    });
+}
+/** the rows of a room schedule, read from the rooms themselves */
+function roomScheduleRows(lvl) {
+  const rows = [['No.', 'Room', 'Area']];
+  let n = 0;
+  for (const r of roomsOnLevel(lvl)) {
+    n++;
+    /* the area comes from the room's own boundary, the same one it draws and
+       labels with — so the schedule cannot disagree with the plan */
+    const a = Math.abs(polyArea(roomBoundary(r) || r.pts || []));
+    rows.push([r.num || String(n).padStart(2, '0'),
+               r.name || 'ROOM',
+               roomAreaText(r, a)]);
+  }
+  return rows;
+}
+/** column widths that fit the widest cell in each column */
+function fitColumns(rows, h) {
+  const n = rows.reduce((m, r) => Math.max(m, r.length), 0);
+  const w = [];
+  for (let c = 0; c < n; c++) {
+    let widest = 0;
+    for (const r of rows) widest = Math.max(widest, String(r[c] == null ? '' : r[c]).length);
+    w.push((widest + 2) * h * MT_CHAR);
+  }
+  return w;
+}
+defc('schedule', {
+  key: 'schedule', group: 'annotate',
+  hint: 'Pick the top-left corner of the schedule',
+  init(c) {
+    if (!roomsOnLevel().length) { cliPrint('No rooms on this level to schedule.', 'err'); endCmd(true); }
+  },
+  point(c, p) {
+    const rows = roomScheduleRows();
+    const h = DOC.textH || 2.5;
+    begin();
+    addEnt({ t: 'table', p: p.slice(), rows, colW: fitColumns(rows, h), h,
+             align: ['l', 'l', 'r'], kind: 'rooms', layer: annoLayer('TEXT') });
+    commit('Room schedule');
+    cliPrint((rows.length - 1) + ' rooms scheduled');
+    endCmd();
+  },
+});
+/** Re-read a schedule from the drawing. It is not a copy, so this is the whole
+    of "keeping it up to date" — move a wall, run it again, the number changes. */
+defm('SCHEDULEUPDATE', () => {
+  const tabs = [...DOC.ents.values()].filter(e => e.t === 'table' && e.kind === 'rooms');
+  if (!tabs.length) return echo('No room schedule in this drawing');
+  begin();
+  for (const tb of tabs) {
+    mut(tb);
+    tb.rows = roomScheduleRows(tb.lvl);
+    tb.colW = fitColumns(tb.rows, tb.h || DOC.textH);
+  }
+  commit('Update schedule');
+  cliPrint('Updated ' + tabs.length + ' schedule' + (tabs.length === 1 ? '' : 's'));
+  draw();
+}, { group: 'annotate' });
