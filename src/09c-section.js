@@ -71,6 +71,16 @@ function crossingHoles(cr) {
   return out;
 }
 
+/** What a section may cut. Deliberately NOT visible(): that answers for the
+    current STOREY, which is right for a plan and wrong here — a section is a
+    cut through the whole building, and using visible() meant a two-storey
+    section showed one storey and a floating roof. Layer visibility still
+    applies, because turning a layer off means you do not want to see it
+    anywhere. */
+function inSection(e) {
+  const l = layer(e.layer);
+  return l.on && !l.frozen;
+}
 /** Cut the model and return the section as plain geometry, in the section's
     own frame: x along the line, y in elevation. */
 function sectionGeometry(sec) {
@@ -79,7 +89,7 @@ function sectionGeometry(sec) {
   const parts = [];
   const cuts = [];
   for (const e of DOC.ents.values()) {
-    if (e.t !== 'wall' || !visible(e)) continue;
+    if (e.t !== 'wall' || !inSection(e)) continue;
     const cr = wallCrossing(sec, F, e);
     if (cr) cuts.push(cr);
   }
@@ -111,6 +121,32 @@ function sectionGeometry(sec) {
       if (e2 < top - 1e-6) parts.push({ kind: 'head', pts: [[x0, e2], [x1, e2]] });
     }
   }
+  /* Slabs. A section that cuts the walls and ignores what spans between them
+     is a row of posts; the floors are what make it a building. A slab's TOP is
+     at its storey, so it hangs below the level line rather than sitting on it.
+     A roof is the same with a rise added along the fall. */
+  for (const e of DOC.ents.values()) {
+    if ((e.t !== 'floor' && e.t !== 'roof') || !inSection(e)) continue;
+    if (typeof slabCrossing !== 'function') break;
+    const spans = slabCrossing(sec, F, e);
+    if (!spans) continue;
+    const th = slabThick(e);
+    for (const [s0, e0] of spans) {
+      if (e.t === 'roof' && e.pitch) {
+        /* a pitched roof is a sloping band: the rise is measured at each end
+           of the span, in the section's own frame */
+        const P0 = [F.a[0] + F.u[0] * s0, F.a[1] + F.u[1] * s0];
+        const P1 = [F.a[0] + F.u[0] * e0, F.a[1] + F.u[1] * e0];
+        const base = slabTop(e);
+        const y0 = base + roofRise(e, P0), y1 = base + roofRise(e, P1);
+        parts.push({ kind: 'slab', pts: [[s0, y0 - th], [e0, y1 - th], [e0, y1], [s0, y0]], e });
+      } else {
+        const top = slabTop(e);
+        parts.push({ kind: 'slab', pts: [[s0, top - th], [e0, top - th], [e0, top], [s0, top]], e });
+      }
+    }
+  }
+
   /* the storey datums, drawn right across so the section reads as a building
      rather than a row of unrelated posts */
   const datums = [];
@@ -142,7 +178,7 @@ function placeSection(sec, at) {
     n++;
   }
   for (const p of G.parts) {
-    if (p.kind === 'wall') {
+    if (p.kind === 'wall' || p.kind === 'slab') {
       addEnt({ t: 'hatch', loops: [p.pts.map(q => P(q[0], q[1]))], solid: true,
                pattern: 'solid', layer: lay });
       addEnt({ t: 'pline', closed: true, pts: p.pts.map(q => P(q[0], q[1])), layer: lay });

@@ -164,19 +164,37 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.look, -1, 'and the frame follows');
   });
 
-  t('a wall on an upper storey is cut at its own elevation', () => {
+  /* A section is a cut through the WHOLE building, not through the storey you
+     happen to be standing on. This used visible(), which answers for the
+     current level — so a two-storey section showed one storey and a floating
+     roof, and the level filter added in C3 silently broke it. */
+  t('a section cuts every storey, whichever one is current', () => {
     const r = R(`${SETUP}
       plan();
       gotoLevel(1);
       begin();
       addEnt({t:'wall', a:[2000,0], b:[2000,6000], wt:'part140', layer:'A-WALL'});
       commit('up');
-      VS.underlay = 0;
-      const bands = bandsOf(sectionGeometry(cutLine()));
-      VS.underlay = 0;
-      return { bands: bands.map(b => b.lo + '-' + b.hi) };`);
-    /* only the first-floor wall is visible from level 1, and it sits at 3000 */
-    eq(r.bands.join(','), '3000-6000',
-      'an upper storey cuts above the one below, got ' + r.bands.join(','));
+      const onFirst = bandsOf(sectionGeometry(cutLine())).map(b => b.lo + '-' + b.hi);
+      gotoLevel(0);
+      const onGround = bandsOf(sectionGeometry(cutLine())).map(b => b.lo + '-' + b.hi);
+      return { onFirst, onGround };`);
+    ok(r.onFirst.includes('3000-6000'), 'the upper storey is cut at its own elevation');
+    ok(r.onFirst.some(b => b.startsWith('0-') || b === '2100-3000'),
+      'and the ground floor is cut too, got ' + r.onFirst.join(','));
+    eq(r.onGround.join(','), r.onFirst.join(','),
+      'and it does not matter which storey is current');
+  });
+
+  t('a layer turned off is left out of the section', () => {
+    const r = R(`${SETUP}
+      plan();
+      const before = sectionGeometry(cutLine()).cuts;
+      DOC.layers.find(l => l.name === 'A-WALL').on = false;
+      const after = sectionGeometry(cutLine()).cuts;
+      DOC.layers.find(l => l.name === 'A-WALL').on = true;
+      return { before, after };`);
+    eq(r.before, 3);
+    eq(r.after, 0, 'turning a layer off means you do not want it anywhere');
   });
 };
