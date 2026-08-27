@@ -131,6 +131,13 @@ the fill agrees with the lines drawn across it.
 `%<count:door>%` for something in it. A field that cannot be resolved comes out as
 `####` rather than as a gap nobody can account for.
 
+**Blocks.** A block can be edited after it exists. `BATTMAN` manages its attributes —
+renaming a tag carries the value on every insert across with it, rather than orphaning
+it. `REFEDIT` opens the contents into the drawing at the size and angle the insert
+sits, so what you edit is what you were looking at, and `REFCLOSE` maps it back through
+the exact inverse; every other insert updates with it. `BVSTATE` gives a block
+visibility states, so one door block can be four swings rather than four blocks.
+
 ## Storeys, sheets and output
 
 **Levels.** Storeys are real: objects belong to one, `LEVEL`/`LEVELUP`/`LEVELDOWN` move
@@ -252,7 +259,8 @@ noticed months later.
   geometry rather than as an editable dimension.
 - Fields cover the drawing name, sheet, scale, date, and an object'''s area,
   length or count; there is no field browser, so they are typed by hand.
-- Blocks have no attribute manager, in-place reference editing or dynamic parameters.
+- Dynamic blocks cover visibility states only: there are no stretch, array or
+  lookup parameters.
 - Keyboard picking is Ctrl+Enter rather than a rebindable key, and the
   high-contrast palette is one alternative rather than a set you can edit.
 

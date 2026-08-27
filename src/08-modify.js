@@ -823,6 +823,19 @@ defc('array', { needSel: true, group: 'modify', init(c) { openArray(); endCmd();
 
 /* ---------------- blocks ---------------- */
 DOC.blocks = DOC.blocks || {};
+/** Which entities of a block are drawn for a given state.
+
+    An entity with no `vis` belongs to the block itself and is always there;
+    one with a list belongs only to those states. An insert with no state
+    chosen, or one naming a state nobody defined, gets the whole block: an
+    unrecognised state is not a reason to draw nothing, which would look
+    exactly like the block having been deleted. */
+function blockEntsFor(b, state) {
+  const ents = b.ents || [];
+  const states = b.states || [];
+  if (!state || !states.length || states.indexOf(state) < 0) return ents;
+  return ents.filter(e => !Array.isArray(e.vis) || e.vis.indexOf(state) >= 0);
+}
 function insertEnts(ins) {
   const b = (DOC.blocks || {})[ins.name];
   if (!b) return [];
@@ -832,7 +845,7 @@ function insertEnts(ins) {
     const q = [(p[0] - b.base[0]) * sx, (p[1] - b.base[1]) * sy];
     return [ins.p[0] + q[0] * cs - q[1] * sn, ins.p[1] + q[0] * sn + q[1] * cs];
   };
-  return b.ents.map(e => { const n = clone(e); delete n.id; n.layer = n.layer === '0' ? ins.layer : n.layer; return xf(n, f); });
+  return blockEntsFor(b, ins.state).map(e => { const n = clone(e); delete n.id; n.layer = n.layer === '0' ? ins.layer : n.layer; return xf(n, f); });
 }
 /* ---------------- colour inside a block ----------------
    An insert flattened its contents into one shape list and drew the lot in the

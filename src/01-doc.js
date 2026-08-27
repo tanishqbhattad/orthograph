@@ -132,6 +132,10 @@ function resetDoc() {
   DOC.layers[3].lt = 'dashed';
   for (const [n, c] of ARCH_LAYERS) DOC.layers.push(newLayer(n, c));
   DOC.ents.clear(); DOC.cur = '0'; UID = 1;
+  /* A reference edit belongs to the document it was opened in. Left standing
+     across a new drawing it would save the old block's contents into the new
+     document the next time it was closed. */
+  if (typeof refeditForget === 'function') refeditForget();
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];

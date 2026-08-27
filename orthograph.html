@@ -888,6 +888,10 @@ function resetDoc() {
   DOC.layers[3].lt = 'dashed';
   for (const [n, c] of ARCH_LAYERS) DOC.layers.push(newLayer(n, c));
   DOC.ents.clear(); DOC.cur = '0'; UID = 1;
+  /* A reference edit belongs to the document it was opened in. Left standing
+     across a new drawing it would save the old block's contents into the new
+     document the next time it was closed. */
+  if (typeof refeditForget === 'function') refeditForget();
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];
@@ -11433,6 +11437,19 @@ defc('array', { needSel: true, group: 'modify', init(c) { openArray(); endCmd();
 
 /* ---------------- blocks ---------------- */
 DOC.blocks = DOC.blocks || {};
+/** Which entities of a block are drawn for a given state.
+
+    An entity with no `vis` belongs to the block itself and is always there;
+    one with a list belongs only to those states. An insert with no state
+    chosen, or one naming a state nobody defined, gets the whole block: an
+    unrecognised state is not a reason to draw nothing, which would look
+    exactly like the block having been deleted. */
+function blockEntsFor(b, state) {
+  const ents = b.ents || [];
+  const states = b.states || [];
+  if (!state || !states.length || states.indexOf(state) < 0) return ents;
+  return ents.filter(e => !Array.isArray(e.vis) || e.vis.indexOf(state) >= 0);
+}
 function insertEnts(ins) {
   const b = (DOC.blocks || {})[ins.name];
   if (!b) return [];
@@ -11442,7 +11459,7 @@ function insertEnts(ins) {
     const q = [(p[0] - b.base[0]) * sx, (p[1] - b.base[1]) * sy];
     return [ins.p[0] + q[0] * cs - q[1] * sn, ins.p[1] + q[0] * sn + q[1] * cs];
   };
-  return b.ents.map(e => { const n = clone(e); delete n.id; n.layer = n.layer === '0' ? ins.layer : n.layer; return xf(n, f); });
+  return blockEntsFor(b, ins.state).map(e => { const n = clone(e); delete n.id; n.layer = n.layer === '0' ? ins.layer : n.layer; return xf(n, f); });
 }
 /* ---------------- colour inside a block ----------------
    An insert flattened its contents into one shape list and drew the lot in the
@@ -12802,6 +12819,305 @@ function attValue(ins, def) {
   if (own != null && own !== '') return own;
   return def.val == null ? '' : def.val;
 }
+/* ------------------------------------------------------------
+   BATTMAN — the attributes of a block, after the block exists.
+
+   The substance is the rename. An insert stores its values against the TAG,
+   so renaming a tag in the definition and stopping there would leave every
+   insert in the drawing carrying a value under a name nothing looks up any
+   more — the drawing would look right until it was redrawn, and then the
+   values would simply be gone.
+   ------------------------------------------------------------ */
+function blockInserts(name) {
+  const out = [];
+  for (const e of DOC.ents.values()) if (e.t === 'insert' && e.name === name) out.push(e);
+  return out;
+}
+function attRename(block, from, to) {
+  const b = (DOC.blocks || {})[block];
+  if (!b) return false;
+  const tag = String(to || '').trim().toUpperCase();
+  if (!tag) return false;
+  const defs = (b.ents || []).filter(e => e.t === 'attdef');
+  const def = defs.find(d => d.tag === from);
+  if (!def) return false;
+  /* two attributes sharing a tag would make attValue ambiguous for ever */
+  if (defs.some(d => d !== def && d.tag === tag)) {
+    if (typeof echo === 'function') echo('There is already an attribute called ' + tag);
+    return false;
+  }
+  if (tag === from) return true;
+  begin();
+  def.tag = tag;
+  for (const ins of blockInserts(block)) {
+    if (!ins.att || !(from in ins.att)) continue;
+    mut(ins);
+    ins.att[tag] = ins.att[from];
+    delete ins.att[from];
+  }
+  commit('Rename attribute');
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
+  return true;
+}
+function attEditDef(block, tag, o) {
+  const b = (DOC.blocks || {})[block];
+  if (!b) return false;
+  const def = (b.ents || []).find(e => e.t === 'attdef' && e.tag === tag);
+  if (!def) return false;
+  begin();
+  if (o.prompt != null) def.prompt = o.prompt;
+  if (o.val != null) def.val = o.val;
+  if (o.h != null && o.h > 0) def.h = o.h;
+  commit('Edit attribute');
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
+  return true;
+}
+function attRemove(block, tag) {
+  const b = (DOC.blocks || {})[block];
+  if (!b) return false;
+  const i = (b.ents || []).findIndex(e => e.t === 'attdef' && e.tag === tag);
+  if (i < 0) return false;
+  begin();
+  b.ents.splice(i, 1);
+  /* the value goes too: a value for an attribute that no longer exists is
+     invisible, unreachable, and still in the file */
+  for (const ins of blockInserts(block)) {
+    if (!ins.att || !(tag in ins.att)) continue;
+    mut(ins);
+    delete ins.att[tag];
+  }
+  commit('Remove attribute');
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
+  return true;
+}
+defc('battman', {
+  key: 'battman', group: 'annotate',
+  hint: 'Manage the attributes of a block',
+  init(c) {
+    const names = Object.keys(DOC.blocks || {}).filter(n => blockAttdefs(n).length);
+    if (!names.length) { toast('No block in this drawing has attributes'); return endCmd(); }
+    const pick = names[0];
+    const rows = (n) => blockAttdefs(n).map(d =>
+      '<div class="row"><label>' + esc(d.tag) + '</label><input class="f" data-tag="' +
+      esc(d.tag) + '" value="' + esc(d.val == null ? '' : d.val) + '"></div>').join('');
+    modal('<h3>Block attributes</h3>' +
+      '<div class="row"><label>Block</label><select class="f" id="bmB">' +
+      names.map(n => '<option>' + esc(n) + '</option>').join('') + '</select></div>' +
+      '<div class="row"><label>Rename</label><input class="f" id="bmFrom" placeholder="tag"></div>' +
+      '<div class="row"><label>to</label><input class="f" id="bmTo" placeholder="new tag"></div>' +
+      '<div class="row"><label>Remove</label><input class="f" id="bmDel" placeholder="tag"></div>' +
+      '<div id="bmDefs">' + rows(pick) + '</div>', () => {
+      const n = ($('#bmB') || {}).value || pick;
+      const from = (($('#bmFrom') || {}).value || '').trim().toUpperCase();
+      const to = (($('#bmTo') || {}).value || '').trim().toUpperCase();
+      if (from && to) attRename(n, from, to);
+      const del = (($('#bmDel') || {}).value || '').trim().toUpperCase();
+      if (del) attRemove(n, del);
+      for (const inp of document.querySelectorAll('#bmDefs input')) {
+        const tg = inp.getAttribute('data-tag');
+        if (tg) attEditDef(n, tg, { val: inp.value });
+      }
+      syncUI(); draw();
+    });
+    endCmd();
+  },
+});
+
+/* ------------------------------------------------------------
+   REFEDIT — editing the drawing inside a block, in place.
+
+   The contents come out into the drawing at the size, angle and place the
+   insert sits, so what you edit is what you were looking at. The insert is
+   taken out of the way while that is true, or the block would be drawn twice
+   on top of itself.
+
+   Saving maps the entities back through the exact inverse of the placement.
+   Opening and closing without touching anything therefore has to leave the
+   definition identical — there is a test for precisely that, because a lossy
+   round trip would degrade a block a little on every edit.
+   ------------------------------------------------------------ */
+let REFEDIT = null;
+function refeditName() { return REFEDIT ? REFEDIT.name : null; }
+/** drop the edit without touching the document: for resetDoc, where the
+    entities it was tracking are about to stop existing anyway */
+function refeditForget() { REFEDIT = null; }
+/** the placement of an insert, and its inverse */
+function refPlacement(ins, b) {
+  const cs = Math.cos(ins.rot || 0), sn = Math.sin(ins.rot || 0);
+  const sx = ins.sx == null ? 1 : ins.sx;
+  const sy = ins.sy == null ? sx : ins.sy;
+  const fwd = p => {
+    const q = [(p[0] - b.base[0]) * sx, (p[1] - b.base[1]) * sy];
+    return [ins.p[0] + q[0] * cs - q[1] * sn, ins.p[1] + q[0] * sn + q[1] * cs];
+  };
+  const inv = p => {
+    const dx = p[0] - ins.p[0], dy = p[1] - ins.p[1];
+    /* undo the rotation, then the scale, then put the base point back */
+    const rx = dx * cs + dy * sn, ry = -dx * sn + dy * cs;
+    return [rx / (sx || 1) + b.base[0], ry / (sy || 1) + b.base[1]];
+  };
+  return { fwd, inv };
+}
+function refeditOpen(ins) {
+  if (REFEDIT) { if (typeof echo === 'function') echo('Already editing ' + REFEDIT.name); return 0; }
+  if (!ins || ins.t !== 'insert') return 0;
+  const b = (DOC.blocks || {})[ins.name];
+  if (!b) return 0;
+  const { fwd } = refPlacement(ins, b);
+  const keep = clone(ins);
+  begin();
+  const ids = [];
+  for (const e of (b.ents || [])) {
+    const n = clone(e);
+    delete n.id;
+    const made = addEnt(n);
+    xf(made, fwd);
+    made.__ref = ins.name;                 /* what is being edited, and what is not */
+    ids.push(made.id);
+  }
+  eraseEnt(ins.id);
+  commit('Edit block ' + ins.name);
+  REFEDIT = { name: ins.name, ids, ins: keep, base: b.base.slice() };
+  if (typeof cliPrint === 'function')
+    cliPrint('Editing ' + ins.name + ' — REFCLOSE to save, or Escape to abandon it.');
+  return ids.length;
+}
+/** Strip what addEnt stamps on a live entity but a block definition has no
+    use for. Without this a definition gains color/lw/lt nulls and a storey on
+    every edit — harmless one at a time, and a definition that grows keys for
+    ever. A block's contents belong to the insert's storey, not their own. */
+function refClean(n) {
+  for (const k of ['color', 'lw', 'lt']) if (n[k] == null) delete n[k];
+  delete n.lvl;
+  return n;
+}
+/** collect what is on screen back into the definition */
+function refeditSave() {
+  if (!REFEDIT) return false;
+  const R = REFEDIT;
+  const b = (DOC.blocks || {})[R.name];
+  if (!b) { REFEDIT = null; return false; }
+  const { inv } = refPlacement(R.ins, { base: R.base });
+  const ents = [];
+  begin();
+  /* whatever carries the mark now, so objects DRAWN during the edit are part
+     of the block as well — which is the point of editing it in place */
+  for (const e of [...DOC.ents.values()]) {
+    if (e.__ref !== R.name) continue;
+    const n = clone(e);
+    delete n.id; delete n.__ref;
+    xf(n, inv);
+    delete n.id;
+    ents.push(refClean(n));
+  }
+  b.ents = ents;
+  for (const id of [...DOC.ents.values()].filter(e => e.__ref === R.name).map(e => e.id))
+    eraseEnt(id);
+  const back = addEnt(clone(R.ins));
+  delete back.__ref;
+  commit('Save block ' + R.name);
+  REFEDIT = null;
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
+  if (typeof syncUI === 'function') syncUI();
+  return back;
+}
+function refeditCancel() {
+  if (!REFEDIT) return false;
+  const R = REFEDIT;
+  begin();
+  for (const id of [...DOC.ents.values()].filter(e => e.__ref === R.name).map(e => e.id))
+    eraseEnt(id);
+  addEnt(clone(R.ins));
+  commit('Abandon block edit');
+  REFEDIT = null;
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
+  if (typeof syncUI === 'function') syncUI();
+  return true;
+}
+/* ------------------------------------------------------------
+   Visibility states — one block being several things.
+
+   A door in four swings used to be four blocks with four names, and nothing
+   tying them together. A state is a name; an object inside the block either
+   belongs to the block itself, and is always drawn, or belongs to a list of
+   states and is drawn only in those.
+
+   States are assigned during a reference edit, because that is the one moment
+   the contents of a block are objects you can select.
+   ------------------------------------------------------------ */
+function blockStates(name) {
+  const b = (DOC.blocks || {})[name];
+  return (b && Array.isArray(b.states)) ? b.states : [];
+}
+/** Put the current selection into `state`, creating the state if it is new.
+    Only reachable while a reference edit is open. */
+function blockStateAssign(state) {
+  const nm = String(state || '').trim();
+  if (!nm) return false;
+  if (!REFEDIT) {
+    if (typeof echo === 'function') echo('Open the block with REFEDIT first');
+    return false;
+  }
+  const b = (DOC.blocks || {})[REFEDIT.name];
+  if (!b) return false;
+  const picked = selEnts().filter(e => e.__ref === REFEDIT.name);
+  if (!picked.length) {
+    if (typeof echo === 'function') echo('Select what belongs to that state');
+    return false;
+  }
+  begin();
+  if (!Array.isArray(b.states)) b.states = [];
+  if (b.states.indexOf(nm) < 0) b.states.push(nm);
+  for (const e of picked) {
+    mut(e);
+    const v = Array.isArray(e.vis) ? e.vis.slice() : [];
+    if (v.indexOf(nm) < 0) v.push(nm);
+    e.vis = v;
+  }
+  commit('Visibility state');
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
+  return true;
+}
+defc('bvstate', {
+  key: 'bvstate', group: 'modify',
+  hint: 'Name the state the selected objects belong to',
+  init(c) {
+    if (!REFEDIT) { echo('Open the block with REFEDIT first'); return endCmd(); }
+    if (!SEL.size) { echo('Select what belongs to the state, then run BVSTATE'); return endCmd(); }
+    hint('Name of the visibility state:');
+  },
+  text(c, s) {
+    if (blockStateAssign(s)) {
+      cliPrint(SEL.size + ' object' + (SEL.size === 1 ? '' : 's') + ' put in state "' + s.trim() + '".');
+      draw();
+    }
+    endCmd();
+    return true;
+  },
+});
+
+defc('refedit', {
+  key: 'refedit', group: 'modify',
+  hint: 'Select the block reference to edit',
+  point(c, p) {
+    const ins = pickAt(p, 10, x => x.t === 'insert');
+    if (!ins) return echo('Pick a block reference');
+    if (!refeditOpen(ins)) return;
+    draw(); endCmd();
+  },
+});
+defc('refclose', {
+  key: 'refclose', group: 'modify',
+  hint: 'Save the block being edited',
+  init() {
+    if (!REFEDIT) { echo('Nothing is being edited'); return endCmd(); }
+    const n = REFEDIT.name;
+    refeditSave();
+    cliPrint('Saved ' + n + ' — every reference to it is updated.');
+    draw(); endCmd();
+  },
+});
+
 defc('attdef', {
   key: 'attdef', group: 'annotate',
   hint: 'Pick where the attribute sits',
@@ -17898,6 +18214,14 @@ const PROPS = {
   },
   insert(w, e, set, upd) {
     ro(w, 'Block', e.name);
+    /* only when the block actually has states: an empty list to choose from is
+       worse than no control at all */
+    const st = (typeof blockStates === 'function') ? blockStates(e.name) : [];
+    if (st.length) {
+      selRow(w, 'State', [['', '(all)']].concat(st.map(n => [n, n])), e.state || '',
+        v => { begin(); mut(e); if (v) e.state = v; else delete e.state;
+               commit('Visibility state'); upd(); });
+    }
     addRow(w, 'X', e.p[0], set(v => e.p[0] = v)); addRow(w, 'Y', e.p[1], set(v => e.p[1] = v));
     addRow(w, 'Scale X', e.sx == null ? 1 : e.sx, set(v => e.sx = v || 1), 1);
     addRow(w, 'Scale Y', e.sy == null ? 1 : e.sy, set(v => e.sy = v || 1), 1);

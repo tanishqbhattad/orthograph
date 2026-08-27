@@ -1251,6 +1251,14 @@ const PROPS = {
   },
   insert(w, e, set, upd) {
     ro(w, 'Block', e.name);
+    /* only when the block actually has states: an empty list to choose from is
+       worse than no control at all */
+    const st = (typeof blockStates === 'function') ? blockStates(e.name) : [];
+    if (st.length) {
+      selRow(w, 'State', [['', '(all)']].concat(st.map(n => [n, n])), e.state || '',
+        v => { begin(); mut(e); if (v) e.state = v; else delete e.state;
+               commit('Visibility state'); upd(); });
+    }
     addRow(w, 'X', e.p[0], set(v => e.p[0] = v)); addRow(w, 'Y', e.p[1], set(v => e.p[1] = v));
     addRow(w, 'Scale X', e.sx == null ? 1 : e.sx, set(v => e.sx = v || 1), 1);
     addRow(w, 'Scale Y', e.sy == null ? 1 : e.sy, set(v => e.sy = v || 1), 1);
