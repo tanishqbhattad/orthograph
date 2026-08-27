@@ -485,6 +485,61 @@ function dimGeom(e0) {
     const val = (e.k === 'diameter' ? 2 : 1) * dist(c, p);
     return { lines, arrows, tp: mid(a, p), tr: 0, txt: (e.k === 'diameter' ? 'Ø' : 'R') + dimText(e, val), val, S };
   }
+  /* ORDINATE — how a setting-out drawing is dimensioned. Not a chain of sizes
+     between features, where one error walks down the whole run, but each
+     feature's distance from a single datum. It spans nothing, so it has no
+     arrowheads: it is a jogged leader from the feature out to its number. */
+  if (e.k === 'ordinate') {
+    const d0 = e.datum || [0, 0];
+    const f = e.p1, tp0 = e.p2 || e.p1;
+    const dx = tp0[0] - f[0], dy = tp0[1] - f[1];
+    /* the axis is the one the leader is NOT pulled along: a leader taken up
+       the page is calling out an X, which is how it reads on a drawing */
+    const axis = e.axis === 'x' || e.axis === 'y' ? e.axis
+               : (Math.abs(dy) >= Math.abs(dx) ? 'x' : 'y');
+    const val = axis === 'x' ? f[0] - d0[0] : f[1] - d0[1];
+    /* the jog: out along the leader, then square to the text */
+    const jog = axis === 'x'
+      ? [f[0], f[1] + dy * 0.65]
+      : [f[0] + dx * 0.65, f[1]];
+    lines.push([f, jog], [jog, tp0]);
+    const along = axis === 'x' ? (dy >= 0 ? 1 : -1) : (dx >= 0 ? 1 : -1);
+    const tp = axis === 'x'
+      ? [tp0[0], tp0[1] + along * S.gap]
+      : [tp0[0] + along * S.gap, tp0[1]];
+    return { lines, arrows: [], tp, tr: 0, txt: dimText(e, val), val, S,
+             anchor: axis === 'x' ? 'c' : (along > 0 ? 'l' : 'r') };
+  }
+  /* ARC LENGTH — measured ALONG the curve. An aligned dimension across the
+     ends of an arc measures the chord, which for anything but a shallow arc
+     is a different number, and the one somebody would cut to. */
+  if (e.k === 'arclen') {
+    const c = e.p3 || e.p1;
+    const r = dist(c, e.p1) || 1;
+    const a0 = ang(c, e.p1), a1 = ang(c, e.p2);
+    const sweep = Math.abs(wrap(a1 - a0));
+    const R = r + (e.off || 0);
+    const n = 32, pts = [];
+    for (let i = 0; i <= n; i++) {
+      const a = a0 + wrap(a1 - a0) * i / n;
+      pts.push([c[0] + R * Math.cos(a), c[1] + R * Math.sin(a)]);
+    }
+    for (let i = 1; i < pts.length; i++) lines.push([pts[i - 1], pts[i]]);
+    /* extension lines run from the arc itself out to the dimension line */
+    lines.push([[c[0] + r * Math.cos(a0), c[1] + r * Math.sin(a0)],
+                [c[0] + (R + S.extBey) * Math.cos(a0), c[1] + (R + S.extBey) * Math.sin(a0)]]);
+    lines.push([[c[0] + r * Math.cos(a1), c[1] + r * Math.sin(a1)],
+                [c[0] + (R + S.extBey) * Math.cos(a1), c[1] + (R + S.extBey) * Math.sin(a1)]]);
+    const am = a0 + wrap(a1 - a0) / 2;
+    /* the measurement is the ARC's length, not the length of the line drawn
+       to represent it: moving the dimension line out must not change it */
+    const val = r * sweep;
+    return {
+      lines, arrows: [{ p: pts[0], a: a0 - Math.PI / 2 }, { p: pts[n], a: a1 + Math.PI / 2 }],
+      tp: [c[0] + R * Math.cos(am), c[1] + R * Math.sin(am)], tr: 0,
+      txt: e.txt || '\u2312' + dimText(e, val), val, S, arcR: R, arcC: c, a0, a1,
+    };
+  }
   if (e.k === 'angular') {
     const c = e.p3 || e.p1, r = dist(c, e.p1) || 1;
     const a0 = ang(c, e.p1), a1 = ang(c, e.p2);

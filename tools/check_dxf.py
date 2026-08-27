@@ -52,11 +52,23 @@ if sp:
         print(f"          flattens to {len(pts)} points, start=({p0.x:.2f}, {p0.y:.2f}) end=({p1.x:.2f}, {p1.y:.2f})")
     except Exception as ex:
         print("          flattening failed:", type(ex).__name__, ex)
+def fmt_meas(d):
+    """An ordinate dimension measures along one axis, and ezdxf hands back the
+    feature location as a vector rather than a number. Print either."""
+    try:
+        m = d.get_measurement()
+    except Exception:
+        return '?'
+    try:
+        return round(float(m), 2)
+    except (TypeError, ValueError):
+        return tuple(round(float(v), 2) for v in m)
+
 dims = [e for e in msp if e.dxftype() == 'DIMENSION']
 print(f"DIMENSION: {len(dims)}")
 for d in dims:
     got = d.dxf.get('dimtype', None)
-    print(f"          type={got} style={d.dxf.dimstyle} block={d.dxf.get('geometry', '-')} measurement={round(d.get_measurement(),2) if hasattr(d,'get_measurement') else '?'}")
+    print(f"          type={got} style={d.dxf.dimstyle} block={d.dxf.get('geometry', '-')} measurement={fmt_meas(d)}")
 h = one('HATCH')
 if h:
     print(f"HATCH   : paths={len(h.paths)} solid={h.dxf.solid_fill} pattern={h.dxf.pattern_name}")
@@ -88,7 +100,23 @@ want(kinds.get('LWPOLYLINE', 0) > 0, "no LWPOLYLINE records")
 want(kinds.get('TEXT', 0) >= 10,
      "only %d TEXT records - mtext, the leader note, the attdef tag and the "
      "table cells should all be here" % kinds.get('TEXT', 0))
-want(kinds.get('DIMENSION', 0) >= 5, "dimensions missing")
+want(kinds.get('DIMENSION', 0) >= 6, "dimensions missing")
+
+# An ordinate dimension is a real R2000 type and has to read back AS one.
+# Bit 6 of the 70 group is the ordinate flag; bit 64 says X rather than Y.
+ords = [d for d in dims if (d.dxf.dimtype & 7) == 6]
+want(len(ords) >= 1, "no ordinate dimension survived the read")
+if ords:
+    o = ords[0]
+    # 13 is the feature being called out, 14 where its leader ends,
+    # 10 the datum it is measured from, and bit 64 says X rather than Y
+    feat, lead = o.dxf.defpoint2, o.dxf.defpoint3
+    want(abs(feat.x - 3200) < 1 and abs(feat.y - 1500) < 1,
+         f"ordinate feature came back as {tuple(feat)[:2]}, expected (3200, 1500)")
+    want(abs(lead.y - 4000) < 1,
+         f"ordinate leader end came back as {tuple(lead)[:2]}")
+    want(bool(o.dxf.dimtype & 64), "ordinate did not read back as an X datum")
+
 want(kinds.get('HATCH', 0) >= 2, "the island hatch is missing")
 want(kinds.get('INSERT', 0) >= 1, "the block insert is missing")
 

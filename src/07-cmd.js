@@ -1234,6 +1234,41 @@ function withRefs(d, refs) {
   if (refs && refs[1]) d.r2 = refs[1];
   return d;
 }
+/* DIMORDINATE — pick the feature, then pull the leader out to where the
+   number goes. The datum is the origin unless the drawing has been given one. */
+defc('dimordinate', {
+  key: 'dimordinate', group: 'annotate',
+  hint: 'Select the feature to call out:',
+  init(c) { c.f = null; },
+  point(c, p) {
+    if (!c.f) { c.f = p.slice(); hint('Pull the leader out to the text:'); return; }
+    begin();
+    addEnt({ t: 'dim', k: 'ordinate', p1: c.f, p2: p.slice(),
+             datum: (DOC.ordDatum || null), layer: dimLayer() });
+    commit('Ordinate dimension');
+    endCmd();
+  },
+  preview(c, p) {
+    if (!c.f) return null;
+    return [pv({ t: 'dim', k: 'ordinate', p1: c.f, p2: p, datum: (DOC.ordDatum || null) })];
+  },
+});
+/* DIMARC — the length ALONG an arc. */
+defc('dimarc', {
+  key: 'dimarc', group: 'annotate',
+  hint: 'Select an arc:',
+  point(c, p) {
+    const e = pickAt(p, 10, x => x.t === 'arc');
+    if (!e) return echo('Pick an arc');
+    const p1 = [e.c[0] + e.r * Math.cos(e.a0), e.c[1] + e.r * Math.sin(e.a0)];
+    const p2 = [e.c[0] + e.r * Math.cos(e.a1), e.c[1] + e.r * Math.sin(e.a1)];
+    begin();
+    addEnt({ t: 'dim', k: 'arclen', p3: e.c.slice(), p1, p2,
+             off: Math.max(e.r * 0.15, dimStyle().txt * 2), layer: dimLayer() });
+    commit('Arc length dimension');
+    endCmd();
+  },
+});
 defc('dim', {
   hint: 'Specify first extension line origin or [Linear/ALigned/ANgular/Radius/Diameter/Horizontal/Vertical]:',
   group: 'annotate',

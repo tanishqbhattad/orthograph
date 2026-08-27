@@ -1287,6 +1287,10 @@ const fixtures = R(`
   addEnt({t:'dim',k:'radius',p1:[2500,2000],p2:[3300,2000],layer:'DIMENSIONS'});
   addEnt({t:'dim',k:'diameter',p1:[2500,2000],p2:[2500,2800],layer:'DIMENSIONS'});
   addEnt({t:'dim',k:'angular',p3:[0,0],p1:[1000,0],p2:[0,1000],off:300,layer:'DIMENSIONS'});
+  /* the two kinds added last: an ordinate has a real R2000 type and must
+     survive a strict read, an arc length has none and is flattened */
+  addEnt({t:'dim',k:'ordinate',axis:'x',p1:[3200,1500],p2:[3200,4000],layer:'DIMENSIONS'});
+  addEnt({t:'dim',k:'arclen',p3:[0,0],p1:[2000,0],p2:[0,2000],off:300,layer:'DIMENSIONS'});
   addEnt({t:'hatch',loops:[[[6000,3000],[8000,3000],[8000,5000],[6000,5000]]],pattern:'line',sp:150,hatchAng:45});
   addEnt({t:'xline',a:[0,0],d:[0.7071,0.7071],lt:'dashdot'});
   DOC.blocks={ TREE:{ base:[0,0], ents:[{t:'circle',c:[0,0],r:400,layer:'0'},{t:'line',a:[0,-400],b:[0,-900],layer:'0'}] } };

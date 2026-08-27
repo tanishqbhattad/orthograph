@@ -374,6 +374,19 @@ const DXF_DIRECT = {
   line: 1, pline: 1, spline: 1, circle: 1, arc: 1, ellipse: 1, point: 1,
   ray: 1, xline: 1, text: 1, dim: 1, hatch: 1, insert: 1,
 };
+/** Whether this particular entity has a real R2000 equivalent.
+
+    Per entity rather than per type, because one kind of dimension does not.
+    R2000 has no arc-length dimension — ARC_DIMENSION arrives in AC1021 — so
+    writing one as some other dimension type would be a file that says a
+    measurement is something it is not. It is flattened to the geometry it
+    draws instead: the drawing is exactly right, and it opens as lines and
+    text rather than as an editable dimension, which is the honest trade. */
+function dxfDirect(e) {
+  if (!e || !DXF_DIRECT[e.t]) return false;
+  if (e.t === 'dim' && e.k === 'arclen') return false;
+  return true;
+}
 function exportDXF() {
   const W = new DxfWriter();
   return W.build();
@@ -576,7 +589,7 @@ class DxfWriter {
          every paragraph, leader note and attribute missing and no error to say
          so. Listing what CAN be written, and flattening the rest, means a new
          entity type is exported by default instead of being lost by default. */
-      if (DXF_DIRECT[e.t]) this.writeEnt(o, e, K.msBlockRec);
+      if (dxfDirect(e)) this.writeEnt(o, e, K.msBlockRec);
       else for (const q of flattenToPrimitives(e)) this.writeEnt(o, q, K.msBlockRec);
     }
     P(o, 0, 'ENDSEC');
@@ -738,6 +751,20 @@ class DxfWriter {
       pt(o, 13, e.p1); pt(o, 14, e.p2);
       pt(o, 15, e.p3 || e.p1);                     /* vertex */
       pt(o, 16, g.tp);
+      return;
+    }
+    /* ORDINATE — a real R2000 dimension type. 13 is the feature being called
+       out and 14 is where the leader ends; 70 bit 64 says X rather than Y. */
+    if (k === 'ordinate') {
+      const d0 = e.datum || [0, 0];
+      pt(o, 10, d0);                               /* the datum it measures from */
+      pt(o, 11, g.tp);
+      const xAxis = (g.anchor === 'c');             /* dimGeom resolved the axis */
+      P(o, 70, 6 + 32 + (xAxis ? 64 : 0));
+      P(o, 71, 5); P(o, 42, num(g.val));
+      P(o, 1, e.txt || ''); P(o, 3, 'ORTHO');
+      P(o, 100, 'AcDbOrdinateDimension');
+      pt(o, 13, e.p1); pt(o, 14, e.p2);
       return;
     }
     /* linear family */

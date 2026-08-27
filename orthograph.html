@@ -2342,6 +2342,61 @@ function dimGeom(e0) {
     const val = (e.k === 'diameter' ? 2 : 1) * dist(c, p);
     return { lines, arrows, tp: mid(a, p), tr: 0, txt: (e.k === 'diameter' ? 'Ø' : 'R') + dimText(e, val), val, S };
   }
+  /* ORDINATE — how a setting-out drawing is dimensioned. Not a chain of sizes
+     between features, where one error walks down the whole run, but each
+     feature's distance from a single datum. It spans nothing, so it has no
+     arrowheads: it is a jogged leader from the feature out to its number. */
+  if (e.k === 'ordinate') {
+    const d0 = e.datum || [0, 0];
+    const f = e.p1, tp0 = e.p2 || e.p1;
+    const dx = tp0[0] - f[0], dy = tp0[1] - f[1];
+    /* the axis is the one the leader is NOT pulled along: a leader taken up
+       the page is calling out an X, which is how it reads on a drawing */
+    const axis = e.axis === 'x' || e.axis === 'y' ? e.axis
+               : (Math.abs(dy) >= Math.abs(dx) ? 'x' : 'y');
+    const val = axis === 'x' ? f[0] - d0[0] : f[1] - d0[1];
+    /* the jog: out along the leader, then square to the text */
+    const jog = axis === 'x'
+      ? [f[0], f[1] + dy * 0.65]
+      : [f[0] + dx * 0.65, f[1]];
+    lines.push([f, jog], [jog, tp0]);
+    const along = axis === 'x' ? (dy >= 0 ? 1 : -1) : (dx >= 0 ? 1 : -1);
+    const tp = axis === 'x'
+      ? [tp0[0], tp0[1] + along * S.gap]
+      : [tp0[0] + along * S.gap, tp0[1]];
+    return { lines, arrows: [], tp, tr: 0, txt: dimText(e, val), val, S,
+             anchor: axis === 'x' ? 'c' : (along > 0 ? 'l' : 'r') };
+  }
+  /* ARC LENGTH — measured ALONG the curve. An aligned dimension across the
+     ends of an arc measures the chord, which for anything but a shallow arc
+     is a different number, and the one somebody would cut to. */
+  if (e.k === 'arclen') {
+    const c = e.p3 || e.p1;
+    const r = dist(c, e.p1) || 1;
+    const a0 = ang(c, e.p1), a1 = ang(c, e.p2);
+    const sweep = Math.abs(wrap(a1 - a0));
+    const R = r + (e.off || 0);
+    const n = 32, pts = [];
+    for (let i = 0; i <= n; i++) {
+      const a = a0 + wrap(a1 - a0) * i / n;
+      pts.push([c[0] + R * Math.cos(a), c[1] + R * Math.sin(a)]);
+    }
+    for (let i = 1; i < pts.length; i++) lines.push([pts[i - 1], pts[i]]);
+    /* extension lines run from the arc itself out to the dimension line */
+    lines.push([[c[0] + r * Math.cos(a0), c[1] + r * Math.sin(a0)],
+                [c[0] + (R + S.extBey) * Math.cos(a0), c[1] + (R + S.extBey) * Math.sin(a0)]]);
+    lines.push([[c[0] + r * Math.cos(a1), c[1] + r * Math.sin(a1)],
+                [c[0] + (R + S.extBey) * Math.cos(a1), c[1] + (R + S.extBey) * Math.sin(a1)]]);
+    const am = a0 + wrap(a1 - a0) / 2;
+    /* the measurement is the ARC's length, not the length of the line drawn
+       to represent it: moving the dimension line out must not change it */
+    const val = r * sweep;
+    return {
+      lines, arrows: [{ p: pts[0], a: a0 - Math.PI / 2 }, { p: pts[n], a: a1 + Math.PI / 2 }],
+      tp: [c[0] + R * Math.cos(am), c[1] + R * Math.sin(am)], tr: 0,
+      txt: e.txt || '\u2312' + dimText(e, val), val, S, arcR: R, arcC: c, a0, a1,
+    };
+  }
   if (e.k === 'angular') {
     const c = e.p3 || e.p1, r = dist(c, e.p1) || 1;
     const a0 = ang(c, e.p1), a1 = ang(c, e.p2);
@@ -8972,6 +9027,41 @@ function withRefs(d, refs) {
   if (refs && refs[1]) d.r2 = refs[1];
   return d;
 }
+/* DIMORDINATE — pick the feature, then pull the leader out to where the
+   number goes. The datum is the origin unless the drawing has been given one. */
+defc('dimordinate', {
+  key: 'dimordinate', group: 'annotate',
+  hint: 'Select the feature to call out:',
+  init(c) { c.f = null; },
+  point(c, p) {
+    if (!c.f) { c.f = p.slice(); hint('Pull the leader out to the text:'); return; }
+    begin();
+    addEnt({ t: 'dim', k: 'ordinate', p1: c.f, p2: p.slice(),
+             datum: (DOC.ordDatum || null), layer: dimLayer() });
+    commit('Ordinate dimension');
+    endCmd();
+  },
+  preview(c, p) {
+    if (!c.f) return null;
+    return [pv({ t: 'dim', k: 'ordinate', p1: c.f, p2: p, datum: (DOC.ordDatum || null) })];
+  },
+});
+/* DIMARC — the length ALONG an arc. */
+defc('dimarc', {
+  key: 'dimarc', group: 'annotate',
+  hint: 'Select an arc:',
+  point(c, p) {
+    const e = pickAt(p, 10, x => x.t === 'arc');
+    if (!e) return echo('Pick an arc');
+    const p1 = [e.c[0] + e.r * Math.cos(e.a0), e.c[1] + e.r * Math.sin(e.a0)];
+    const p2 = [e.c[0] + e.r * Math.cos(e.a1), e.c[1] + e.r * Math.sin(e.a1)];
+    begin();
+    addEnt({ t: 'dim', k: 'arclen', p3: e.c.slice(), p1, p2,
+             off: Math.max(e.r * 0.15, dimStyle().txt * 2), layer: dimLayer() });
+    commit('Arc length dimension');
+    endCmd();
+  },
+});
 defc('dim', {
   hint: 'Specify first extension line origin or [Linear/ALigned/ANgular/Radius/Diameter/Horizontal/Vertical]:',
   group: 'annotate',
@@ -14553,6 +14643,19 @@ const DXF_DIRECT = {
   line: 1, pline: 1, spline: 1, circle: 1, arc: 1, ellipse: 1, point: 1,
   ray: 1, xline: 1, text: 1, dim: 1, hatch: 1, insert: 1,
 };
+/** Whether this particular entity has a real R2000 equivalent.
+
+    Per entity rather than per type, because one kind of dimension does not.
+    R2000 has no arc-length dimension — ARC_DIMENSION arrives in AC1021 — so
+    writing one as some other dimension type would be a file that says a
+    measurement is something it is not. It is flattened to the geometry it
+    draws instead: the drawing is exactly right, and it opens as lines and
+    text rather than as an editable dimension, which is the honest trade. */
+function dxfDirect(e) {
+  if (!e || !DXF_DIRECT[e.t]) return false;
+  if (e.t === 'dim' && e.k === 'arclen') return false;
+  return true;
+}
 function exportDXF() {
   const W = new DxfWriter();
   return W.build();
@@ -14755,7 +14858,7 @@ class DxfWriter {
          every paragraph, leader note and attribute missing and no error to say
          so. Listing what CAN be written, and flattening the rest, means a new
          entity type is exported by default instead of being lost by default. */
-      if (DXF_DIRECT[e.t]) this.writeEnt(o, e, K.msBlockRec);
+      if (dxfDirect(e)) this.writeEnt(o, e, K.msBlockRec);
       else for (const q of flattenToPrimitives(e)) this.writeEnt(o, q, K.msBlockRec);
     }
     P(o, 0, 'ENDSEC');
@@ -14917,6 +15020,20 @@ class DxfWriter {
       pt(o, 13, e.p1); pt(o, 14, e.p2);
       pt(o, 15, e.p3 || e.p1);                     /* vertex */
       pt(o, 16, g.tp);
+      return;
+    }
+    /* ORDINATE — a real R2000 dimension type. 13 is the feature being called
+       out and 14 is where the leader ends; 70 bit 64 says X rather than Y. */
+    if (k === 'ordinate') {
+      const d0 = e.datum || [0, 0];
+      pt(o, 10, d0);                               /* the datum it measures from */
+      pt(o, 11, g.tp);
+      const xAxis = (g.anchor === 'c');             /* dimGeom resolved the axis */
+      P(o, 70, 6 + 32 + (xAxis ? 64 : 0));
+      P(o, 71, 5); P(o, 42, num(g.val));
+      P(o, 1, e.txt || ''); P(o, 3, 'ORTHO');
+      P(o, 100, 'AcDbOrdinateDimension');
+      pt(o, 13, e.p1); pt(o, 14, e.p2);
       return;
     }
     /* linear family */
