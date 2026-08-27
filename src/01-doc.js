@@ -122,6 +122,61 @@ const ARCH_LAYERS = [
   ['A-GLAZ', '#6ba8ff'], ['A-FLOR-STRS', '#c792ea'], ['A-COLS', '#ff9f43'],
   ['A-AREA', '#ffd166'], ['A-GRID', '#ff6b81'],
 ];
+/* ------------------------------------------------------------
+   Document settings: the things that belong to the DRAWING rather than to the
+   session, listed once with their defaults.
+
+   They were previously declared in the DOC literal, saved in one function,
+   loaded in another and reset in a third — four places, and they had drifted
+   apart in two directions at once. Eight of them were never written to the
+   file, so they reverted on every reopen, and none of them were reset by
+   resetDoc, so a NEW drawing silently inherited them from the last one.
+
+   Two changed numbers rather than appearance. Lose ordDatum and every ordinate
+   dimension on a setting-out drawing measures from somewhere else; lose
+   annoScale and every annotative note on the sheet changes size.
+
+   One table means adding a setting cannot leave it half-wired, and the test in
+   test/suites/persist.js fails if a new one appears that is neither saved nor
+   explicitly excused.
+   ------------------------------------------------------------ */
+const DOC_SETTINGS = {
+  ltScale: 1,             /* LTSCALE — dash spacing                          */
+  annoScale: null,        /* annotation scale; null means the built-in default */
+  ordDatum: null,         /* where ordinate dimensions measure from          */
+  wallHatch: true,        /* poche inside walls                              */
+  areaUnits: 'auto',      /* room tag units                                  */
+  altArea: false,         /* show a second area unit                         */
+  filletR: null,          /* last fillet radius                              */
+  chamD: null,            /* last chamfer distance                           */
+  dimScale: null,         /* DIMSCALE — every size on a plain dimension      */
+  /* the current object properties: what the next thing drawn will take.
+     AutoCAD keeps CECOLOR/CELTYPE/CELWEIGHT in the drawing, and so should we —
+     setting a draw colour and having it revert on reopen is the same surprise
+     as any other lost setting. */
+  cecolor: null,
+  celtype: null,
+  celweight: null,
+  /* the drawing's own name: the %<drawing>% field reads it, so losing it turns
+     a title block into #### */
+  name: null,
+};
+/** the settings as they should be written to a file */
+function docSettings() {
+  const out = {};
+  for (const k of Object.keys(DOC_SETTINGS)) out[k] = DOC[k] === undefined ? DOC_SETTINGS[k] : DOC[k];
+  return out;
+}
+/** take them from a file, falling back to the default for anything an older
+    drawing does not carry */
+function applyDocSettings(d) {
+  for (const k of Object.keys(DOC_SETTINGS)) {
+    const v = d ? d[k] : undefined;
+    DOC[k] = (v === undefined || v === null) ? DOC_SETTINGS[k] : v;
+  }
+}
+function resetDocSettings() { applyDocSettings(null); }
+
 function resetDoc() {
   DOC.layers = [
     newLayer('0', '#d7dee8'),
@@ -143,6 +198,9 @@ function resetDoc() {
   DOC.dimStyles = stdDimStyles(); DOC.curDim = 'Standard';
   DOC.textStyles = stdTextStyles(); DOC.curTextStyle = 'Standard';
   DOC.levelUid = (DOC.levels || []).length;
+  /* A new drawing is a new drawing: it does not inherit the last one's
+     annotation scale, ordinate datum, linetype scale or display choices. */
+  resetDocSettings();
   /* a document straight off the shelf has nothing unsaved in it */
   DOC.savedSeq = HIST.seq;
   idxInvalidate(); HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;

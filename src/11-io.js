@@ -254,6 +254,7 @@ function saveNative() {
     dimStyles: dimStyles(), curDim: DOC.curDim || 'Standard',
     textStyles: textStyles(), curTextStyle: DOC.curTextStyle || 'Standard',
     levelUid: DOC.levelUid || 0,
+    ...docSettings(),
     ents: [...DOC.ents.values()].map(roomForSave),
   });
 }
@@ -386,6 +387,7 @@ function loadNativeInto(d) {
   DOC.textStyles = Array.isArray(d.textStyles) && d.textStyles.length ? d.textStyles : null;
   DOC.curTextStyle = d.curTextStyle || 'Standard';
   DOC.levelUid = d.levelUid || 0;
+  applyDocSettings(d);
   DOC.sheets = Array.isArray(d.sheets) ? d.sheets.filter(sh => sh && sh.w > 0 && sh.h > 0) : [];
   DOC.curSheet = DOC.sheets.some(sh => sh.id === d.curSheet) ? d.curSheet : null;
   SHEET_UID = Math.max(1, ...DOC.sheets.map(sh => (sh.id || 0) + 1),
