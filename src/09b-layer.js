@@ -347,3 +347,104 @@ function setAttValues(ins, vals) {
   if (typeof draw === 'function') draw();
   return true;
 }
+
+/* ============================================================
+   Levels
+   ------------------------------------------------------------
+   A plan is a drawing of one storey. The model has always had
+   levels and walls have always mitred only against walls on
+   their own, but there was no way to change which one you were
+   drawing on — so the second storey was unreachable.
+   ============================================================ */
+function levelRec(id) { return (DOC.levels || []).find(l => l.id === id) || null; }
+function curLevelRec() { return levelRec(DOC.curLevel || 0) || (DOC.levels || [])[0]; }
+/** every level, lowest first — the order a section reads in */
+function levelsSorted() { return (DOC.levels || []).slice().sort((a, b) => a.elev - b.elev); }
+function gotoLevel(id) {
+  const l = levelRec(id);
+  if (!l) return false;
+  DOC.curLevel = l.id;
+  cliPrint('Drawing on ' + l.name + ' at ' + fmt(l.elev));
+  if (typeof syncUI === 'function') syncUI();
+  if (typeof buildLevels === 'function') buildLevels();
+  draw();
+  return true;
+}
+/** Add a storey above the top one, spaced by its floor-to-floor height. The
+    id is the next free integer, never a reused one: entities remember their
+    level by id, and reusing an id would silently move them. */
+function addLevel(name, elev, h) {
+  const ls = DOC.levels || (DOC.levels = []);
+  const top = levelsSorted()[ls.length - 1];
+  /* A monotonic counter, never max(existing)+1. Entities remember their level
+     by id: delete a level and derive the next id from what is left, and the
+     next level created takes the dead one's number — quietly adopting every
+     entity that still referenced it. */
+  const seen = ls.reduce((n, l) => Math.max(n, l.id), -1) + 1;
+  DOC.levelUid = Math.max(DOC.levelUid || 0, seen);
+  const id = DOC.levelUid++;
+  const rec = {
+    id,
+    name: name || ('Level ' + id),
+    elev: elev != null ? elev : (top ? top.elev + (top.h || 3000) : 0),
+    h: h || (top && top.h) || 3000,
+  };
+  ls.push(rec);
+  return rec;
+}
+defc('level', {
+  key: 'level', group: 'view',
+  hint: '<em>N</em>ew · <em>S</em>et current · <em>R</em>ename · <em>E</em>levation · <em>?</em> list',
+  init(c) { c.data = {}; },
+  text(c, s) {
+    const raw = String(s).trim(), k = raw.toLowerCase(), d = c.data;
+    if (d.await === 'new') {
+      begin(); const rec = addLevel(raw); commit('New level');
+      gotoLevel(rec.id);
+      return true;
+    }
+    if (d.await === 'set') {
+      const hit = (DOC.levels || []).find(l => String(l.name).toLowerCase() === k);
+      if (!hit) { cliPrint('No level called "' + raw + '".', 'err'); return true; }
+      gotoLevel(hit.id); return true;
+    }
+    if (d.await === 'rename') {
+      const l = curLevelRec(); if (!l) return true;
+      begin(); l.name = raw || l.name; commit('Rename level');
+      if (typeof buildLevels === 'function') buildLevels();
+      return true;
+    }
+    if (d.await === 'elev') {
+      const v = parseLen(raw);
+      if (isNaN(v)) { cliPrint('Type an elevation.', 'err'); return true; }
+      const l = curLevelRec(); if (!l) return true;
+      begin(); l.elev = v; commit('Level elevation');
+      cliPrint(l.name + ' is now at ' + fmt(v));
+      if (typeof buildLevels === 'function') buildLevels();
+      draw();
+      return true;
+    }
+    if (k === 'n' || k === 'new') { d.await = 'new'; hint('Name for the new level:'); return true; }
+    if (k === 's' || k === 'set') { d.await = 'set'; hint('Level to draw on:'); return true; }
+    if (k === 'r' || k === 'rename') { d.await = 'rename'; hint('New name for this level:'); return true; }
+    if (k === 'e' || k === 'elevation') { d.await = 'elev'; hint('Elevation for this level:'); return true; }
+    if (k === '?' || k === 'list') {
+      cliPrint(levelsSorted().map(l =>
+        (l.id === (DOC.curLevel || 0) ? '* ' : '  ') + l.name + '  ' + fmt(l.elev)).join('\n'));
+      return true;
+    }
+    return false;
+  },
+});
+defm('LEVELUP', () => {
+  const ls = levelsSorted();
+  const i = ls.findIndex(l => l.id === (DOC.curLevel || 0));
+  if (i < 0 || i >= ls.length - 1) return echo('Already on the top level');
+  gotoLevel(ls[i + 1].id);
+}, { group: 'view' });
+defm('LEVELDOWN', () => {
+  const ls = levelsSorted();
+  const i = ls.findIndex(l => l.id === (DOC.curLevel || 0));
+  if (i <= 0) return echo('Already on the bottom level');
+  gotoLevel(ls[i - 1].id);
+}, { group: 'view' });

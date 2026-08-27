@@ -2035,3 +2035,38 @@ function popMenu(items, anchor) {
   return m;
 }
 
+/* The level switcher. Highest storey at the top, because that is how a section
+   reads and how anyone thinks about a building. Clicking one changes what the
+   plan is a drawing of. */
+function buildLevels() {
+  const w = $('#levels'); if (!w) return;
+  clearNode(w);
+  const list = levelsSorted().slice().reverse();
+  for (const l of list) {
+    const row = el('div', 'lvl' + (l.id === (DOC.curLevel || 0) ? ' cur' : ''));
+    const nm = el('span', 'nm', esc(l.name));
+    nm.title = l.name + ' — double-click to rename';
+    nm.ondblclick = ev => {
+      ev.stopPropagation();
+      const n = prompt('Level name', l.name);
+      if (n == null) return;
+      begin(); l.name = String(n).trim() || l.name; commit('Rename level');
+      buildLevels();
+    };
+    const el2 = el('span', 'el', esc(fmt(l.elev)));
+    el2.title = 'Elevation — double-click to change';
+    el2.ondblclick = ev => {
+      ev.stopPropagation();
+      const v = prompt('Elevation for ' + l.name, String(l.elev));
+      if (v == null) return;
+      const n = parseLen(v);
+      if (isNaN(n)) return toast('That is not an elevation');
+      begin(); l.elev = n; commit('Level elevation');
+      buildLevels(); draw();
+    };
+    row.append(nm, el2);
+    row.onclick = () => gotoLevel(l.id);
+    w.appendChild(row);
+  }
+}
+

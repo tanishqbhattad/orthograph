@@ -240,6 +240,15 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
    Model space and each sheet, along the bottom, exactly where every CAD
    program has put them for thirty years. They are how anyone discovers that
    paper space exists at all. */
+/* ---------------- levels ----------------
+   Highest storey at the top, the way a section reads. */
+#levels{max-height:132px;overflow:auto}
+#levels .lvl{display:flex;align-items:center;gap:7px;padding:4px 11px;cursor:pointer;
+  font-size:11px;color:var(--tx1)}
+#levels .lvl:hover{background:var(--bg2)}
+#levels .lvl.cur{color:var(--amber);background:var(--bg2)}
+#levels .lvl .el{margin-left:auto;color:var(--tx2);font:10px/1 'JetBrains Mono',monospace}
+#levels .lvl .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #tabs{display:flex;align-items:flex-end;gap:2px;padding:0 11px;height:24px;flex:none;
   border-bottom:1px solid var(--bd);overflow-x:auto;scrollbar-width:none}
 #tabs::-webkit-scrollbar{display:none}
@@ -499,6 +508,8 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
   </div>
 
   <div id="panel">
+    <div class="ph">Levels <button id="addLvl" title="New level above">+</button></div>
+    <div id="levels"></div>
     <div class="ph">Layers <button id="addLay" title="New layer">+</button></div>
     <div id="layers"></div>
     <div class="ph">Properties</div>
@@ -842,6 +853,7 @@ function resetDoc() {
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];
   DOC.dimStyles = stdDimStyles(); DOC.curDim = 'Standard';
+  DOC.levelUid = (DOC.levels || []).length;
   /* a document straight off the shelf has nothing unsaved in it */
   DOC.savedSeq = HIST.seq;
   idxInvalidate(); HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;
@@ -1041,6 +1053,9 @@ function addEnt(e) {
   if (e.color === undefined) e.color = DOC.cecolor || null;
   if (e.lw === undefined) e.lw = DOC.celweight != null ? DOC.celweight : null;
   if (e.lt === undefined) e.lt = DOC.celtype || null;
+  /* Everything belongs to a storey. Stamping it here rather than at each
+     command means nothing can be drawn onto no level at all. */
+  if (e.lvl === undefined) e.lvl = DOC.curLevel || 0;
   DOC.ents.set(e.id, e); markDirty(e.id); DOCV++;
   if (JN.on) JN.added.add(e.id);
   if (IDX) idxInsert(e);
@@ -1152,8 +1167,37 @@ function redo() {
 function entColor(e) { return e.color || layer(e.layer).color; }
 function entLt(e) { return e.lt || layer(e.layer).lt || 'solid'; }
 function entLw(e) { return e.lw != null ? e.lw : layer(e.layer).lw; }
-function visible(e) { const l = layer(e.layer); return l.on && !l.frozen; }
-function pickable(e) { const l = layer(e.layer); return l.on && !l.frozen && !l.lock; }
+/* ---------------- levels ----------------
+   A plan is a drawing of one storey. Every level drew at once, which on a
+   two-storey building means the first floor's walls sitting on top of the
+   ground floor's and no way to tell which is which. Absent means level 0, so
+   a single-storey drawing behaves exactly as it always did. */
+function entLevel(e) { return e.lvl || 0; }
+function onCurLevel(e) { return entLevel(e) === (DOC.curLevel || 0); }
+/** the storey immediately below the current one, or null */
+function levelBelow() {
+  const cur = DOC.curLevel || 0;
+  const ls = (DOC.levels || []).filter(l => l.id < cur).sort((a, b) => b.id - a.id);
+  return ls.length ? ls[0] : null;
+}
+/** Drawn faintly under the current storey, the way an architect works with the
+    floor below showing through. Off by default: it is a working aid, and a
+    plan that quietly shows two storeys is how the confusion started. */
+function isUnderlay(e) {
+  if (!VS.underlay) return false;
+  const b = levelBelow();
+  return !!b && entLevel(e) === b.id;
+}
+function visible(e) {
+  const l = layer(e.layer);
+  if (!l.on || l.frozen) return false;
+  return onCurLevel(e) || isUnderlay(e);
+}
+function pickable(e) {
+  const l = layer(e.layer);
+  /* an underlay is there to be traced over, not to be selected */
+  return l.on && !l.frozen && !l.lock && onCurLevel(e);
+}
 /** Counted when working out how big the drawing is. An off layer still counts,
     a frozen one does not — which is the practical difference between them and
     the reason both exist. */
@@ -3555,6 +3599,7 @@ const V = { z: 1, px: 0, py: 0, w: 0, h: 0, dpr: 1, rot: 0, kx: 1, ky: 1 };
 const VS = {
   ltScale: 1,             /* LTSCALE — multiplies every dash pattern           */
   mirrtext: 0,            /* MIRRTEXT — 0 keeps mirrored text readable         */
+  underlay: 0,            /* UNDERLAY — show the storey below, faintly         */
   trimmode: 1,            /* TRIMMODE — 0 leaves the originals uncut           */
   gridMajor: 5,           /* GRIDMAJOR — minor lines between two major ones    */
   gridSub: true,          /* adaptive subdivision below the nominal spacing    */
@@ -3904,7 +3949,11 @@ function flay(n) {
    freeze was added only the slow one learned about it, so frozen layers went
    on being drawn while every other part of the program agreed they were
    hidden. A test now asserts the two answer identically. */
-const fvis = e => { const l = flay(e.layer); return l.on && !l.frozen; };
+const fvis = e => {
+  const l = flay(e.layer);
+  if (!l.on || l.frozen) return false;
+  return onCurLevel(e) || isUnderlay(e);
+};
 const fcol = e => e.color || flay(e.layer).color;
 const flt = e => e.lt || flay(e.layer).lt || 'solid';
 const flw = e => (e.lw != null ? e.lw : flay(e.layer).lw);
@@ -4420,6 +4469,20 @@ function drawDim(e, col, mode) {
   }
 }
 function drawEnt(e, mode) {
+  /* The storey below is drawn faintly, which is the whole point of an
+     underlay: you trace over it and you can always tell which storey you are
+     looking at. Drawing it at full strength — as this did until it was looked
+     at — puts two plans on top of each other and tells you nothing. */
+  if (!mode && typeof isUnderlay === 'function' && isUnderlay(e)) {
+    const a0 = ctx.globalAlpha;
+    ctx.globalAlpha = a0 * UNDERLAY_A;
+    try { drawEntBody(e, mode); } finally { ctx.globalAlpha = a0; }
+    return;
+  }
+  return drawEntBody(e, mode);
+}
+const UNDERLAY_A = 0.28;
+function drawEntBody(e, mode) {
   const S = mode ? HL[mode] : null;
   const col = S ? (S.col || lift(fcol(e), S.lift)) : fcol(e);
   if (e.t === 'dim') return drawDim(e, col, mode);
@@ -12076,6 +12139,107 @@ function setAttValues(ins, vals) {
   return true;
 }
 
+/* ============================================================
+   Levels
+   ------------------------------------------------------------
+   A plan is a drawing of one storey. The model has always had
+   levels and walls have always mitred only against walls on
+   their own, but there was no way to change which one you were
+   drawing on — so the second storey was unreachable.
+   ============================================================ */
+function levelRec(id) { return (DOC.levels || []).find(l => l.id === id) || null; }
+function curLevelRec() { return levelRec(DOC.curLevel || 0) || (DOC.levels || [])[0]; }
+/** every level, lowest first — the order a section reads in */
+function levelsSorted() { return (DOC.levels || []).slice().sort((a, b) => a.elev - b.elev); }
+function gotoLevel(id) {
+  const l = levelRec(id);
+  if (!l) return false;
+  DOC.curLevel = l.id;
+  cliPrint('Drawing on ' + l.name + ' at ' + fmt(l.elev));
+  if (typeof syncUI === 'function') syncUI();
+  if (typeof buildLevels === 'function') buildLevels();
+  draw();
+  return true;
+}
+/** Add a storey above the top one, spaced by its floor-to-floor height. The
+    id is the next free integer, never a reused one: entities remember their
+    level by id, and reusing an id would silently move them. */
+function addLevel(name, elev, h) {
+  const ls = DOC.levels || (DOC.levels = []);
+  const top = levelsSorted()[ls.length - 1];
+  /* A monotonic counter, never max(existing)+1. Entities remember their level
+     by id: delete a level and derive the next id from what is left, and the
+     next level created takes the dead one's number — quietly adopting every
+     entity that still referenced it. */
+  const seen = ls.reduce((n, l) => Math.max(n, l.id), -1) + 1;
+  DOC.levelUid = Math.max(DOC.levelUid || 0, seen);
+  const id = DOC.levelUid++;
+  const rec = {
+    id,
+    name: name || ('Level ' + id),
+    elev: elev != null ? elev : (top ? top.elev + (top.h || 3000) : 0),
+    h: h || (top && top.h) || 3000,
+  };
+  ls.push(rec);
+  return rec;
+}
+defc('level', {
+  key: 'level', group: 'view',
+  hint: '<em>N</em>ew · <em>S</em>et current · <em>R</em>ename · <em>E</em>levation · <em>?</em> list',
+  init(c) { c.data = {}; },
+  text(c, s) {
+    const raw = String(s).trim(), k = raw.toLowerCase(), d = c.data;
+    if (d.await === 'new') {
+      begin(); const rec = addLevel(raw); commit('New level');
+      gotoLevel(rec.id);
+      return true;
+    }
+    if (d.await === 'set') {
+      const hit = (DOC.levels || []).find(l => String(l.name).toLowerCase() === k);
+      if (!hit) { cliPrint('No level called "' + raw + '".', 'err'); return true; }
+      gotoLevel(hit.id); return true;
+    }
+    if (d.await === 'rename') {
+      const l = curLevelRec(); if (!l) return true;
+      begin(); l.name = raw || l.name; commit('Rename level');
+      if (typeof buildLevels === 'function') buildLevels();
+      return true;
+    }
+    if (d.await === 'elev') {
+      const v = parseLen(raw);
+      if (isNaN(v)) { cliPrint('Type an elevation.', 'err'); return true; }
+      const l = curLevelRec(); if (!l) return true;
+      begin(); l.elev = v; commit('Level elevation');
+      cliPrint(l.name + ' is now at ' + fmt(v));
+      if (typeof buildLevels === 'function') buildLevels();
+      draw();
+      return true;
+    }
+    if (k === 'n' || k === 'new') { d.await = 'new'; hint('Name for the new level:'); return true; }
+    if (k === 's' || k === 'set') { d.await = 'set'; hint('Level to draw on:'); return true; }
+    if (k === 'r' || k === 'rename') { d.await = 'rename'; hint('New name for this level:'); return true; }
+    if (k === 'e' || k === 'elevation') { d.await = 'elev'; hint('Elevation for this level:'); return true; }
+    if (k === '?' || k === 'list') {
+      cliPrint(levelsSorted().map(l =>
+        (l.id === (DOC.curLevel || 0) ? '* ' : '  ') + l.name + '  ' + fmt(l.elev)).join('\n'));
+      return true;
+    }
+    return false;
+  },
+});
+defm('LEVELUP', () => {
+  const ls = levelsSorted();
+  const i = ls.findIndex(l => l.id === (DOC.curLevel || 0));
+  if (i < 0 || i >= ls.length - 1) return echo('Already on the top level');
+  gotoLevel(ls[i + 1].id);
+}, { group: 'view' });
+defm('LEVELDOWN', () => {
+  const ls = levelsSorted();
+  const i = ls.findIndex(l => l.id === (DOC.curLevel || 0));
+  if (i <= 0) return echo('Already on the bottom level');
+  gotoLevel(ls[i - 1].id);
+}, { group: 'view' });
+
 /* ===== 10-dxf.js ===== */
 /* ============================================================
    ORTHOGRAPH — 10 DXF in and out
@@ -13119,6 +13283,7 @@ function saveNative() {
     sheets: DOC.sheets || [], curSheet: DOC.curSheet,
     layerStates: DOC.layerStates || [],
     dimStyles: dimStyles(), curDim: DOC.curDim || 'Standard',
+    levelUid: DOC.levelUid || 0,
     ents: [...DOC.ents.values()].map(roomForSave),
   });
 }
@@ -13170,6 +13335,7 @@ function loadNative(txt) {
   DOC.layerStates = Array.isArray(d.layerStates) ? d.layerStates : [];
   DOC.dimStyles = Array.isArray(d.dimStyles) && d.dimStyles.length ? d.dimStyles : null;
   DOC.curDim = d.curDim || 'Standard';
+  DOC.levelUid = d.levelUid || 0;
   DOC.sheets = Array.isArray(d.sheets) ? d.sheets.filter(sh => sh && sh.w > 0 && sh.h > 0) : [];
   DOC.curSheet = DOC.sheets.some(sh => sh.id === d.curSheet) ? d.curSheet : null;
   SHEET_UID = Math.max(1, ...DOC.sheets.map(sh => (sh.id || 0) + 1),
@@ -16149,6 +16315,41 @@ function popMenu(items, anchor) {
   return m;
 }
 
+/* The level switcher. Highest storey at the top, because that is how a section
+   reads and how anyone thinks about a building. Clicking one changes what the
+   plan is a drawing of. */
+function buildLevels() {
+  const w = $('#levels'); if (!w) return;
+  clearNode(w);
+  const list = levelsSorted().slice().reverse();
+  for (const l of list) {
+    const row = el('div', 'lvl' + (l.id === (DOC.curLevel || 0) ? ' cur' : ''));
+    const nm = el('span', 'nm', esc(l.name));
+    nm.title = l.name + ' — double-click to rename';
+    nm.ondblclick = ev => {
+      ev.stopPropagation();
+      const n = prompt('Level name', l.name);
+      if (n == null) return;
+      begin(); l.name = String(n).trim() || l.name; commit('Rename level');
+      buildLevels();
+    };
+    const el2 = el('span', 'el', esc(fmt(l.elev)));
+    el2.title = 'Elevation — double-click to change';
+    el2.ondblclick = ev => {
+      ev.stopPropagation();
+      const v = prompt('Elevation for ' + l.name, String(l.elev));
+      if (v == null) return;
+      const n = parseLen(v);
+      if (isNaN(n)) return toast('That is not an elevation');
+      begin(); l.elev = n; commit('Level elevation');
+      buildLevels(); draw();
+    };
+    row.append(nm, el2);
+    row.onclick = () => gotoLevel(l.id);
+    w.appendChild(row);
+  }
+}
+
 
 /* ===== 14-events.js ===== */
 /* ============================================================
@@ -16186,7 +16387,7 @@ function toast(s) {
 }
 function syncUI() {
   if (typeof buildSheetTabs === 'function') buildSheetTabs();
-  buildLayers(); buildProps(); syncTools();
+  buildLayers(); buildLevels(); buildProps(); syncTools();
   const u = $('#mUndo'), r = $('#mRedo');
   if (u) u.disabled = !HIST.past.length;
   if (r) r.disabled = !HIST.future.length;
@@ -17004,6 +17205,10 @@ function boot() {
   HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;
   document.querySelectorAll('.mode').forEach(b => b.onclick = () => setMode(b.dataset.mode));
   document.querySelectorAll('.tg').forEach(b => b.onclick = () => tgl(b.dataset.tg));
+  $('#addLvl').onclick = () => {
+    begin(); const rec = addLevel(); commit('New level');
+    gotoLevel(rec.id);
+  };
   $('#addLay').onclick = () => {
     let i = 1, n; do { n = 'LAYER' + i++; } while (DOC.layers.some(l => l.name === n));
     begin(); touchLayers(); DOC.layers.push(newLayer(n, '#ffd166')); DOC.cur = n; commit('Layer added'); buildLayers();

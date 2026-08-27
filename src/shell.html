@@ -240,6 +240,15 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
    Model space and each sheet, along the bottom, exactly where every CAD
    program has put them for thirty years. They are how anyone discovers that
    paper space exists at all. */
+/* ---------------- levels ----------------
+   Highest storey at the top, the way a section reads. */
+#levels{max-height:132px;overflow:auto}
+#levels .lvl{display:flex;align-items:center;gap:7px;padding:4px 11px;cursor:pointer;
+  font-size:11px;color:var(--tx1)}
+#levels .lvl:hover{background:var(--bg2)}
+#levels .lvl.cur{color:var(--amber);background:var(--bg2)}
+#levels .lvl .el{margin-left:auto;color:var(--tx2);font:10px/1 'JetBrains Mono',monospace}
+#levels .lvl .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #tabs{display:flex;align-items:flex-end;gap:2px;padding:0 11px;height:24px;flex:none;
   border-bottom:1px solid var(--bd);overflow-x:auto;scrollbar-width:none}
 #tabs::-webkit-scrollbar{display:none}
@@ -499,6 +508,8 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
   </div>
 
   <div id="panel">
+    <div class="ph">Levels <button id="addLvl" title="New level above">+</button></div>
+    <div id="levels"></div>
     <div class="ph">Layers <button id="addLay" title="New layer">+</button></div>
     <div id="layers"></div>
     <div class="ph">Properties</div>

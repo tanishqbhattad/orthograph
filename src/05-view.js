@@ -16,6 +16,7 @@ const V = { z: 1, px: 0, py: 0, w: 0, h: 0, dpr: 1, rot: 0, kx: 1, ky: 1 };
 const VS = {
   ltScale: 1,             /* LTSCALE — multiplies every dash pattern           */
   mirrtext: 0,            /* MIRRTEXT — 0 keeps mirrored text readable         */
+  underlay: 0,            /* UNDERLAY — show the storey below, faintly         */
   trimmode: 1,            /* TRIMMODE — 0 leaves the originals uncut           */
   gridMajor: 5,           /* GRIDMAJOR — minor lines between two major ones    */
   gridSub: true,          /* adaptive subdivision below the nominal spacing    */
@@ -365,7 +366,11 @@ function flay(n) {
    freeze was added only the slow one learned about it, so frozen layers went
    on being drawn while every other part of the program agreed they were
    hidden. A test now asserts the two answer identically. */
-const fvis = e => { const l = flay(e.layer); return l.on && !l.frozen; };
+const fvis = e => {
+  const l = flay(e.layer);
+  if (!l.on || l.frozen) return false;
+  return onCurLevel(e) || isUnderlay(e);
+};
 const fcol = e => e.color || flay(e.layer).color;
 const flt = e => e.lt || flay(e.layer).lt || 'solid';
 const flw = e => (e.lw != null ? e.lw : flay(e.layer).lw);
@@ -881,6 +886,20 @@ function drawDim(e, col, mode) {
   }
 }
 function drawEnt(e, mode) {
+  /* The storey below is drawn faintly, which is the whole point of an
+     underlay: you trace over it and you can always tell which storey you are
+     looking at. Drawing it at full strength — as this did until it was looked
+     at — puts two plans on top of each other and tells you nothing. */
+  if (!mode && typeof isUnderlay === 'function' && isUnderlay(e)) {
+    const a0 = ctx.globalAlpha;
+    ctx.globalAlpha = a0 * UNDERLAY_A;
+    try { drawEntBody(e, mode); } finally { ctx.globalAlpha = a0; }
+    return;
+  }
+  return drawEntBody(e, mode);
+}
+const UNDERLAY_A = 0.28;
+function drawEntBody(e, mode) {
   const S = mode ? HL[mode] : null;
   const col = S ? (S.col || lift(fcol(e), S.lift)) : fcol(e);
   if (e.t === 'dim') return drawDim(e, col, mode);

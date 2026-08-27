@@ -136,6 +136,7 @@ function resetDoc() {
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];
   DOC.dimStyles = stdDimStyles(); DOC.curDim = 'Standard';
+  DOC.levelUid = (DOC.levels || []).length;
   /* a document straight off the shelf has nothing unsaved in it */
   DOC.savedSeq = HIST.seq;
   idxInvalidate(); HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;
@@ -335,6 +336,9 @@ function addEnt(e) {
   if (e.color === undefined) e.color = DOC.cecolor || null;
   if (e.lw === undefined) e.lw = DOC.celweight != null ? DOC.celweight : null;
   if (e.lt === undefined) e.lt = DOC.celtype || null;
+  /* Everything belongs to a storey. Stamping it here rather than at each
+     command means nothing can be drawn onto no level at all. */
+  if (e.lvl === undefined) e.lvl = DOC.curLevel || 0;
   DOC.ents.set(e.id, e); markDirty(e.id); DOCV++;
   if (JN.on) JN.added.add(e.id);
   if (IDX) idxInsert(e);
@@ -446,8 +450,37 @@ function redo() {
 function entColor(e) { return e.color || layer(e.layer).color; }
 function entLt(e) { return e.lt || layer(e.layer).lt || 'solid'; }
 function entLw(e) { return e.lw != null ? e.lw : layer(e.layer).lw; }
-function visible(e) { const l = layer(e.layer); return l.on && !l.frozen; }
-function pickable(e) { const l = layer(e.layer); return l.on && !l.frozen && !l.lock; }
+/* ---------------- levels ----------------
+   A plan is a drawing of one storey. Every level drew at once, which on a
+   two-storey building means the first floor's walls sitting on top of the
+   ground floor's and no way to tell which is which. Absent means level 0, so
+   a single-storey drawing behaves exactly as it always did. */
+function entLevel(e) { return e.lvl || 0; }
+function onCurLevel(e) { return entLevel(e) === (DOC.curLevel || 0); }
+/** the storey immediately below the current one, or null */
+function levelBelow() {
+  const cur = DOC.curLevel || 0;
+  const ls = (DOC.levels || []).filter(l => l.id < cur).sort((a, b) => b.id - a.id);
+  return ls.length ? ls[0] : null;
+}
+/** Drawn faintly under the current storey, the way an architect works with the
+    floor below showing through. Off by default: it is a working aid, and a
+    plan that quietly shows two storeys is how the confusion started. */
+function isUnderlay(e) {
+  if (!VS.underlay) return false;
+  const b = levelBelow();
+  return !!b && entLevel(e) === b.id;
+}
+function visible(e) {
+  const l = layer(e.layer);
+  if (!l.on || l.frozen) return false;
+  return onCurLevel(e) || isUnderlay(e);
+}
+function pickable(e) {
+  const l = layer(e.layer);
+  /* an underlay is there to be traced over, not to be selected */
+  return l.on && !l.frozen && !l.lock && onCurLevel(e);
+}
 /** Counted when working out how big the drawing is. An off layer still counts,
     a frozen one does not — which is the practical difference between them and
     the reason both exist. */

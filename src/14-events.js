@@ -33,7 +33,7 @@ function toast(s) {
 }
 function syncUI() {
   if (typeof buildSheetTabs === 'function') buildSheetTabs();
-  buildLayers(); buildProps(); syncTools();
+  buildLayers(); buildLevels(); buildProps(); syncTools();
   const u = $('#mUndo'), r = $('#mRedo');
   if (u) u.disabled = !HIST.past.length;
   if (r) r.disabled = !HIST.future.length;
@@ -851,6 +851,10 @@ function boot() {
   HIST.past.length = 0; HIST.future.length = 0; HIST.weight = 0;
   document.querySelectorAll('.mode').forEach(b => b.onclick = () => setMode(b.dataset.mode));
   document.querySelectorAll('.tg').forEach(b => b.onclick = () => tgl(b.dataset.tg));
+  $('#addLvl').onclick = () => {
+    begin(); const rec = addLevel(); commit('New level');
+    gotoLevel(rec.id);
+  };
   $('#addLay').onclick = () => {
     let i = 1, n; do { n = 'LAYER' + i++; } while (DOC.layers.some(l => l.name === n));
     begin(); touchLayers(); DOC.layers.push(newLayer(n, '#ffd166')); DOC.cur = n; commit('Layer added'); buildLayers();
