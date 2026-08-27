@@ -1049,6 +1049,7 @@ GEOM.hatch = {
   grips: () => [],
   xf(h, fn) { h.loops = (h.loops || []).map(L => L.map(fn)); },
   area: h => (h.loops || []).reduce((a, L) => a + polyArea(L), 0),
+  len: h => (h.loops || []).reduce((a, L) => a + polyLen(L, true), 0),
 };
 
 /* ---------------- inquiry ---------------- */

@@ -30,7 +30,9 @@ function roofRise(rf, p) {
   return Math.max(0, d) * Math.tan(pitch);
 }
 
+/* a slab's length is the way round it; roof inherits this below */
 GEOM.floor = {
+  len: f => polyLen(f.pts || [], true),
   shapes(f) {
     const pts = f.pts || [];
     if (pts.length < 3) return [];

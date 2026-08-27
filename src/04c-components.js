@@ -272,6 +272,7 @@ GEOM.room = {
     _roomCache.delete(r.id);
   },
   area: r => polyArea(roomBoundary(r) || r.pts || []),
+  len: r => polyLen(roomBoundary(r) || r.pts || [], true),   /* its perimeter */
 };
 
 /* ---------------- structural grid ---------------- */

@@ -894,7 +894,11 @@ function markDirty(id) { if (id != null) DIRTY.add(id); }
 const IDXdirty = new Set();
 const IDX_MAX_CELLS = 96;
 
-function idxInvalidate() { IDX = null; IDXok = false; IDXdirty.clear(); DOCV++; }
+function idxInvalidate() {
+  IDX = null; IDXok = false; IDXdirty.clear(); DOCV++;
+  /* a structural change: the node map can no longer be patched */
+  if (typeof wallCacheInvalidate === 'function') wallCacheInvalidate();
+}
 const ikey = (i, j) => i + ',' + j;
 
 function buildIndex() {
@@ -1005,7 +1009,16 @@ function touch(e) {
   return e;
 }
 /** touch + schedule reindex. The normal way to edit a live entity. */
-function mut(e) { touch(e); if (e && e.id != null) { IDXdirty.add(e); markDirty(e.id); DOCV++; } return e; }
+function mut(e) {
+  touch(e);
+  if (e && e.id != null) {
+    /* the wall node map is patched here, while the OLD position is still on
+       the entity; see wallCacheTouch for why that moment is the only one */
+    if (typeof wallCacheTouch === 'function') wallCacheTouch(e);
+    IDXdirty.add(e); markDirty(e.id); DOCV++;
+  }
+  return e;
+}
 function touchLayers() { if (JN.on && !JN.layers) JN.layers = clone(DOC.layers); }
 
 /* ---------------- sheets (paper space) ----------------
@@ -1073,10 +1086,16 @@ function addEnt(e) {
   DOC.ents.set(e.id, e); markDirty(e.id); DOCV++;
   if (JN.on) JN.added.add(e.id);
   if (IDX) idxInsert(e);
+  /* Structural: a wall can appear without a mut() ever being called on it, so
+     the node map cannot be patched through this and must be rebuilt. Hooked
+     here rather than in idxInsert, which only runs when the spatial index
+     happens to exist already. */
+  if (typeof wallCacheStructural === 'function' && wallCacheStructural(e)) wallCacheInvalidate();
   return e;
 }
 function delEnt(id) {
   const e = DOC.ents.get(id); if (!e) return;
+  if (typeof wallCacheStructural === 'function' && wallCacheStructural(e)) wallCacheInvalidate();
   if (JN.on) {
     if (JN.added.has(id)) JN.added.delete(id);    /* created and killed in one op */
     else JN.removed.set(id, JN.before.get(id) || clone(e));
@@ -1783,6 +1802,12 @@ function entLength(e) {
   if (e.t === 'arc') return e.r * arcSweep(e);
   if (e.t === 'line') return dist(e.a, e.b);
   if (e.t === 'pline' || e.t === 'spline') return polyLen(e.pts, e.closed);
+  /* A parametric object knows its own length. Without this the fallback
+     measures the way round whatever it draws as, which for a compound wall is
+     the perimeter of every layer line in it — a 5m cavity wall came back as
+     66m. It is also the flattening that made summing a selection cost more
+     than everything else in an edit put together. */
+  if (GEOM[e.t] && GEOM[e.t].len) return GEOM[e.t].len(e);
   return polyLen(poly(e, 64), false);
 }
 function entArea(e) {
@@ -2422,9 +2447,24 @@ const nk = v => Math.round(v / NTOL);
 const MITRE_MAX = 2;
 const WALL_MIN_T = 10;                            /* thinnest wall a face grip may make */
 
-let WNODES = null, WNODESv = -1;
-function wallNodes() {
-  if (WNODES && WNODESv === DOCV) return WNODES;
+/* ---------------- the wall node map ----------------
+   Every wall end, bucketed by position, so a junction can be solved by looking
+   at one bucket instead of at every wall.
+
+   It used to be thrown away whenever DOCV moved, which is on every mut(). That
+   is free until something asks for wall geometry between two mutations — and
+   moving a selection does exactly that — at which point the whole map is
+   rebuilt from every wall in the drawing, once per wall. Two thousand walls
+   measured 23.6 SECONDS; the mutations themselves took 1ms.
+
+   So it is patched instead. mut() runs BEFORE the entity changes, which is the
+   one moment the wall's OLD position is still known, so its two entries can be
+   lifted out precisely then and put back at the new position on the next read.
+   Anything structural — an add, a delete, a whole new document — still forces
+   a full rebuild, because then the map cannot be reasoned about. */
+let WNODES = null, WNODESv = -1, WNODE_OK = false;
+const WNODE_PENDING = new Set();
+function wallNodesRebuild() {
   const m = new Map();
   for (const e of DOC.ents.values()) {
     if (e.t !== 'wall') continue;
@@ -2435,7 +2475,62 @@ function wallNodes() {
       a.push({ w: e, end, p });
     }
   }
-  WNODES = m; WNODESv = DOCV; return m;
+  WNODES = m; WNODESv = DOCV; WNODE_OK = true; WNODE_PENDING.clear();
+  return m;
+}
+/** Nothing derived from the walls can be reasoned about any more: rebuild the
+    lot on the next read. */
+function wallCacheInvalidate() {
+  WNODE_OK = false; WNODE_PENDING.clear();
+  WALLIST_OK = false;
+  WIDX_OK = false; WIDX_PENDING.clear();
+  OPENIDX_OK = false; OPENIDX_PENDING.clear();
+}
+/** an add or delete of one of these is what "structural" means */
+function wallCacheStructural(e) {
+  return !!e && (e.t === 'wall' || e.t === 'door' || e.t === 'window');
+}
+/** Called from mut() while the entity still holds its OLD position, which is
+    the only moment its existing cache entries can be found to lift out. */
+function wallCacheTouch(e) {
+  if (!e) return;
+  if (e.t === 'door' || e.t === 'window') return openIndexTouch(e);
+  if (e.t !== 'wall') return;
+  wallIndexTouch(e);
+  wallNodeTouch(e);
+}
+function wallNodeTouch(w) {
+  if (!WNODES || !WNODE_OK) return;
+  for (const end of [0, 1]) {
+    const p = end ? w.b : w.a;
+    if (!p) continue;
+    const k = nk(p[0]) + ':' + nk(p[1]);
+    const a = WNODES.get(k);
+    if (!a) continue;
+    const i = a.findIndex(x => x.w === w && x.end === end);
+    if (i >= 0) a.splice(i, 1);
+    if (!a.length) WNODES.delete(k);
+  }
+  WNODE_PENDING.add(w);
+}
+function wallNodes() {
+  if (!WNODES || !WNODE_OK) return wallNodesRebuild();
+  if (WNODE_PENDING.size) {
+    for (const w of WNODE_PENDING) {
+      /* a wall deleted since it was touched simply does not go back in */
+      if (DOC.ents.get(w.id) !== w) continue;
+      for (const end of [0, 1]) {
+        const p = end ? w.b : w.a;
+        if (!p) continue;
+        const k = nk(p[0]) + ':' + nk(p[1]);
+        let a = WNODES.get(k); if (!a) WNODES.set(k, a = []);
+        a.push({ w, end, p });
+      }
+    }
+    WNODE_PENDING.clear();
+  }
+  WNODESv = DOCV;
+  return WNODES;
 }
 /** every wall end sitting on point p (searches the 3×3 key neighbourhood) */
 function nodesAt(p) {
@@ -2447,11 +2542,13 @@ function nodesAt(p) {
   }
   return out;
 }
-let WALLIST = null, WALLISTv = -1;
+/* Which walls exist cannot change because one of them moved, so this is NOT
+   keyed on DOCV: only an add, a delete or a new document disturbs it. */
+let WALLIST = null, WALLIST_OK = false;
 function allWalls() {
-  if (WALLIST && WALLISTv === DOCV) return WALLIST;
+  if (WALLIST && WALLIST_OK) return WALLIST;
   WALLIST = [...DOC.ents.values()].filter(e => e.t === 'wall');
-  WALLISTv = DOCV; return WALLIST;
+  WALLIST_OK = true; return WALLIST;
 }
 /* ------------------------------------------------------------
    A wall-only spatial hash.
@@ -2461,7 +2558,8 @@ function allWalls() {
    a cycle. This is built from the RAW offset rectangle instead,
    which depends on nothing but the wall itself.
    ------------------------------------------------------------ */
-let WIDX = null, WIDXv = -1;
+let WIDX = null, WIDX_OK = false;
+const WIDX_PENDING = new Set();
 function wallRawBox(w) {
   const o = wallRawOutline(w);
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -2471,8 +2569,48 @@ function wallRawBox(w) {
   }
   return [x0, y0, x1, y1];
 }
+/** run fn over every cell key the wall's raw box covers, or '*' if that is an
+    absurd number of them */
+function widxKeys(w, cell, fn) {
+  const b = wallRawBox(w);
+  const i0 = Math.floor(b[0] / cell), i1 = Math.floor(b[2] / cell);
+  const j0 = Math.floor(b[1] / cell), j1 = Math.floor(b[3] / cell);
+  if (!isFinite(i0) || !isFinite(j0) || (i1 - i0 + 1) * (j1 - j0 + 1) > 4096) return fn('*');
+  for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) fn(i + ':' + j);
+}
+/** Lift a wall out of the cells its OLD position put it in. The cell size is
+    left alone: insert and lookup only have to agree with each other, and a
+    stale bucket size costs a little breadth, never a wrong answer. */
+function wallIndexTouch(w) {
+  if (!WIDX || !WIDX_OK) return;
+  widxKeys(w, WIDX.cell, k => {
+    const a = WIDX.cells.get(k);
+    if (!a) return;
+    const i = a.indexOf(w);
+    if (i >= 0) a.splice(i, 1);
+    if (!a.length) WIDX.cells.delete(k);
+  });
+  WIDX_PENDING.add(w);
+}
+function widxInsert(ix, w) {
+  widxKeys(w, ix.cell, k => {
+    let a = ix.cells.get(k); if (!a) ix.cells.set(k, a = []);
+    a.push(w);
+  });
+}
 function wallIndex() {
-  if (WIDX && WIDXv === DOCV) return WIDX;
+  if (WIDX && WIDX_OK) {
+    if (WIDX_PENDING.size) {
+      for (const w of WIDX_PENDING) {
+        if (DOC.ents.get(w.id) !== w) continue;   /* deleted since: stays out */
+        widxInsert(WIDX, w);
+        /* the search radius may only ever grow between rebuilds */
+        const t = wallT(w); if (t > WIDX.maxT) WIDX.maxT = t;
+      }
+      WIDX_PENDING.clear();
+    }
+    return WIDX;
+  }
   const walls = allWalls();
   /* Cell size from the median wall, not the longest: one long wall must not
      collapse everything into a single bucket. Long walls are handled by the
@@ -2482,19 +2620,9 @@ function wallIndex() {
   for (const w of walls) { maxT = Math.max(maxT, wallT(w)); lens.push(wallLen(w) + wallT(w)); }
   lens.sort((a, b) => a - b);
   const cell = Math.max(lens.length ? lens[Math.floor(lens.length * 0.6)] : 1000, 1);
-  const cells = new Map();
-  for (const w of walls) {
-    const b = wallRawBox(w);
-    const i0 = Math.floor(b[0] / cell), i1 = Math.floor(b[2] / cell);
-    const j0 = Math.floor(b[1] / cell), j1 = Math.floor(b[3] / cell);
-    if ((i1 - i0 + 1) * (j1 - j0 + 1) > 4096) { cells.set('*', (cells.get('*') || []).concat([w])); continue; }
-    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
-      const k = i + ':' + j;
-      let a = cells.get(k); if (!a) cells.set(k, a = []);
-      a.push(w);
-    }
-  }
-  WIDX = { cell, cells, walls, maxT }; WIDXv = DOCV;
+  WIDX = { cell, cells: new Map(), walls, maxT };
+  for (const w of walls) widxInsert(WIDX, w);
+  WIDX_OK = true; WIDX_PENDING.clear();
   return WIDX;
 }
 function wallsInBox(b) {
@@ -2519,16 +2647,40 @@ function wallsNearPoint(p) {
   const r = wallIndex().maxT / 2 + NTOL * 4 + 1;
   return wallsInBox([p[0] - r, p[1] - r, p[0] + r, p[1] + r]);
 }
-let OPENIDX = null, OPENIDXv = -1;
+let OPENIDX = null, OPENIDX_OK = false;
+const OPENIDX_PENDING = new Set();
+/** Called with the opening's OLD host still on it. Sliding a door along its
+    wall does not change this map at all, but rehosting one does, and only the
+    old value says which bucket to take it out of. */
+function openIndexTouch(o) {
+  if (!OPENIDX || !OPENIDX_OK) return;
+  const a = OPENIDX.get(o.host);
+  if (a) {
+    const i = a.indexOf(o);
+    if (i >= 0) a.splice(i, 1);
+    if (!a.length) OPENIDX.delete(o.host);
+  }
+  OPENIDX_PENDING.add(o);
+}
 function openingsByHost() {
-  if (OPENIDX && OPENIDXv === DOCV) return OPENIDX;
+  if (OPENIDX && OPENIDX_OK) {
+    if (OPENIDX_PENDING.size) {
+      for (const o of OPENIDX_PENDING) {
+        if (DOC.ents.get(o.id) !== o) continue;
+        let a = OPENIDX.get(o.host); if (!a) OPENIDX.set(o.host, a = []);
+        a.push(o);
+      }
+      OPENIDX_PENDING.clear();
+    }
+    return OPENIDX;
+  }
   const m = new Map();
   for (const e of DOC.ents.values()) {
     if (e.t !== 'door' && e.t !== 'window') continue;
     let a = m.get(e.host); if (!a) m.set(e.host, a = []);
     a.push(e);
   }
-  OPENIDX = m; OPENIDXv = DOCV; return m;
+  OPENIDX = m; OPENIDX_OK = true; OPENIDX_PENDING.clear(); return m;
 }
 
 /* ---------------- wall basics ---------------- */
@@ -2877,6 +3029,8 @@ GEOM.wall = {
   },
   xf(w, fn) { w.a = fn(w.a); w.b = fn(w.b); wallReclampOpenings(w); },
   area: w => polyArea(wallOutline(w)),
+  /* the run of the wall, which is what gets ordered and scheduled */
+  len: w => wallLen(w),
 };
 /** drag one face across to set the thickness. The opposite face does not
     budge: the reference line slides by exactly the offset it loses. */
@@ -3117,6 +3271,8 @@ const openingGeom = mk => ({
 });
 GEOM.door = openingGeom(doorShapes);
 GEOM.window = openingGeom(windowShapes);
+/* an opening is as long as the hole it makes */
+GEOM.door.len = GEOM.window.len = o => openW(o);
 
 function addOpening(kind, w, d, typeId) {
   const wd = kind === 'door' ? (doorType(typeId) || {}).w : (winType(typeId) || {}).w;
@@ -3419,6 +3575,7 @@ GEOM.room = {
     _roomCache.delete(r.id);
   },
   area: r => polyArea(roomBoundary(r) || r.pts || []),
+  len: r => polyLen(roomBoundary(r) || r.pts || [], true),   /* its perimeter */
 };
 
 /* ---------------- structural grid ---------------- */
@@ -11117,6 +11274,7 @@ GEOM.hatch = {
   grips: () => [],
   xf(h, fn) { h.loops = (h.loops || []).map(L => L.map(fn)); },
   area: h => (h.loops || []).reduce((a, L) => a + polyArea(L), 0),
+  len: h => (h.loops || []).reduce((a, L) => a + polyLen(L, true), 0),
 };
 
 /* ---------------- inquiry ---------------- */
@@ -13129,7 +13287,9 @@ function roofRise(rf, p) {
   return Math.max(0, d) * Math.tan(pitch);
 }
 
+/* a slab's length is the way round it; roof inherits this below */
 GEOM.floor = {
+  len: f => polyLen(f.pts || [], true),
   shapes(f) {
     const pts = f.pts || [];
     if (pts.length < 3) return [];
@@ -16494,15 +16654,33 @@ function genericProps(w, e, set) {
   if (A) ro(w, 'Area', fmtArea(A));
   if (!L && !A) ro(w, 'Type', e.t);
 }
-function totals(w, es) {
-  grpRow(w, 'Totals');
+/* The panel and the quick-properties card both want the totals for the same
+   selection, and buildProps draws both from one commit. Measuring is the most
+   expensive thing either of them does, so it happens once and both read it. */
+let QTY = null;
+/* Not by array identity: the quick-properties card re-filters the selection
+   into a fresh array on its way in. Walking the two lists to compare them is
+   pointer work against a cache that saves flattening every object in them. */
+function sameSel(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+function selQuantities(es) {
+  if (QTY && QTY.v === DOCV && sameSel(QTY.es, es)) return QTY;
   let L = 0, A = 0;
   const counts = {};
   for (const e of es) { L += entLength(e); A += entArea(e); counts[e.t] = (counts[e.t] || 0) + 1; }
+  QTY = { es: es.slice(), v: DOCV, L, A, counts };
+  return QTY;
+}
+function totals(w, es) {
+  grpRow(w, 'Totals');
+  const q = selQuantities(es);
   ro(w, 'Count', es.length);
-  for (const k in counts) ro(w, '· ' + k, counts[k]);
-  if (L) ro(w, 'Length', fmt(L));
-  if (A) ro(w, 'Area', fmtArea(A));
+  for (const k in q.counts) ro(w, '· ' + k, q.counts[k]);
+  if (q.L) ro(w, 'Length', fmt(q.L));
+  if (q.A) ro(w, 'Area', fmtArea(q.A));
 }
 
 /* ============================================================
@@ -16519,10 +16697,9 @@ function quickFields(e) { return e && (QUICK[e.t] || QUICK._default); }
     bag of walls and doors would be a lie about what an edit will touch. */
 function quickCommon(w, es, upd) {
   ro(w, 'Types', kindSummary(es));
-  let L = 0, A = 0;
-  for (const e of es) { L += entLength(e); A += entArea(e); }
-  if (L) ro(w, 'Total length', fmt(L));
-  else if (A) ro(w, 'Total area', fmtArea(A));
+  const q = selQuantities(es);
+  if (q.L) ro(w, 'Total length', fmt(q.L));
+  else if (q.A) ro(w, 'Total area', fmtArea(q.A));
   const lay = es.every(e => e.layer === es[0].layer) ? es[0].layer : '';
   selRow(w, 'Layer', (lay ? [] : [['', '(varies)']]).concat(DOC.layers.map(l => [l.name, l.name])), lay,
     v => { if (!v) return; begin(); es.forEach(x => { mut(x); x.layer = v; }); commit('Layer'); draw(); buildProps(); });

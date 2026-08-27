@@ -559,6 +559,12 @@ function entLength(e) {
   if (e.t === 'arc') return e.r * arcSweep(e);
   if (e.t === 'line') return dist(e.a, e.b);
   if (e.t === 'pline' || e.t === 'spline') return polyLen(e.pts, e.closed);
+  /* A parametric object knows its own length. Without this the fallback
+     measures the way round whatever it draws as, which for a compound wall is
+     the perimeter of every layer line in it — a 5m cavity wall came back as
+     66m. It is also the flattening that made summing a selection cost more
+     than everything else in an edit put together. */
+  if (GEOM[e.t] && GEOM[e.t].len) return GEOM[e.t].len(e);
   return polyLen(poly(e, 64), false);
 }
 function entArea(e) {

@@ -150,6 +150,8 @@ const openingGeom = mk => ({
 });
 GEOM.door = openingGeom(doorShapes);
 GEOM.window = openingGeom(windowShapes);
+/* an opening is as long as the hole it makes */
+GEOM.door.len = GEOM.window.len = o => openW(o);
 
 function addOpening(kind, w, d, typeId) {
   const wd = kind === 'door' ? (doorType(typeId) || {}).w : (winType(typeId) || {}).w;

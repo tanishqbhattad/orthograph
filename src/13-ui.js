@@ -840,15 +840,33 @@ function genericProps(w, e, set) {
   if (A) ro(w, 'Area', fmtArea(A));
   if (!L && !A) ro(w, 'Type', e.t);
 }
-function totals(w, es) {
-  grpRow(w, 'Totals');
+/* The panel and the quick-properties card both want the totals for the same
+   selection, and buildProps draws both from one commit. Measuring is the most
+   expensive thing either of them does, so it happens once and both read it. */
+let QTY = null;
+/* Not by array identity: the quick-properties card re-filters the selection
+   into a fresh array on its way in. Walking the two lists to compare them is
+   pointer work against a cache that saves flattening every object in them. */
+function sameSel(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+function selQuantities(es) {
+  if (QTY && QTY.v === DOCV && sameSel(QTY.es, es)) return QTY;
   let L = 0, A = 0;
   const counts = {};
   for (const e of es) { L += entLength(e); A += entArea(e); counts[e.t] = (counts[e.t] || 0) + 1; }
+  QTY = { es: es.slice(), v: DOCV, L, A, counts };
+  return QTY;
+}
+function totals(w, es) {
+  grpRow(w, 'Totals');
+  const q = selQuantities(es);
   ro(w, 'Count', es.length);
-  for (const k in counts) ro(w, '· ' + k, counts[k]);
-  if (L) ro(w, 'Length', fmt(L));
-  if (A) ro(w, 'Area', fmtArea(A));
+  for (const k in q.counts) ro(w, '· ' + k, q.counts[k]);
+  if (q.L) ro(w, 'Length', fmt(q.L));
+  if (q.A) ro(w, 'Area', fmtArea(q.A));
 }
 
 /* ============================================================
@@ -865,10 +883,9 @@ function quickFields(e) { return e && (QUICK[e.t] || QUICK._default); }
     bag of walls and doors would be a lie about what an edit will touch. */
 function quickCommon(w, es, upd) {
   ro(w, 'Types', kindSummary(es));
-  let L = 0, A = 0;
-  for (const e of es) { L += entLength(e); A += entArea(e); }
-  if (L) ro(w, 'Total length', fmt(L));
-  else if (A) ro(w, 'Total area', fmtArea(A));
+  const q = selQuantities(es);
+  if (q.L) ro(w, 'Total length', fmt(q.L));
+  else if (q.A) ro(w, 'Total area', fmtArea(q.A));
   const lay = es.every(e => e.layer === es[0].layer) ? es[0].layer : '';
   selRow(w, 'Layer', (lay ? [] : [['', '(varies)']]).concat(DOC.layers.map(l => [l.name, l.name])), lay,
     v => { if (!v) return; begin(); es.forEach(x => { mut(x); x.layer = v; }); commit('Layer'); draw(); buildProps(); });

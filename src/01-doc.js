@@ -164,7 +164,11 @@ function markDirty(id) { if (id != null) DIRTY.add(id); }
 const IDXdirty = new Set();
 const IDX_MAX_CELLS = 96;
 
-function idxInvalidate() { IDX = null; IDXok = false; IDXdirty.clear(); DOCV++; }
+function idxInvalidate() {
+  IDX = null; IDXok = false; IDXdirty.clear(); DOCV++;
+  /* a structural change: the node map can no longer be patched */
+  if (typeof wallCacheInvalidate === 'function') wallCacheInvalidate();
+}
 const ikey = (i, j) => i + ',' + j;
 
 function buildIndex() {
@@ -275,7 +279,16 @@ function touch(e) {
   return e;
 }
 /** touch + schedule reindex. The normal way to edit a live entity. */
-function mut(e) { touch(e); if (e && e.id != null) { IDXdirty.add(e); markDirty(e.id); DOCV++; } return e; }
+function mut(e) {
+  touch(e);
+  if (e && e.id != null) {
+    /* the wall node map is patched here, while the OLD position is still on
+       the entity; see wallCacheTouch for why that moment is the only one */
+    if (typeof wallCacheTouch === 'function') wallCacheTouch(e);
+    IDXdirty.add(e); markDirty(e.id); DOCV++;
+  }
+  return e;
+}
 function touchLayers() { if (JN.on && !JN.layers) JN.layers = clone(DOC.layers); }
 
 /* ---------------- sheets (paper space) ----------------
@@ -343,10 +356,16 @@ function addEnt(e) {
   DOC.ents.set(e.id, e); markDirty(e.id); DOCV++;
   if (JN.on) JN.added.add(e.id);
   if (IDX) idxInsert(e);
+  /* Structural: a wall can appear without a mut() ever being called on it, so
+     the node map cannot be patched through this and must be rebuilt. Hooked
+     here rather than in idxInsert, which only runs when the spatial index
+     happens to exist already. */
+  if (typeof wallCacheStructural === 'function' && wallCacheStructural(e)) wallCacheInvalidate();
   return e;
 }
 function delEnt(id) {
   const e = DOC.ents.get(id); if (!e) return;
+  if (typeof wallCacheStructural === 'function' && wallCacheStructural(e)) wallCacheInvalidate();
   if (JN.on) {
     if (JN.added.has(id)) JN.added.delete(id);    /* created and killed in one op */
     else JN.removed.set(id, JN.before.get(id) || clone(e));
