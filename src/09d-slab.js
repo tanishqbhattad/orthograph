@@ -192,3 +192,128 @@ function xSegSeg(a, b, c, d) {
   if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) return null;
   return [a[0] + r[0] * t, a[1] + r[1] * t];
 }
+
+/* ============================================================
+   C2 — marks, tags and opening schedules
+   ------------------------------------------------------------
+   A door on a drawing is not "a door", it is D-04: a number that
+   a schedule, an order and a person on site all refer to. Doors
+   and windows knew their size and their host and had no way to
+   be referred to at all, so no opening could appear on a
+   schedule and no schedule could be checked against the plan.
+   ============================================================ */
+const MARK_PREFIX = { door: 'D', window: 'W' };
+/** every opening of one kind, ordered the way a plan is read */
+function openingsOfKind(kind, lvl) {
+  const l = lvl == null ? null : lvl;
+  return [...DOC.ents.values()]
+    .filter(e => e.t === kind && (l == null || (e.lvl || 0) === l))
+    .sort((a, b) => {
+      const ba = bbox(a), bb = bbox(b);
+      const dy = bb[3] - ba[3];
+      return Math.abs(dy) > 1e-6 ? dy : ba[0] - bb[0];
+    });
+}
+/** Give every unmarked opening a number. Existing marks are left alone: a
+    mark that changes when someone adds a door is worse than no mark, because
+    the schedule, the order and the drawing stop agreeing. */
+function markOpenings(kind) {
+  const pre = MARK_PREFIX[kind] || 'X';
+  const list = openingsOfKind(kind);
+  const used = new Set(list.map(o => o.mark).filter(Boolean));
+  let n = 0, given = 0;
+  begin();
+  for (const o of list) {
+    if (o.mark) continue;
+    let m;
+    do { n++; m = pre + '-' + String(n).padStart(2, '0'); } while (used.has(m));
+    used.add(m);
+    mut(o); o.mark = m; given++;
+  }
+  commit('Mark ' + kind + 's');
+  return given;
+}
+defm('MARKDOORS', () => {
+  const n = markOpenings('door');
+  cliPrint(n ? 'Marked ' + n + ' door' + (n === 1 ? '' : 's') : 'Every door is already marked');
+  draw();
+}, { group: 'arch' });
+defm('MARKWINDOWS', () => {
+  const n = markOpenings('window');
+  cliPrint(n ? 'Marked ' + n + ' window' + (n === 1 ? '' : 's') : 'Every window is already marked');
+  draw();
+}, { group: 'arch' });
+
+/** The tag drawn beside an opening: its mark in a ring, offset clear of the
+    wall so it does not sit on top of the thing it is labelling. */
+function openingTagShapes(o) {
+  if (!VS.tags || !o.mark) return [];
+  const F = (typeof openFrame === 'function') ? openFrame(o) : null;
+  if (!F) return [];
+  const h = (DOC.textH || 2.5) * 1.1;
+  const r = h * 1.15;
+  const off = Math.max(F.t, 200) * 1.1 + r;
+  const c = [F.c[0] + F.n[0] * off, F.c[1] + F.n[1] * off];
+  return [
+    { c, r, role: 'tag' },
+    { text: o.mark, p: [c[0], c[1] - h * 0.36], h, rot: 0, anchor: 'c' },
+  ];
+}
+
+/* ---------------- schedules ---------------- */
+function openingScheduleRows(kind, lvl) {
+  const isDoor = kind === 'door';
+  const rows = [['Mark', isDoor ? 'Door' : 'Window', 'W', 'H', 'Wall']];
+  for (const o of openingsOfKind(kind, lvl)) {
+    const host = DOC.ents.get(o.host);
+    rows.push([
+      o.mark || '—',
+      openingTypeName(o, isDoor),
+      fmt(openW(o)),
+      fmt(openH(o)),
+      host ? ((wallType(host.wt) || {}).name || '—') : '—',
+    ]);
+  }
+  return rows;
+}
+function placeOpeningSchedule(kind, p) {
+  const rows = openingScheduleRows(kind, DOC.curLevel);
+  if (rows.length < 2) { cliPrint('No ' + kind + 's on this level.', 'err'); return 0; }
+  const h = DOC.textH || 2.5;
+  begin();
+  addEnt({ t: 'table', p: p.slice(), rows, colW: fitColumns(rows, h), h,
+           align: ['l', 'l', 'r', 'r', 'l'], kind: kind + 's', layer: annoLayer('TEXT') });
+  commit((kind === 'door' ? 'Door' : 'Window') + ' schedule');
+  return rows.length - 1;
+}
+defc('doorschedule', {
+  key: 'doorschedule', group: 'annotate', hint: 'Pick the top-left corner of the schedule',
+  point(c, p) {
+    const n = placeOpeningSchedule('door', p);
+    if (n) cliPrint(n + ' doors scheduled');
+    draw(); endCmd();
+  },
+});
+defc('windowschedule', {
+  key: 'windowschedule', group: 'annotate', hint: 'Pick the top-left corner of the schedule',
+  point(c, p) {
+    const n = placeOpeningSchedule('window', p);
+    if (n) cliPrint(n + ' windows scheduled');
+    draw(); endCmd();
+  },
+});
+
+/** What to call an opening on a schedule.
+
+    doorType() and winType() fall back to the FIRST entry in the library when
+    an opening has no type of its own — so an 1800x1500 window with its size
+    set directly was reported as "Window 600x600". The size columns were right
+    and the name was a lie, which on a schedule someone orders from is the
+    worst way round to be wrong. An opening carrying its own size is described
+    by that size; only one that really is of a type is named for it. */
+function openingTypeName(o, isDoor) {
+  const T = isDoor ? (o.dt ? doorType(o.dt) : null) : (o.wtp ? winType(o.wtp) : null);
+  if (T && (o.w == null || Math.abs(o.w - T.w) < 1e-9) &&
+            (o.h == null || Math.abs(o.h - T.h) < 1e-9)) return T.name;
+  return (isDoor ? 'Door ' : 'Window ') + fmt(openW(o)) + '×' + fmt(openH(o));
+}

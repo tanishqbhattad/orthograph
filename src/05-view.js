@@ -17,6 +17,7 @@ const VS = {
   ltScale: 1,             /* LTSCALE — multiplies every dash pattern           */
   mirrtext: 0,            /* MIRRTEXT — 0 keeps mirrored text readable         */
   underlay: 0,            /* UNDERLAY — show the storey below, faintly         */
+  tags: 1,                /* TAGS — draw door and window marks on the plan     */
   trimmode: 1,            /* TRIMMODE — 0 leaves the originals uncut           */
   gridMajor: 5,           /* GRIDMAJOR — minor lines between two major ones    */
   gridSub: true,          /* adaptive subdivision below the nominal spacing    */
@@ -710,7 +711,7 @@ function drawTextAt(str, p, h, rotAng, anchor, col) {
 const ROLE_W = { face: 1.55, jamb: 1.0, leaf: 1.0, swing: 0.75, glaz: 0.85, tread: 0.85,
   /* a layer boundary is a thin line inside the wall: it must read as
      construction, never compete with the face that encloses it */
-  wlayer: 0.6,
+  wlayer: 0.6, tag: 0.7,
   cut: 0.8, arrow: 0.9, arrowhead: 0.9, room: 0.9, grid: 0.85, bubble: 1.0, cap: 1.55 };
 
 /* ============================================================

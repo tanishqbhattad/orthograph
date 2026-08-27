@@ -95,7 +95,13 @@ function windowShapes(o) {
 }
 function openingBBoxPad(o) { return o.t === 'door' ? openW(o) * 1.1 : 0; }
 const openingGeom = mk => ({
-  shapes: mk,
+  /* the tag rides along with the opening, so it moves, hides and plots with
+     the thing it labels rather than being a loose piece of text near it */
+  shapes(o, tol) {
+    const base = mk(o, tol) || [];
+    return (typeof openingTagShapes === 'function')
+      ? base.concat(openingTagShapes(o)) : base;
+  },
   bbox(o) {
     const F = openFrame(o);
     if (!F) return [0, 0, 0, 0];
