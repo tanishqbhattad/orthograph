@@ -72,6 +72,60 @@ doc2 = ezdxf.readfile(out)
 a2 = doc2.audit()
 print(f"re-save : {len(a2.errors)} errors, {len(a2.fixes)} fixes -> {out}")
 
+# ---------------------------------------------------------------- assertions
+# Printing what came through is a report; failing when something did NOT is a
+# gate. mtext, leader and attdef were silently dropped from every DXF this
+# program wrote until a coherence sweep caught it, so the fixture carries a
+# marker for each and this insists on finding it.
+failures = []
+
+def want(cond, msg):
+    if not cond:
+        failures.append(msg)
+
+want(kinds.get('LINE', 0) > 10, "no LINE records")
+want(kinds.get('LWPOLYLINE', 0) > 0, "no LWPOLYLINE records")
+want(kinds.get('TEXT', 0) >= 10,
+     "only %d TEXT records - mtext, the leader note, the attdef tag and the "
+     "table cells should all be here" % kinds.get('TEXT', 0))
+want(kinds.get('DIMENSION', 0) >= 5, "dimensions missing")
+want(kinds.get('HATCH', 0) >= 2, "the island hatch is missing")
+want(kinds.get('INSERT', 0) >= 1, "the block insert is missing")
+
+texts = [t.dxf.text for t in msp.query('TEXT')]
+blob = " | ".join(texts)
+for needle, what in [("GENERAL NOTES", "mtext paragraph"),
+                     ("SEE DETAIL", "leader note"),
+                     ("DOORNO", "attribute definition"),
+                     ("HALL", "room name"),
+                     ("Mark", "table heading")]:
+    want(needle in blob, "%s (%r) never reached the DXF" % (what, needle))
+
+# A hatch with a hole has to say which loop is the outside, and the style must
+# match the island detection the program does (Normal, alternating - not Outer).
+for h in msp.query('HATCH'):
+    want(h.dxf.hatch_style == 0,
+         "hatch style is %s, expected 0 (Normal islands)" % h.dxf.hatch_style)
+    if len(h.paths) > 1:
+        ext = [bool(p.path_type_flags & 1) for p in h.paths]
+        want(ext[0] and not any(ext[1:]),
+             "island hatch boundary flags are %s, expected the first loop "
+             "external and the rest not" % ext)
+
+# Every layer the fixture draws on must exist, or its entities land on layer 0
+# in whatever opens the file.
+have_layers = {l.dxf.name for l in doc.layers}
+for need in ["A-WALL", "TEXT", "DIMENSIONS", "A-AREA"]:
+    want(need in have_layers, "layer %s missing from the table" % need)
+
+if failures:
+    print()
+    print("FAILURES:")
+    for f in failures:
+        print("   -", f)
+
 bad = len(auditor.errors)
-print("\nRESULT:", "PASS" if (strict_ok and bad == 0) else "FAIL")
-sys.exit(0 if (strict_ok and bad == 0) else 1)
+ok = strict_ok and bad == 0 and not failures
+print()
+print("RESULT:", "PASS" if ok else "FAIL")
+sys.exit(0 if ok else 1)

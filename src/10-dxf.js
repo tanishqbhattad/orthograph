@@ -675,15 +675,23 @@ class DxfWriter {
     P(o, 70, e.solid ? 1 : 0);
     P(o, 71, 0);
     P(o, 91, loops.length);
-    for (const L of loops) {
-      P(o, 92, 2);                                  /* polyline boundary */
+    loops.forEach((L, i) => {
+      /* 92 is the boundary path type: 2 is a polyline, and bit 1 marks the
+         EXTERNAL loop. Writing 2 for every loop leaves a reader with no way to
+         tell the outside from the holes — ezdxf accepts it, AutoCAD guesses. */
+      P(o, 92, i === 0 ? 3 : 2);
       P(o, 72, 0);                                  /* no bulges */
       P(o, 73, 1);                                  /* closed */
       P(o, 93, L.length);
       for (const p of L) { P(o, 10, num(p[0])); P(o, 20, num(p[1])); }
       P(o, 97, 0);
-    }
-    P(o, 75, 1); P(o, 76, 1);
+    });
+    /* 75 is the hatch style. This wrote 1 (Outer), which fills only between the
+       outermost boundary and the first ring inside it. The program does Normal
+       island detection — alternating, so a duct inside a riser is filled again
+       — and the file has to say the same thing or a hatch means one thing on
+       screen and another in AutoCAD. */
+    P(o, 75, 0); P(o, 76, 1);
     if (!e.solid) {
       P(o, 52, num(e.hatchAng || 0));
       P(o, 41, num((e.sp || 100) / 100));

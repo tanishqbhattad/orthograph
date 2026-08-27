@@ -1301,6 +1301,26 @@ const fixtures = R(`
   ensureLayer('MYLAYER','#ff5f5f','dashed');
   addEnt({t:'line',a:[0,6000],b:[4000,6000],layer:'MYLAYER'});
   addEnt({t:'line',a:[0,6400],b:[4000,6400],color:'#4ee6a8',lt:'center'});
+  /* Everything added after Wave 1. The fixture is what ezdxf validates in CI,
+     so a type missing from here is a type nobody is checking — which is how
+     mtext, leader and attdef went on being dropped from the DXF unnoticed. */
+  const RING2 = [[12000,0],[18000,0],[18000,4000],[12000,4000]];
+  addEnt({t:'mtext', p:[12000,-2000], w:5000, h:250, rot:0, anchor:'l', layer:'TEXT',
+          s:'GENERAL NOTES' + String.fromCharCode(10) + String.fromCharCode(10) +
+            'Do not scale from this drawing. Dimensions to be checked on site.'});
+  addEnt({t:'leader', pts:[[9000,-6000],[10500,-5200]], s:'SEE DETAIL 3', h:250, layer:'DIMENSIONS'});
+  addEnt({t:'attdef', p:[12000,-4000], tag:'DOORNO', prompt:'Door number', val:'00',
+          h:250, rot:0, anchor:'l', layer:'TEXT'});
+  addEnt({t:'table', p:[20000,4000], h:250, layer:'TEXT',
+          rows:[['Mark','Room','Area'],['01','HALL','20.16 m2']],
+          colW:[900,1600,1600], align:['l','l','r']});
+  addEnt({t:'floor', pts:RING2, th:200, top:0, lvl:0, layer:'A-FLOR'});
+  addEnt({t:'roof',  pts:RING2, th:250, top:3000, lvl:0, pitch:rad(20), dir:0,
+          eaves:[12000,0], layer:'A-ROOF'});
+  addEnt({t:'section', a:[11000,2000], b:[19000,2000], dir:1, label:'A', layer:'A-SECT'});
+  /* a hatch with an island, so the even-odd path is in the file too */
+  addEnt({t:'hatch', layer:'0', solid:true, pattern:'solid',
+          loops:[RING2, [[14000,1500],[15000,1500],[15000,2500],[14000,2500]]]});
   return {dxf:exportDXF(), svg:exportSVG(), ocad:saveNative(), n:DOC.ents.size};
 `);
 const outDir = path.join(__dirname, 'out');
