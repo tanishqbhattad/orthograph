@@ -169,6 +169,46 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.darkHasWhite, true, 'while on dark it is stroked white');
   });
 
+  group('finding it');
+
+  /* A setting nobody can find is a setting that does not exist. The theme is
+     the one you reach for on your first day, so it is on the top bar and not
+     only three clicks into a dialog. */
+  t('there is a theme button on the top bar, and it flips the theme', () => {
+    const r = R(`${SETUP}
+      setStore(null); themeReset();
+      const btn = document.getElementById('mTheme');
+      const before = themeName();
+      if (btn && btn.onclick) btn.onclick();
+      const after = themeName();
+      if (btn && btn.onclick) btn.onclick();
+      return { exists: !!btn, title: btn && btn.title, before, after, back: themeName() };`);
+    eq(r.exists, true, 'the button is there');
+    ok(/dark|light|theme/i.test(String(r.title)), 'and says what it does: ' + r.title);
+    eq(r.before, 'light');
+    eq(r.after, 'dark', 'one click gives dark');
+    eq(r.back, 'light', 'and the next puts it back');
+  });
+
+  t('and it is in the Display section of the drawing settings too', () => {
+    const r = R(`${SETUP}
+      buildDrawPop();
+      const rows = [...document.querySelectorAll('#dsPop .row')]
+        .map(x => x.innerHTML || '').join(' ');
+      return { hasTheme: /theme/i.test(rows) };`);
+    eq(r.hasTheme, true, 'the panel people actually open offers it');
+  });
+
+  /* The chrome must be light before a single line of JS has run, or the app
+     flashes dark on every load. */
+  t('the shell markup itself starts light', () => {
+    const fs = require('fs'), path = require('path');
+    const shell = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'shell.html'), 'utf8');
+    const html = (shell.match(/<html[^>]*>/) || [''])[0];
+    ok(/data-theme="light"/.test(html),
+      'the <html> tag carries the default theme, got: ' + html);
+  });
+
   group('remembering, and the rest of the shell');
 
   t('the choice survives a reload', () => {

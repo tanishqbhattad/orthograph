@@ -1,5 +1,8 @@
 <!DOCTYPE html>
-<html lang="en">
+<!-- data-theme is set here, not by script: the chrome must be light on the
+     first frame or the app flashes dark on every load. setTheme() overwrites
+     it once a saved choice has been read. -->
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
@@ -501,6 +504,7 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
       <option value="mm">mm</option><option value="cm">cm</option>
       <option value="m">m</option><option value="in">in</option><option value="ft">ft-in</option>
     </select>
+    <button class="tb ico" id="mTheme" title="Light or dark">Theme</button>
     <div class="sep"></div>
     <button class="tb" id="mHelp">?</button>
     <button class="tb" id="mPanel" style="display:none">Panel</button>

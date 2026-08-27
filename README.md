@@ -4,7 +4,7 @@
 architecture layer on top. No build step required to *use* it — `orthograph.html` is a
 single self-contained file. Open it in any browser.
 
-111 commands, 93 acad.pgp aliases, 718 tests.
+111 commands, 93 acad.pgp aliases, 721 tests.
 
 ## Layout
 
@@ -63,7 +63,7 @@ node tools/serve.js            # → http://127.0.0.1:8017/
 
 ```
 node build.js                  # → orthograph.html
-node test/run.js               # 718 tests
+node test/run.js               # 721 tests
 node test/run.js wall          # run a subset by name
 node tools/verify.js           # behavioural checks + drag latency
 
@@ -139,8 +139,8 @@ the exact inverse; every other insert updates with it. `BVSTATE` gives a block
 visibility states, so one door block can be four swings rather than four blocks.
 
 **Light and dark.** Light is the default, because a drawing ends up on paper and is
-usually made in a lit room; dark is one click away in Drafting settings → Display, and
-is remembered. Deliberately not taken from `prefers-color-scheme`: a dark desktop says
+usually made in a lit room; dark is the button on the top bar, and is remembered. The
+same switch is in the drawing settings panel under Display. Deliberately not taken from `prefers-color-scheme`: a dark desktop says
 something about the desktop, not about the drawing.
 
 Lines drawn in the default colour follow the background the way AutoCAD's colour 7 does

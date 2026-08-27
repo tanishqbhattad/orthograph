@@ -104,7 +104,9 @@ function themeName() { return THEME; }
 function setPalette(p) {
   for (const k of Object.keys(CO_DEFAULT)) CO[k] = p[k] != null ? p[k] : CO_DEFAULT[k];
 }
-function applyTheme() {
+/* The colours and the attribute only. Safe to call at module load, where the
+   things applyTheme goes on to touch do not exist yet. */
+function applyPalette() {
   const dark = THEME === 'dark';
   const hc = !!VS.contrast;
   setPalette(dark ? (hc ? CO_HIGH : CO_DEFAULT) : (hc ? CO_LIGHT_HIGH : CO_LIGHT));
@@ -114,8 +116,13 @@ function applyTheme() {
     if (typeof document !== 'undefined' && document.documentElement)
       document.documentElement.setAttribute('data-theme', THEME);
   } catch (e) { /* no document: headless */ }
-  if (typeof shapeCacheClear === 'function') shapeCacheClear();
-  if (typeof draw === 'function') draw();
+}
+function applyTheme() {
+  applyPalette();
+  /* guarded because this runs during load as well as after it, and the cache
+     is a const declared further down the same file */
+  try { if (typeof shapeCacheClear === 'function') shapeCacheClear(); } catch (e) { /* not built yet */ }
+  try { if (typeof draw === 'function') draw(); } catch (e) { /* nothing to draw onto yet */ }
 }
 /** Returns false for a name that is not a theme, rather than applying it. */
 function setTheme(name) {
@@ -150,6 +157,12 @@ const INK_LIGHT = 190;       /* this bright and grey: the default light ink */
 const INK_DARK = 70;         /* this dark and grey: the default dark ink */
 const INK_ON_LIGHT = '#000000';
 const INK_ON_DARK = '#ffffff';
+
+/* The palette starts as the default theme rather than waiting for boot: CO is
+   read by anything that draws, and a module that loaded dark and was corrected
+   later is a frame of the wrong colours. Palette only — nothing below this
+   line in the file has been initialised yet. */
+applyPalette();
 
 /* ---------------- ink ----------------
    AutoCAD draws colour 7 as white on a dark background and black on a light

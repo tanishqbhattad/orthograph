@@ -951,6 +951,11 @@ function boot() {
     begin(); touchLayers(); DOC.layers.push(newLayer(n, '#ffd166')); DOC.cur = n; commit('Layer added'); buildLayers();
   };
   $('#mNew').onclick = doNew;
+  $('#mTheme').onclick = () => {
+    setTheme(themeName() === 'light' ? 'dark' : 'light');
+    syncThemeButton();
+    if (typeof buildDrawPop === 'function' && $('#dsPop').classList.contains('show')) buildDrawPop();
+  };
   $('#mOpen').onclick = () => $('#fileIn').click();
   $('#mSave').onclick = doSave;
   $('#mExport').onclick = doExport;
@@ -979,6 +984,12 @@ function boot() {
     const h = (window.innerHeight || 800);
     if (h !== _railH) { _railH = h; buildRail(); }
   }).observe(stage);
+  /* Before the first paint, not after it: this decides what everything below
+     is drawn in, and running it late meant a frame of dark on every load and
+     no theme at all if anything above it threw. */
+  if (typeof themeReset === 'function') themeReset();
+  if (typeof contrastWanted === 'function' && contrastWanted()) setContrast(true);
+  syncThemeButton();
   resize(); fit(); syncUI(); syncToggles(); syncCoord(); syncScale(); navCursor();
   if (window.innerWidth <= 860) $('#mPanel').style.display = '';
   /* plain text on purpose: hint() parses bracketed and <em> markup as command
@@ -988,10 +999,6 @@ function boot() {
   echo('Ready');
   offerRecovery();
   autosaveStart();
-  /* the theme first: it decides what everything after this is painted in */
-  if (typeof themeReset === 'function') themeReset();
-  /* a machine that asks for more contrast gets it without being told twice */
-  if (typeof contrastWanted === 'function' && contrastWanted()) setContrast(true);
   /* A tab closes faster than any timer fires, so take the last chance. Both
      events are used: visibilitychange is the one that actually fires on mobile
      and on a killed tab, beforeunload is the one that can still warn. */

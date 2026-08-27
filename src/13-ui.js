@@ -432,6 +432,14 @@ function drawSettingsExtras(w) {
   btnRow(w, 'Object snap', 'Settings…', () => { w.classList.remove('show'); openOsnapSettings(2); });
   addRow(w, 'Zoom factor', VS.zoomFactor, v => { VS.zoomFactor = clamp(Math.round(v), 3, 100); }, 1);
   grpRow(w, 'Display');
+  btnRow(w, 'Theme', (typeof themeName === 'function' ? themeName() : 'light'), () => {
+    setTheme(themeName() === 'light' ? 'dark' : 'light');
+    if (typeof syncThemeButton === 'function') syncThemeButton();
+    buildDrawPop();
+  });
+  btnRow(w, 'High contrast', VS.contrast ? 'on' : 'off', () => {
+    setContrast(!VS.contrast); buildDrawPop();
+  });
   addRow(w, 'LTSCALE', ltScale(), v => { DOC.ltScale = clamp(v, 1e-4, 1e6); draw(); }, 1);
   addRow(w, 'Grid major', VS.gridMajor, v => { VS.gridMajor = clamp(Math.round(v), 1, 100); draw(); }, 1);
   btnRow(w, 'Lineweights', ST.lwt === false ? 'off' : 'on', () => {
@@ -443,6 +451,15 @@ function drawSettingsExtras(w) {
     begin(); DOC.wallHatch = DOC.wallHatch === false; commit('Wall poche');
     draw(); syncUI();
   });
+}
+/** The button says what a click will DO, which is the other theme — a control
+    labelled with the state you are already in reads as a description. */
+function syncThemeButton() {
+  const b = $('#mTheme'); if (!b) return;
+  const dark = (typeof themeName === 'function' ? themeName() : 'light') === 'dark';
+  clearNode(b).appendChild(el('span', '', dark ? 'Light' : 'Dark'));
+  b.title = dark ? 'Switch to the light theme' : 'Switch to the dark theme';
+  b.setAttribute('aria-label', b.title);
 }
 function buildDrawSettings() {
   const w = $('#dset'); if (!w) return;
