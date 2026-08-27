@@ -57,6 +57,24 @@ class El {
     return (this.children || []).map(c => c.textContent || '').join('');
   }
   set textContent(v) { this._text = v == null ? '' : String(v); this._html = this._text; }
+  /* Attributes. Without these the stub could not carry aria-label, role,
+     tabindex or aria-pressed at all — so nothing about whether a control is
+     NAMED could be asserted, which is exactly the kind of thing that rots
+     quietly because only a screen reader would notice. */
+  setAttribute(k, v) {
+    this._attrs = this._attrs || new Map();
+    this._attrs.set(String(k), v == null ? '' : String(v));
+    if (k === 'class') this.className = String(v == null ? '' : v);
+    if (k === 'title') this.title = String(v == null ? '' : v);
+  }
+  getAttribute(k) {
+    if (k === 'class') return this.className;
+    if (k === 'title' && this.title != null && !(this._attrs && this._attrs.has('title')))
+      return this.title;
+    return this._attrs && this._attrs.has(String(k)) ? this._attrs.get(String(k)) : null;
+  }
+  hasAttribute(k) { return this.getAttribute(k) != null; }
+  removeAttribute(k) { if (this._attrs) this._attrs.delete(String(k)); }
   get className() { return [...this._cls].join(' '); }
   set className(v) { this._cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
   /* A real input.value is a DOMString whatever you assign to it. The stub kept
@@ -91,7 +109,31 @@ class El {
   setPointerCapture() { } releasePointerCapture() { }
   getBoundingClientRect() { return { left: 0, top: 0, right: this.width || 1200, bottom: this.height || 800, width: this.width || 1200, height: this.height || 800 }; }
   querySelector() { return null; }
-  querySelectorAll() { return []; }
+  /* Scoped to this element's descendants. It returned [] unconditionally,
+     which is worse than missing: a test that scopes a query to one row —
+     "these four icons are named" — passed by finding nothing at all. The
+     document-level version had exactly this bug and was fixed once; the
+     element one was left behind. */
+  querySelectorAll(sel) {
+    const want = String(sel || '').trim().split(/\s*,\s*/).filter(Boolean);
+    if (!want.length) return [];
+    const hit = n => want.some(w => {
+      const parts = w.split(/\s+/);
+      const q = parts[parts.length - 1];
+      if (q[0] === '.') return n._cls && n._cls.has(q.slice(1));
+      if (q[0] === '#') return n.id === q.slice(1);
+      return n.tagName === q.toUpperCase();
+    });
+    const out = [];
+    const self = this;
+    (function walk(n) {
+      if (!n) return;
+      if (n !== self && hit(n)) out.push(n);
+      for (const c of (n.children || [])) walk(c);
+    })(this);
+    return out;
+  }
+  querySelector(sel) { const r = this.querySelectorAll(sel); return r.length ? r[0] : null; }
   closest() { return null; }
   focus() { } select() { } blur() { } click() { }
   /* a real context knows its canvas, and the renderer derives its device

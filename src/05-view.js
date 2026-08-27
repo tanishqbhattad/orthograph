@@ -172,7 +172,19 @@ function setView(s) {
   if (s.rot != null) V.rot = s.rot;
   draw(); syncViewUI();
 }
+/** Does this machine want motion? Asked at the moment of animating rather
+    than cached, because a person can change it while the program is open. */
+function motionOK() {
+  try {
+    return !(typeof matchMedia === 'function' &&
+             matchMedia('(prefers-reduced-motion: reduce)').matches);
+  } catch (e) { return true; }
+}
 function animView(to, anim) {
+  /* Told not to animate, do not animate: go straight there. A view that slides
+     while someone is trying to read it is a problem for everyone, and for some
+     people it is the reason they turned the setting on. */
+  if (anim && !motionOK()) anim = 0;
   cancelAnim();
   if (!anim || !ANIM_OK || !VS.vtDuration) return setView(to);
   const from = viewState();

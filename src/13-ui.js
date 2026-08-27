@@ -257,6 +257,11 @@ function buildRail() {
     r.appendChild(h);
     for (const [k, label, key] of tools) {
       const b = el('button', 'tool', svg(k));
+      /* An icon button with no accessible name is an unlabelled button to a
+         screen reader, and this rail was forty of them. The custom tooltip is
+         a hover affordance and reaches nobody who is not using a mouse. */
+      b.setAttribute('aria-label', label + (key ? ' (' + key + ')' : ''));
+      b.setAttribute('title', label + (key ? ' — ' + key : ''));
       b.dataset.tool = k; b.dataset.group = title; if (key) b.dataset.k = key;
       b.onclick = () => { tipEl.style.opacity = 0; k === 'select' ? endCmd() : startCmd(k); };
       tipOn(b, label, key, 'right');
@@ -273,6 +278,12 @@ function setMode(m) {
   echo(m === 'arch' ? 'Architecture' : 'Drafting');
 }
 function syncTools() {
+  /* aria-pressed says which tool is running. Colour alone says it to people
+     who can see colour. */
+  const cur = (typeof CMD !== 'undefined' && CMD && CMD.def && CMD.def.key) || null;
+  for (const b of document.querySelectorAll('.tool')) {
+    if (b.setAttribute) b.setAttribute('aria-pressed', b.dataset.tool === cur ? 'true' : 'false');
+  }
   document.querySelectorAll('.tool').forEach(b =>
     b.classList.toggle('on', b.dataset.tool === (CMD ? CMD.def.key : 'select')));
   /* the quick editor must never fight the dynamic-input box */
@@ -471,12 +482,15 @@ function buildLayers() {
     nm.ondblclick = ev => { ev.stopPropagation(); renameLayer(l); };
     const eye = el('span', 'ic' + (l.on ? '' : ' off'), svg(l.on ? 'eye' : 'eyeoff', 16));
     eye.title = l.on ? 'Hide layer' : 'Show layer';
+    a11yToggle(eye, l.name + ': ' + (l.on ? 'visible' : 'hidden'), l.on);
     eye.onclick = ev => { ev.stopPropagation(); begin(); touchLayers(); l.on = !l.on; commit(); draw(); buildLayers(); };
     const lk = el('span', 'ic' + (l.lock ? ' off' : ''), svg(l.lock ? 'lock' : 'unlock', 16));
     lk.title = l.lock ? 'Unlock layer' : 'Lock layer';
+    a11yToggle(lk, l.name + ': ' + (l.lock ? 'locked' : 'unlocked'), l.lock);
     lk.onclick = ev => { ev.stopPropagation(); begin(); touchLayers(); l.lock = !l.lock; commit(); draw(); buildLayers(); };
     const fz = el('span', 'ic' + (l.frozen ? ' off' : ''), svg(l.frozen ? 'snow' : 'sun', 16));
     fz.title = l.frozen ? 'Thaw layer' : 'Freeze layer — hidden and left out of the extents';
+    a11yToggle(fz, l.name + ': ' + (l.frozen ? 'frozen' : 'thawed'), l.frozen);
     fz.onclick = ev => {
       ev.stopPropagation();
       /* the current layer cannot be frozen: you would be drawing into
@@ -486,6 +500,7 @@ function buildLayers() {
     };
     const pl = el('span', 'ic' + (l.plot === false ? ' off' : ''), svg(l.plot === false ? 'noplot' : 'plot', 16));
     pl.title = l.plot === false ? 'This layer does not plot' : 'This layer plots';
+    a11yToggle(pl, l.name + ': ' + (l.plot === false ? 'does not plot' : 'plots'), l.plot !== false);
     pl.onclick = ev => { ev.stopPropagation(); begin(); touchLayers(); l.plot = l.plot === false; commit(); draw(); buildLayers(); };
     row.append(sw, nm, eye, fz, lk, pl);
     row.onclick = () => {
@@ -2065,8 +2080,32 @@ function buildLevels() {
       buildLevels(); draw();
     };
     row.append(nm, el2);
+    row.setAttribute('role', 'option');
+    row.setAttribute('tabindex', '0');
+    row.setAttribute('aria-selected', l.id === (DOC.curLevel || 0) ? 'true' : 'false');
+    row.setAttribute('aria-label', l.name + ' at ' + fmt(l.elev));
+    row.onkeydown = ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); gotoLevel(l.id); } };
     row.onclick = () => gotoLevel(l.id);
     w.appendChild(row);
   }
+}
+
+/** Make an icon act like a control rather than a decoration: reachable by
+    keyboard, operable by Enter or Space, and named for what it does and what
+    state it is in. Every one of these was a bare span. */
+function a11yToggle(node, label, on) {
+  if (!node || !node.setAttribute) return;
+  node.setAttribute('role', 'switch');
+  node.setAttribute('tabindex', '0');
+  node.setAttribute('aria-checked', on ? 'true' : 'false');
+  node.setAttribute('aria-label', label);
+  /* read the handler when the key is pressed, not when this is called: these
+     icons get their onclick assigned afterwards, so capturing it here caught
+     undefined and the keyboard silently did nothing */
+  node.onkeydown = ev => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    ev.preventDefault(); ev.stopPropagation();
+    if (typeof node.onclick === 'function') node.onclick(ev);
+  };
 }
 
