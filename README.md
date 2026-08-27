@@ -257,7 +257,7 @@ noticed months later.
   from a spreadsheet into the drawing.
 - An arc-length dimension has no DXF R2000 equivalent, so it exports as flattened
   geometry rather than as an editable dimension.
-- Fields cover the drawing name, sheet, scale, date, and an object'''s area,
+- Fields cover the drawing name, sheet, scale, date, and an object's area,
   length or count; there is no field browser, so they are typed by hand.
 - Dynamic blocks cover visibility states only: there are no stretch, array or
   lookup parameters.

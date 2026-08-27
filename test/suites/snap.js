@@ -32,6 +32,54 @@ const AT = (wx, wy, ref) =>
             kinds: (ST.snapCands || []).map(c => c.k) };`;
 
 module.exports = ({ group, t, ok, eq, close, R }) => {
+
+  group('when there are too many walls to snap to all of them');
+
+  /* Wall face and break snaps are dropped above a threshold to keep dragging
+     interactive. That is a reasonable trade and an unreasonable secret: the
+     snaps a drafter is reaching for stop existing and nothing says why. */
+  t('says so, once, rather than going quiet', () => {
+    const r = R(`
+      resetDoc(); ensureLayer('A-WALL');
+      V.w = 1200; V.h = 800; V.z = 1; V.px = 0; V.py = 800; V.rot = 0;
+      begin();
+      for (let i = 0; i < 300; i++)
+        addEnt({t:'wall', a:[i*400,0], b:[i*400+300,0], wt:'gen100', layer:'A-WALL'});
+      commit('w');
+      const said = [];
+      const real = echo;
+      globalThis.echo = (m) => { said.push(String(m)); };
+      snapPoint(600, 800, null);
+      const first = said.length;
+      snapPoint(620, 800, null);
+      snapPoint(640, 800, null);
+      globalThis.echo = real;
+      return { limited: !!ST.snapLimited, first, total: said.length,
+               msg: said.join(' | ') };`);
+    eq(r.limited, true, 'the snaps really are limited at this size');
+    eq(r.first, 1, 'and it is said, got ' + r.msg);
+    eq(r.total, 1, 'once, not on every cursor move');
+    ok(/wall|snap/i.test(r.msg), 'in words that name what stopped: ' + r.msg);
+  });
+
+  t('a drawing small enough keeps every wall snap, and says nothing', () => {
+    const r = R(`
+      resetDoc(); ensureLayer('A-WALL');
+      V.w = 1200; V.h = 800; V.z = 1; V.px = 0; V.py = 800; V.rot = 0;
+      begin();
+      for (let i = 0; i < 10; i++)
+        addEnt({t:'wall', a:[i*400,0], b:[i*400+300,0], wt:'gen100', layer:'A-WALL'});
+      commit('w');
+      const said = [];
+      const real = echo;
+      globalThis.echo = (m) => { said.push(String(m)); };
+      snapPoint(600, 800, null);
+      globalThis.echo = real;
+      return { limited: !!ST.snapLimited, said: said.length };`);
+    eq(r.limited, false, 'nothing is limited');
+    eq(r.said, 0, 'and nothing is said');
+  });
+
   if (process.env.NOSNAP) return;
 
   const pt = (r, x, y, tol, msg) => {

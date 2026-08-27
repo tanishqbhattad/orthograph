@@ -136,6 +136,7 @@ function resetDoc() {
      across a new drawing it would save the old block's contents into the new
      document the next time it was closed. */
   if (typeof refeditForget === 'function') refeditForget();
+  if (typeof snapLimitForget === 'function') snapLimitForget();
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];

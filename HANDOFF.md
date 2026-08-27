@@ -265,9 +265,11 @@ thicknesses for exactly this reason.
    pin it, including one reproducing the original corrupt-file sequence
    (trace -> edit -> trace -> undo -> save), verified to fail against the
    pre-fix code.
-2. An unenclosed room silently keeps its last good area. `PROPS.room` says
-   "follows the walls" and `QUICK.room` says "not enclosed", but the drawing
-   gives no signal. Should draw the boundary dashed and flag it in the tag.
+2. ~~An unenclosed room silently keeps its last good area.~~ **FIXED.** It
+   keeps the last good outline deliberately — a room that vanishes while you
+   drag a wall is worse than one that lingers — but it now draws that outline
+   dashed and tags it "not enclosed", so it cannot be mistaken for a
+   measurement.
 
 **Dead code to delete**
 
@@ -278,15 +280,28 @@ live, called from `06-snap.js:411`. Check before deleting on this file's word.
 
 **Polish**
 
-- L/U stair grips still return `a / mid / b`; grip `b` is no longer on the
-  object once the stair turns. Give it grips per flight plus the landing.
-- Wall face/break snaps silently switch off above 240 walls (`06-snap.js`) with
-  no indication.
-- Two brick walls meeting at 0.5° produce a 2.3 m mitre spike (`MITRE_MAX`).
-- A negative `th` loaded from `.ocad` is accepted; only the props setter guards.
-- Quick properties appear at the object's bbox centre, not the cursor.
-- Imperial is inconsistent: `fmt()` gives `9'-10 1/8"`, `dispNum()` gives
-  decimal feet.
+Every item that stood here on 27 Aug 2026 was re-checked against the code
+rather than re-copied, and all but one had already been fixed. Recording what
+they were, because this file has now been wrong in both directions:
+
+- ~~L/U stair grips return `a / mid / b`.~~ Fixed: a turning stair gets four,
+  including the landing and the head of the last flight.
+- ~~Wall face/break snaps silently switch off above 240 walls.~~ Fixed: they
+  still switch off, which is the right trade, but it now says so once.
+- ~~Two brick walls at 0.5° produce a 2.3 m mitre spike.~~ Stale — `MITRE_MAX`
+  caps it. Measured: the outline overshoots the wall end by **1 mm**.
+- ~~A negative `th` from `.ocad` is accepted.~~ Largely moot: the writer does
+  not persist it, so it cannot arrive from a file. It can still be set in
+  memory, where `wallT()` returns it unguarded.
+- ~~Quick properties appear at the bbox centre.~~ Fixed: they follow `ST.cur`
+  and fall back to the bbox only when there is no cursor.
+- ~~Imperial is inconsistent between `fmt()` and `dispNum()`.~~ Fixed: both
+  give `9'-10 1/8"`.
+
+Genuinely open:
+
+- A negative wall thickness set in memory is not rejected; nothing in the
+  normal path can produce one.
 
 **DWG is experimental and should stay labelled that way.** The reader covers
 R13–R2000 and refuses R2004+ rather than half-reading. The bit codec, object

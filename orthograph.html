@@ -892,6 +892,7 @@ function resetDoc() {
      across a new drawing it would save the old block's contents into the new
      document the next time it was closed. */
   if (typeof refeditForget === 'function') refeditForget();
+  if (typeof snapLimitForget === 'function') snapLimitForget();
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];
@@ -6349,6 +6350,23 @@ function insertionPoint(e) {
  * @param ref   the rubber-band reference point (perp/tan/polar key off it)
  * @param now   optional clock override, for tests
  */
+/* Wall face and break snaps are dropped above this many walls, so that
+   dragging stays interactive on a large plan. That is a reasonable trade and
+   an unreasonable secret: the snaps somebody is reaching for stop existing and
+   nothing says why. Said once — a message on every cursor move would be worse
+   than the silence it replaced. */
+const WALL_SNAP_MAX = 240;
+let SNAP_LIMIT_SAID = false;
+function snapLimitNotice() {
+  ST.snapLimited = true;
+  if (SNAP_LIMIT_SAID) return;
+  SNAP_LIMIT_SAID = true;
+  if (typeof echo === 'function')
+    echo('Over ' + WALL_SNAP_MAX + ' walls: snapping to wall faces and breaks is off, endpoints and midpoints still work');
+}
+/** a new document starts quiet again */
+function snapLimitForget() { SNAP_LIMIT_SAID = false; }
+
 function snapPoint(sx, sy, ref, now) {
   const raw = s2w(sx, sy);
   ST.raw = raw;
@@ -6937,7 +6955,7 @@ function wallSnaps(w, raw, ref, push, on) {
     push(c.p, 'wface', dist(raw, c.p), null, false, defPointRef(w, c.p));
     if (ref && on.perp) perpOnSeg(a, b, ref, raw, push);
   }
-  if (allWalls().length > 240) { ST.snapLimited = true; return; }
+  if (allWalls().length > WALL_SNAP_MAX) { snapLimitNotice(); return; }
   for (const s of wallShapes(w)) {
     if (!s.pts || s.pts.length < 2) continue;
     const a = s.pts[0], b = s.pts[s.pts.length - 1];
