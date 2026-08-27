@@ -292,14 +292,23 @@ function trimLike(extending) {
   return {
     group: 'modify',
     hint: extending
-      ? 'Click near the end to extend · <em>F</em>ence · <em>C</em>rossing · hold <em>Shift</em> to trim'
-      : 'Click the piece to remove · <em>F</em>ence · <em>C</em>rossing · e<em>R</em>ase · hold <em>Shift</em> to extend',
+      ? 'Click near the end to extend · <em>F</em>ence · <em>C</em>rossing · <em>E</em>dge · hold <em>Shift</em> to trim'
+      : 'Click the piece to remove · <em>F</em>ence · <em>C</em>rossing · <em>E</em>dge · e<em>R</em>ase · hold <em>Shift</em> to extend',
     init(c) { c.mode = null; c.fence = []; },
     text(c, s) {
       const k = String(s).trim().toLowerCase();
       if (k === 'f') { c.mode = 'fence'; c.fence = []; hint('Draw a line through what you want to cut · <em>Enter</em> to apply'); return true; }
       if (k === 'c') { c.mode = 'cross'; c.fence = []; hint('First corner of the crossing window'); return true; }
       if (!extending && k === 'r') { c.mode = 'erase'; hint('Pick objects to erase outright · <em>Enter</em> to stop'); return true; }
+      if (k === 'e' || k === 'edge') {
+        /* AutoCAD's Edge mode. Extend: a boundary that does not reach the
+           object is treated as if it did, so you can trim to a line that stops
+           short. No extend: only a real crossing counts. */
+        VS.edgemode = VS.edgemode ? 0 : 1;
+        echo(VS.edgemode ? 'Edge: boundaries are extended to meet the object'
+                         : 'Edge: only a real crossing cuts');
+        return true;
+      }
       if (k === 'u') {
         /* Undo inside the command takes back the last cut without leaving it */
         undo(); hint('Taken back — carry on'); return true;
@@ -622,11 +631,64 @@ function flattenToPrimitives(e) {
   }
   return out;
 }
+/* ---------------- joining arcs ----------------
+   Two arcs off the same centre and radius whose ends meet are one arc. JOIN
+   handled lines and polylines and silently left arcs alone, so the one case
+   where joining is unambiguous — the geometry says outright that they belong
+   together — was the case it could not do. */
+function arcsJoinable(a, b, tol) {
+  return Math.abs(a.r - b.r) < tol && dist(a.c, b.c) < tol;
+}
+/** merge a set of co-radial arcs into as few arcs as possible; a run that
+    closes on itself comes back as a circle, which is what it is */
+function joinArcs(arcs, tol) {
+  const out = [];
+  const pool = arcs.slice();
+  while (pool.length) {
+    let cur = pool.shift();
+    let a0 = cur.a0, a1 = cur.a1, moved = true;
+    while (moved && pool.length) {
+      moved = false;
+      for (let i = 0; i < pool.length; i++) {
+        const o = pool[i];
+        if (!arcsJoinable(cur, o, tol)) continue;
+        const aTol = tol / Math.max(cur.r, 1e-9);
+        if (Math.abs(wrap(o.a0 - a1)) < aTol) { a1 = a1 + wrap(o.a1 - o.a0); }
+        else if (Math.abs(wrap(a0 - o.a1)) < aTol) { a0 = a0 - wrap(o.a1 - o.a0); }
+        else continue;
+        pool.splice(i, 1); moved = true; break;
+      }
+    }
+    const span = a1 - a0;
+    out.push(span >= Math.PI * 2 - 1e-6
+      ? { t: 'circle', c: cur.c.slice(), r: cur.r }
+      : { t: 'arc', c: cur.c.slice(), r: cur.r, a0, a1 });
+  }
+  return out;
+}
 defc('join', {
   needSel: true, group: 'modify',
   init(c) {
+    /* arcs first: they join by geometry, not by chaining endpoints */
+    const arcs = selEnts().filter(e => e.t === 'arc');
+    if (arcs.length >= 2 && selEnts().every(e => e.t === 'arc')) {
+      const tol = Math.max(px(6), 1e-6);
+      const merged = joinArcs(arcs, tol);
+      if (merged.length < arcs.length) {
+        begin();
+        const meta = { layer: arcs[0].layer, color: arcs[0].color, lt: arcs[0].lt, lw: arcs[0].lw };
+        arcs.forEach(e => delEnt(e.id));
+        SEL.clear();
+        for (const m of merged) { const n = addEnt(Object.assign(m, meta)); SEL.add(n.id); }
+        commit('Join');
+        echo(arcs.length + ' arcs joined into ' + merged.length);
+        syncUI(); return endCmd();
+      }
+      echo('Those arcs do not meet, or are not off the same centre');
+      return endCmd();
+    }
     const es = selEnts().filter(e => e.t === 'line' || e.t === 'pline');
-    if (es.length < 2) { echo('Select two or more lines or polylines'); return endCmd(); }
+    if (es.length < 2) { echo('Select two or more lines, polylines or arcs'); return endCmd(); }
     const chains = es.map(e => e.t === 'line' ? [e.a, e.b] : (e.closed ? [...e.pts, e.pts[0]] : e.pts.slice()));
     const tol = Math.max(px(6), 1e-6);
     const merged = [];

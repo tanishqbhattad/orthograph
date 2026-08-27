@@ -496,4 +496,130 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       return { t: all[0] && all[0].t };`);
     eq(r.t, 'pline', 'doubling back is a polyline, not a line from 0 to 400');
   });
+
+  group('B2 — joining arcs, and Edge mode');
+
+  /* Two arcs off the same centre and radius whose ends meet are one arc. JOIN
+     handled lines and polylines and silently left arcs alone — the one case
+     where the geometry says outright that they belong together. */
+  t('two arcs off one centre join into one', () => {
+    const r = R(`${SETUP}
+      begin();
+      addEnt({t:'arc', c:[0,0], r:1000, a0:0, a1:1, layer:'0'});
+      addEnt({t:'arc', c:[0,0], r:1000, a0:1, a1:2, layer:'0'});
+      commit('a');
+      SEL.clear(); for (const e of DOC.ents.values()) SEL.add(e.id);
+      cancelCmd(); startCmd('join'); endCmd(true);
+      const es = [...DOC.ents.values()];
+      return { n: es.length, t: es[0] && es[0].t,
+               a0: es[0] && +es[0].a0.toFixed(6), a1: es[0] && +es[0].a1.toFixed(6),
+               r: es[0] && es[0].r };`);
+    eq(r.n, 1, 'the two become one');
+    eq(r.t, 'arc'); eq(r.r, 1000);
+    eq(r.a0, 0); eq(r.a1, 2, 'spanning both, got ' + r.a0 + '..' + r.a1);
+  });
+
+  t('arcs that close the circle come back as a circle', () => {
+    const r = R(`${SETUP}
+      begin();
+      addEnt({t:'arc', c:[0,0], r:800, a0:0, a1:Math.PI, layer:'0'});
+      addEnt({t:'arc', c:[0,0], r:800, a0:Math.PI, a1:Math.PI*2, layer:'0'});
+      commit('a');
+      SEL.clear(); for (const e of DOC.ents.values()) SEL.add(e.id);
+      cancelCmd(); startCmd('join'); endCmd(true);
+      const es = [...DOC.ents.values()];
+      return { n: es.length, t: es[0] && es[0].t, r: es[0] && es[0].r };`);
+    eq(r.n, 1); eq(r.t, 'circle', 'a full turn is a circle, not a 360 degree arc');
+    eq(r.r, 800);
+  });
+
+  t('arcs off different centres are refused, not forced together', () => {
+    const r = R(`${SETUP}
+      begin();
+      addEnt({t:'arc', c:[0,0], r:1000, a0:0, a1:1, layer:'0'});
+      addEnt({t:'arc', c:[5000,0], r:1000, a0:1, a1:2, layer:'0'});
+      commit('a');
+      SEL.clear(); for (const e of DOC.ents.values()) SEL.add(e.id);
+      cancelCmd(); startCmd('join'); endCmd(true);
+      return { n: DOC.ents.size };`);
+    eq(r.n, 2, 'they stay two');
+  });
+
+  /* Edge mode is the difference between trimming to a line that nearly reaches
+     and having to draw a longer one. */
+  t('Edge mode trims to a boundary that stops short', () => {
+    const r = R(`${SETUP}
+      VS.edgemode = 0;
+      begin();
+      addEnt({t:'line', a:[0,0], b:[0,3000], layer:'0'});      /* the object */
+      /* a boundary that stops 500 short of it */
+      addEnt({t:'line', a:[500,2000], b:[3000,2000], layer:'0'});
+      commit('x');
+      cancelCmd(); startCmd('trim');
+      cmdPoint([0, 2600]);                                     /* above the boundary */
+      const offTop = Math.max(...[...DOC.ents.values()]
+        .filter(e => Math.abs(e.a[0]) < 1e-9).map(e => Math.max(e.a[1], e.b[1])));
+      dispatch('E');
+      const mode = VS.edgemode;
+      cmdPoint([0, 2600]);
+      const onTop = Math.max(...[...DOC.ents.values()]
+        .filter(e => Math.abs(e.a[0]) < 1e-9).map(e => Math.max(e.a[1], e.b[1])));
+      endCmd(true); VS.edgemode = 0;
+      return { offTop, mode, onTop };`);
+    eq(r.offTop, 3000, 'with Edge off the boundary misses, so nothing is cut');
+    eq(r.mode, 1, 'E turns it on');
+    eq(r.onTop, 2000, 'and now it cuts at the extended boundary, got ' + r.onTop);
+  });
+
+  group('B6 — getting rid of a layer');
+
+  t('LAYDEL removes the layer and everything on it', () => {
+    const r = R(`${SETUP}
+      ensureLayer('SCRATCH');
+      begin();
+      addEnt({t:'line', a:[0,0], b:[100,0], layer:'SCRATCH'});
+      addEnt({t:'line', a:[0,50], b:[100,50], layer:'SCRATCH'});
+      addEnt({t:'line', a:[0,90], b:[100,90], layer:'0'});
+      commit('x');
+      DOC.cur = '0';
+      cancelCmd(); startCmd('laydel'); dispatch('SCRATCH'); endCmd(true);
+      return { layers: DOC.layers.some(l => l.name === 'SCRATCH'),
+               ents: DOC.ents.size };`);
+    eq(r.layers, false, 'the layer is gone');
+    eq(r.ents, 1, 'and so are its objects, leaving the one on layer 0');
+  });
+
+  t('layer 0 and the current layer are refused', () => {
+    const r = R(`${SETUP}
+      ensureLayer('KEEP'); DOC.cur = 'KEEP';
+      cancelCmd(); startCmd('laydel'); dispatch('0'); endCmd(true);
+      const zeroKept = DOC.layers.some(l => l.name === '0');
+      cancelCmd(); startCmd('laydel'); dispatch('KEEP'); endCmd(true);
+      const curKept = DOC.layers.some(l => l.name === 'KEEP');
+      DOC.cur = '0';
+      return { zeroKept, curKept };`);
+    eq(r.zeroKept, true, 'layer 0 cannot be deleted');
+    eq(r.curKept, true, 'nor the one you are drawing on');
+  });
+
+  /* The objects have to move BEFORE the layer goes, or they are orphaned onto
+     a name that no longer exists and quietly fall back to layer 0. */
+  t('LAYMRG moves the objects, then removes the layer', () => {
+    const r = R(`${SETUP}
+      ensureLayer('THEIRS'); ensureLayer('OURS');
+      begin();
+      addEnt({t:'line', a:[0,0], b:[100,0], layer:'THEIRS'});
+      addEnt({t:'line', a:[0,50], b:[100,50], layer:'THEIRS'});
+      commit('x');
+      DOC.cur = '0';
+      cancelCmd(); startCmd('laymrg'); dispatch('THEIRS'); dispatch('OURS'); endCmd(true);
+      const on = [...DOC.ents.values()].map(e => e.layer);
+      return { gone: !DOC.layers.some(l => l.name === 'THEIRS'),
+               kept: DOC.layers.some(l => l.name === 'OURS'),
+               on, n: DOC.ents.size };`);
+    eq(r.n, 2, 'nothing is lost');
+    eq(r.on.join(','), 'OURS,OURS', 'everything landed on the target, not on 0');
+    eq(r.gone, true, 'the source layer is removed');
+    eq(r.kept, true);
+  });
 };

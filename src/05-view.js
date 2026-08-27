@@ -18,6 +18,7 @@ const VS = {
   mirrtext: 0,            /* MIRRTEXT — 0 keeps mirrored text readable         */
   underlay: 0,            /* UNDERLAY — show the storey below, faintly         */
   tags: 1,                /* TAGS — draw door and window marks on the plan     */
+  edgemode: 0,            /* EDGEMODE — extend boundaries to meet the object   */
   trimmode: 1,            /* TRIMMODE — 0 leaves the originals uncut           */
   gridMajor: 5,           /* GRIDMAJOR — minor lines between two major ones    */
   gridSub: true,          /* adaptive subdivision below the nominal spacing    */

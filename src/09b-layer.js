@@ -647,3 +647,78 @@ defc('table', {
     });
   },
 });
+
+defvar('EDGEMODE', {
+  desc: 'Trim and extend treat boundaries as extended: 1 yes, 0 only real crossings',
+  get: () => VS.edgemode ? 1 : 0,
+  set(v) { VS.edgemode = v ? 1 : 0; },
+});
+
+/* ============================================================
+   LAYDEL and LAYMRG
+   ------------------------------------------------------------
+   Deleting a layer is not the same as hiding one, and there was
+   no way to do either permanently. LAYMRG is the one that keeps
+   a drawing tidy: a layer that arrived from a consultant's file
+   under a name you do not use is merged into yours, taking its
+   objects with it, and then it is gone.
+   ============================================================ */
+/** the objects on a layer, and whether it can be got rid of at all */
+function layerContents(name) {
+  return [...DOC.ents.values()].filter(e => e.layer === name);
+}
+function layerRemovable(name) {
+  if (name === '0') return 'Layer 0 cannot be deleted';
+  if (name === DOC.cur) return 'That is the current layer';
+  if (!hasLayer(name)) return 'No layer called "' + name + '"';
+  return null;
+}
+defc('laydel', {
+  key: 'laydel', group: 'view',
+  hint: 'Layer to delete, with everything on it',
+  init(c) { c.data = {}; },
+  text(c, s) {
+    const raw = String(s).trim();
+    const why = layerRemovable(raw);
+    if (why) { cliPrint(why + '.', 'err'); return true; }
+    const n = layerContents(raw).length;
+    begin();
+    for (const e of layerContents(raw)) eraseEnt(e.id);
+    touchLayers();
+    DOC.layers = DOC.layers.filter(l => l.name !== raw);
+    commit('Delete layer ' + raw);
+    cliPrint('Deleted ' + raw + ' and ' + n + ' object' + (n === 1 ? '' : 's'));
+    syncUI(); draw();
+    return true;
+  },
+});
+defc('laymrg', {
+  key: 'laymrg', group: 'view',
+  hint: 'Layer to merge FROM',
+  init(c) { c.data = {}; },
+  text(c, s) {
+    const raw = String(s).trim(), d = c.data;
+    if (!d.from) {
+      const why = layerRemovable(raw);
+      if (why) { cliPrint(why + '.', 'err'); return true; }
+      d.from = layer(raw).name;
+      hint('Layer to merge INTO:');
+      return true;
+    }
+    if (!hasLayer(raw)) { cliPrint('No layer called "' + raw + '".', 'err'); return true; }
+    const to = layer(raw).name;
+    if (to === d.from) { cliPrint('That is the same layer.', 'err'); return true; }
+    const moving = layerContents(d.from);
+    begin();
+    /* the objects move BEFORE the layer goes, or they would be orphaned onto a
+       name that no longer exists and quietly fall back to layer 0 */
+    for (const e of moving) { mut(e); e.layer = to; }
+    touchLayers();
+    DOC.layers = DOC.layers.filter(l => l.name !== d.from);
+    commit('Merge ' + d.from + ' into ' + to);
+    cliPrint(moving.length + ' object' + (moving.length === 1 ? '' : 's') +
+             ' moved from ' + d.from + ' to ' + to + ', and ' + d.from + ' removed');
+    syncUI(); draw();
+    return true;
+  },
+});

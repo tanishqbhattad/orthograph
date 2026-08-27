@@ -124,9 +124,13 @@ function subEnt(e, t0, t1) {                     /* new entity covering param ra
 /* ---- TRIM: remove the piece of `e` containing `click` between cutters ---- */
 function trimAt(e, click, cutters) {
   const ps = [];
+  /* Edge mode: with it on, a boundary that stops short of the object is
+     treated as if it carried on, which is the difference between being able to
+     trim to a line that nearly reaches and having to draw a longer one. */
+  const inf = !!(typeof VS !== 'undefined' && VS.edgemode);
   for (const c of cutters) {
     if (c.id === e.id) continue;
-    for (const p of intersect(e, c, false)) ps.push(paramOf(e, p));
+    for (const p of intersect(e, c, inf)) ps.push(paramOf(e, p));
   }
   if (!ps.length) return null;
   const tc = paramOf(e, click);
