@@ -109,7 +109,7 @@ blue → hover → hot red with the full stretch/move/rotate/scale/mirror cycle.
 
 **Drafting** is the AutoCAD-shaped half: line, polyline, spline, rectangle, circle, arc,
 ellipse, polygon, donut, point, construction line, ray, revision cloud, hatch, text,
-paragraph text, leader, dimensions (linear, aligned, horizontal, vertical, radius,
+paragraph text with stacked fractions, leader, dimensions (linear, aligned, horizontal, vertical, radius,
 diameter, angular, continue, baseline, ordinate, arc length). Modify: move, copy, rotate, scale, mirror, offset,
 array (rectangular, polar, path), stretch, align, trim, extend, lengthen, fillet, chamfer,
 break, join, pedit, explode, divide, measure, match properties, blocks, erase. Inquiry:
@@ -125,6 +125,11 @@ Walls carry a compound structure: a type is a stack of layers with thicknesses, 
 layer boundaries are drawn, so a cavity wall reads as a cavity wall rather than as two
 lines. Each layer is poched at its own weight — brick dense, insulation nearly open — so
 the fill agrees with the lines drawn across it.
+
+**Fields.** Text can read the drawing instead of being typed into it: `%<drawing>%`,
+`%<sheet>%`, `%<scale>%`, `%<date>%`, and `%<area:id>%`, `%<length:id>%` or
+`%<count:door>%` for something in it. A field that cannot be resolved comes out as
+`####` rather than as a gap nobody can account for.
 
 ## Storeys, sheets and output
 
@@ -245,7 +250,8 @@ noticed months later.
   from a spreadsheet into the drawing.
 - An arc-length dimension has no DXF R2000 equivalent, so it exports as flattened
   geometry rather than as an editable dimension.
-- No fields, and no stacked fractions in text.
+- Fields cover the drawing name, sheet, scale, date, and an object'''s area,
+  length or count; there is no field browser, so they are typed by hand.
 - Blocks have no attribute manager, in-place reference editing or dynamic parameters.
 - Keyboard picking is Ctrl+Enter rather than a rebindable key, and the
   high-contrast palette is one alternative rather than a set you can edit.

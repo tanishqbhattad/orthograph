@@ -498,7 +498,10 @@ function entShapes(e) {
      frame. The cache is keyed by id alone, so caching these would hand the
      second viewport the size worked out for the first. They are notes and
      dimensions — few, and cheap to build — so they are simply not cached. */
-  if (e.anno) return shapes(e, SHAPE_TOL) || [];
+  /* A field reads OTHER objects, so its answer can go stale without anything
+     happening to the text itself — nothing would mark it dirty. Built fresh,
+     for the same reason an annotative object is. */
+  if (e.anno || hasField(e.s)) return shapes(e, SHAPE_TOL) || [];
   const hit = SHPC.get(e.id);
   if (hit !== undefined) return hit.shapes;
   const sh = shapes(e, SHAPE_TOL) || [];

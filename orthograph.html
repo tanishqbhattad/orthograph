@@ -1315,7 +1315,7 @@ function shapes(e, tol) {
     case 'point': return [];
     /* an annotative note is sized in paper units; annoFor turns that into the
        model height the scale currently looking at it calls for */
-    case 'text': return [{ text: e.s, p: e.p, h: e.h * annoFor(e),
+    case 'text': return [{ text: resolveFields(e.s), p: e.p, h: e.h * annoFor(e),
                            rot: e.rot || 0, anchor: e.anchor || 'l' }];
     /* mtext, leader and attdef were each given their own drawing path and never
        added here, so shapes() answered EMPTY for all three. Everything that
@@ -1329,8 +1329,12 @@ function shapes(e, tol) {
          would leave the lines at the old spacing */
       const mk = annoFor(e);
       const src = mk === 1 ? e : Object.assign({}, e, { h: e.h * mk });
-      return mtextLines(src).map(r => ({ text: r.text, p: r.p, h: r.h,
-                                         rot: r.rot || 0, anchor: r.anchor || 'l' }));
+      /* fields first, then stacking: a field can perfectly well resolve to
+         something with a fraction in it */
+      const rows = mtextLines(hasField(src.s) ? Object.assign({}, src, { s: resolveFields(src.s) }) : src);
+      const out = [];
+      for (const r of rows) for (const sh of lineShapes(r)) out.push(sh);
+      return out;
     }
     case 'leader': {
       const lk = annoFor(e);
@@ -1341,7 +1345,7 @@ function shapes(e, tol) {
       return out;
     }
     case 'attdef':
-      return [{ text: e.tag || 'TAG', p: e.p, h: (e.h || 2.5) * annoFor(e),
+      return [{ text: resolveFields(e.tag || 'TAG'), p: e.p, h: (e.h || 2.5) * annoFor(e),
                 rot: e.rot || 0, anchor: e.anchor || 'l' }];
     /* A dimension has its own drawing path, its own flatten case and its own
        SVG case, and was never taught to shapes() — consistent special-casing
@@ -1477,6 +1481,117 @@ function mtextWrap(str, h, w) {
   return out;
 }
 /** the laid-out lines of an mtext, in world space */
+/* ============================================================
+   Fields — text that reads the drawing instead of being typed into it
+
+   The title block already worked this way for scale, on the principle that a
+   title block able to disagree with the drawing it labels is a liability.
+   Everything else — the sheet name, the date, a room's area, how many doors
+   there are — was a number somebody keyed in and nobody updated.
+
+   %<name>% or %<name:argument>%. The entity keeps the field; what is drawn is
+   the answer. A field nobody can resolve comes out as #### rather than as
+   nothing, because a gap on a drawing is a gap nobody can explain.
+   ============================================================ */
+const FIELD_RE = /%<([a-z]+)(?::([^>]*))?>%/gi;
+function hasField(s) { return typeof s === 'string' && s.indexOf('%<') >= 0; }
+function fieldValue(name, arg) {
+  const byId = () => {
+    const id = parseInt(arg, 10);
+    return isFinite(id) ? DOC.ents.get(id) : null;
+  };
+  switch (name) {
+    case 'drawing': return DOC.name || null;
+    case 'sheet': {
+      const sh = (typeof curSheet === 'function') ? curSheet() : null;
+      return sh ? (sh.name || null) : null;
+    }
+    case 'scale': return (typeof scaleLabel === 'function' && typeof annoScale === 'function')
+      ? scaleLabel(annoScale()) : null;
+    case 'date': return fieldDate();
+    case 'area': { const e = byId(); if (!e) return null;
+      const a = entArea(e); return a ? fmtArea(a) : null; }
+    case 'length': { const e = byId(); if (!e) return null;
+      const L = entLength(e); return L ? fmt(L) : null; }
+    case 'count': {
+      const want = String(arg || '').toLowerCase();
+      if (!want) return null;
+      let n = 0;
+      for (const e of DOC.ents.values()) if (e.t === want && onCurLevel(e)) n++;
+      return String(n);
+    }
+    default: return null;
+  }
+}
+function fieldDate() {
+  const d = new Date();
+  const p = (n) => (n < 10 ? '0' : '') + n;
+  return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear();
+}
+function resolveFields(s) {
+  if (!hasField(s)) return s == null ? '' : String(s);
+  return String(s).replace(FIELD_RE, (m, name, arg) => {
+    let v = null;
+    try { v = fieldValue(String(name).toLowerCase(), arg); } catch (e) { v = null; }
+    return v == null || v === '' ? '####' : String(v);
+  });
+}
+
+/* ============================================================
+   Stacked fractions
+
+   How a dimension in feet and inches, a tolerance or a scale is actually
+   written. A flat 1/2 is a different mark on the page from a stacked one, and
+   an imperial drawing is full of them.
+
+   AutoCAD's own syntax, so a drawing that came from there reads correctly:
+   \S<upper><divider><lower>; where the divider is / or # for a fraction with a
+   bar, and ^ for a tolerance stacked without one.
+   ============================================================ */
+const STACK_RE = /\\S([^;^/#]*)([/#^])([^;]*);/;
+/** Rough advance width of a run of text, the same estimate mtextWrap uses to
+    decide where a line breaks — good enough to place a fraction on a line. */
+function runWidth(str, h) { return String(str || '').length * h * MT_CHAR; }
+/** Break one line into plain runs and stacked fractions, in order. */
+function stackSplit(line) {
+  const out = [];
+  let rest = String(line == null ? '' : line);
+  for (;;) {
+    const m = STACK_RE.exec(rest);
+    if (!m) { if (rest) out.push({ text: rest }); return out; }
+    if (m.index > 0) out.push({ text: rest.slice(0, m.index) });
+    out.push({ up: m[1], down: m[3], bar: m[2] !== '^' });
+    rest = rest.slice(m.index + m[0].length);
+  }
+}
+/** The shapes for one laid-out line, expanding any fraction in it. */
+function lineShapes(row) {
+  const parts = stackSplit(row.text);
+  if (parts.length === 1 && parts[0].text != null)
+    return [{ text: parts[0].text, p: row.p, h: row.h, rot: row.rot, anchor: row.anchor }];
+  const h = row.h, rot = row.rot || 0;
+  const c = Math.cos(rot), s = Math.sin(rot);
+  /* along the line, and square to it: so a rotated paragraph stacks with the
+     text rather than always stacking up the page */
+  const at = (dx, dy) => [row.p[0] + dx * c - dy * s, row.p[1] + dx * s + dy * c];
+  const out = [];
+  let x = 0;
+  for (const part of parts) {
+    if (part.text != null) {
+      if (part.text.length) out.push({ text: part.text, p: at(x, 0), h, rot, anchor: row.anchor });
+      x += runWidth(part.text, h);
+      continue;
+    }
+    const sh = h * 0.6;                      /* the halves are set smaller */
+    const w = Math.max(runWidth(part.up, sh), runWidth(part.down, sh));
+    out.push({ text: part.up, p: at(x, h * 0.55), h: sh, rot, anchor: 'l' });
+    out.push({ text: part.down, p: at(x, -h * 0.25), h: sh, rot, anchor: 'l' });
+    if (part.bar) out.push({ pts: [at(x, h * 0.42), at(x + w, h * 0.42)], role: 'stackbar' });
+    x += w;
+  }
+  return out;
+}
+
 function mtextLines(e) {
   const h = e.h || 2.5;
   const lead = h * MT_LEAD;
@@ -4479,7 +4594,10 @@ function entShapes(e) {
      frame. The cache is keyed by id alone, so caching these would hand the
      second viewport the size worked out for the first. They are notes and
      dimensions — few, and cheap to build — so they are simply not cached. */
-  if (e.anno) return shapes(e, SHAPE_TOL) || [];
+  /* A field reads OTHER objects, so its answer can go stale without anything
+     happening to the text itself — nothing would mark it dirty. Built fresh,
+     for the same reason an annotative object is. */
+  if (e.anno || hasField(e.s)) return shapes(e, SHAPE_TOL) || [];
   const hit = SHPC.get(e.id);
   if (hit !== undefined) return hit.shapes;
   const sh = shapes(e, SHAPE_TOL) || [];
