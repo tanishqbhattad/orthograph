@@ -927,8 +927,11 @@ function boot() {
     Restoring silently would be worse than losing it: they would not know which
     drawing they were looking at. */
 function offerRecovery() {
-  const rec = autosaveFound();
-  if (!rec) return;
+  /* The drawing may be in the overflow store, which answers through events, so
+     the prompt is raised from the callback rather than before it. */
+  autosaveFetch(rec => { if (rec) recoveryPrompt(rec); });
+}
+function recoveryPrompt(rec) {
   const when = agoText(Date.now() - (rec.at || Date.now()));
   const size = rec.doc ? Math.round(rec.doc.length / 1024) : 0;
   modal(

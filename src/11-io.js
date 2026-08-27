@@ -355,6 +355,67 @@ const AUTOSAVE = {
 let STORE = (typeof localStorage !== 'undefined') ? localStorage : null;
 function setStore(s) { STORE = s; }
 
+/* ---------------- the overflow store ----------------
+   localStorage is kept as the primary store for one reason: it is
+   synchronous, and the most valuable autosave anybody gets is the one written
+   during beforeunload, where there is nothing to wait for.
+
+   A drawing can outgrow it — about 25,000 objects — and used to be told so and
+   left unsaved. IndexedDB has no practical cap, but it answers through events,
+   so it can only be counted on for the timed writes. It therefore sits
+   UNDERNEATH localStorage rather than replacing it, and what localStorage
+   keeps in that case is a pointer of a few hundred bytes, which will always
+   fit and can always be written on the way out.
+
+   Callbacks rather than promises: that is IndexedDB's own shape, and the rest
+   of this program has none. A callback is always called — with null or false
+   on failure — because recovery that never hears back would hang the start of
+   the program, which is the worst moment to hang. */
+const BIGDB = { name: 'orthograph', store: 'autosave', ver: 1 };
+function idbOpen(cb) {
+  const F = (typeof indexedDB !== 'undefined') ? indexedDB : null;
+  if (!F) return cb(null);
+  let rq;
+  try { rq = F.open(BIGDB.name, BIGDB.ver); } catch (e) { return cb(null); }
+  rq.onupgradeneeded = () => {
+    try {
+      const db = rq.result;
+      if (!db.objectStoreNames.contains(BIGDB.store)) db.createObjectStore(BIGDB.store);
+    } catch (e) { /* the error path below reports it */ }
+  };
+  rq.onsuccess = () => cb(rq.result || null);
+  rq.onerror = () => cb(null);
+  rq.onblocked = () => cb(null);
+}
+/** One transaction, wrapped so that no failure of it can reach the caller.
+    cb(ok, value): whether the transaction completed is reported SEPARATELY
+    from what it read. A put returns no value, so a successful one and a failed
+    one are indistinguishable by value alone — reading success out of the value
+    made every successful write look like a refusal. */
+function idbDo(mode, fn, cb) {
+  idbOpen(db => {
+    if (!db) return cb(false, null);
+    let tx, st;
+    try {
+      tx = db.transaction(BIGDB.store, mode);
+      st = tx.objectStore(BIGDB.store);
+    } catch (e) { return cb(false, null); }
+    let out = null, done = false;
+    const finish = (ok) => { if (!done) { done = true; cb(ok, ok ? out : null); } };
+    try { fn(st, v => { out = v; }); } catch (e) { return finish(false); }
+    tx.oncomplete = () => finish(true);
+    tx.onerror = () => finish(false);
+    tx.onabort = () => finish(false);
+  });
+}
+const IDB_STORE = {
+  put(k, v, cb) { idbDo('readwrite', (st) => st.put(v, k), ok => cb && cb(ok)); },
+  get(k, cb) { idbDo('readonly', (st, set) => { const rq = st.get(k); rq.onsuccess = () => set(rq.result == null ? null : String(rq.result)); }, (ok, v) => cb(ok ? v : null)); },
+  del(k, cb) { idbDo('readwrite', (st) => st.delete(k), ok => cb && cb(ok)); },
+};
+let BIGSTORE = (typeof indexedDB !== 'undefined') ? IDB_STORE : null;
+function setBigStore(s) { BIGSTORE = s; }
+
 /** Unsaved work is simply "the journal has moved since the last save". The
     sequence number was already being kept for undo, so this costs nothing. */
 function docDirty() { return HIST.seq !== (DOC.savedSeq | 0); }
@@ -371,33 +432,71 @@ function autosaveNow(reason) {
       doc: saveNative(),
     });
   } catch (e) { return false; }
-  /* A drawing too big for the store is a real situation, not an error to
-     swallow: say so once and stop trying, rather than throwing on every edit
-     or silently pretending the work is safe. */
-  if (payload.length > AUTOSAVE.limit) {
-    if (!AUTOSAVE.failed) {
-      AUTOSAVE.failed = true;
-      if (typeof cliPrint === 'function')
-        cliPrint('This drawing is too large to autosave. Save it to a file.', 'err');
-    }
-    return false;
+  /* Small enough for localStorage is the good case: synchronous, and therefore
+     the only one that can be relied on during beforeunload. */
+  if (payload.length <= AUTOSAVE.limit) {
+    try {
+      STORE.setItem(AUTOSAVE.key, payload);
+      AUTOSAVE.last = Date.now();
+      AUTOSAVE.bytes = payload.length;
+      AUTOSAVE.failed = false;
+      AUTOSAVE.big = false;
+      /* An earlier session may have overflowed. Two copies and no way to tell
+         which session either came from is worse than one. */
+      if (BIGSTORE) { try { BIGSTORE.del(AUTOSAVE.key); } catch (e) { /* best effort */ } }
+      return true;
+    } catch (e) { /* out of room after all: fall through to the overflow tier */ }
   }
+  return autosaveOverflow(payload);
+}
+/** Too big for localStorage, or localStorage refused it. Put the drawing in
+    the overflow store and leave a pointer to it where recovery will look. */
+function autosaveOverflow(payload) {
+  if (!BIGSTORE) return autosaveGaveUp(
+    'This drawing is too large to autosave. Save it to a file.');
+  const FULL = 'Autosave failed - browser storage is full or blocked. Save manually.';
+  /* Three states, not two. IndexedDB normally answers after this function has
+     returned, and a write still in flight is not a write that failed — but a
+     store that refuses immediately is a refusal we can report honestly now
+     rather than claiming the work is safe. */
+  let state = 'flight';
   try {
-    STORE.setItem(AUTOSAVE.key, payload);
-    AUTOSAVE.last = Date.now();
-    AUTOSAVE.bytes = payload.length;
-    AUTOSAVE.failed = false;
-    return true;
-  } catch (e) {
-    if (!AUTOSAVE.failed) {
-      AUTOSAVE.failed = true;
-      if (typeof cliPrint === 'function')
-        cliPrint('Autosave failed — browser storage is full or blocked. Save manually.', 'err');
-    }
-    return false;
+    BIGSTORE.put(AUTOSAVE.key, payload, r => {
+      if (r !== false) { state = 'ok'; return; }
+      state = 'failed';
+      /* a pointer to a drawing that never landed: recovery ignores it, but the
+         person still has to be told their work is not being kept */
+      autosaveGaveUp(FULL);
+      try { STORE.removeItem(AUTOSAVE.key); } catch (e) { /* nothing to do */ }
+    });
+  } catch (e) { return autosaveGaveUp(FULL); }
+  if (state === 'failed') return false;
+  let head;
+  try {
+    const o = JSON.parse(payload);
+    head = JSON.stringify({ v: o.v, at: o.at, seq: o.seq, name: o.name,
+                            reason: o.reason, big: true, size: payload.length });
+  } catch (e) { return false; }
+  try {
+    STORE.setItem(AUTOSAVE.key, head);
+  } catch (e) { return autosaveGaveUp(FULL); }
+  AUTOSAVE.last = Date.now();
+  AUTOSAVE.bytes = payload.length;
+  AUTOSAVE.failed = false;
+  AUTOSAVE.big = true;
+  return true;
+}
+/** say it once, then stop saying it on every edit */
+function autosaveGaveUp(msg) {
+  if (!AUTOSAVE.failed) {
+    AUTOSAVE.failed = true;
+    if (typeof cliPrint === 'function') cliPrint(msg, 'err');
   }
+  return false;
 }
 function autosaveClear() {
+  if (BIGSTORE) { try { BIGSTORE.del(AUTOSAVE.key); } catch (e) { /* best effort */ } }
+  AUTOSAVE.big = false;
   if (!STORE) return;
   try { STORE.removeItem(AUTOSAVE.key); } catch (e) { /* nothing to do */ }
   AUTOSAVE.bytes = 0;
@@ -412,12 +511,35 @@ function autosaveFound() {
   if (!raw) return null;
   try {
     const o = JSON.parse(raw);
-    if (!o || typeof o.doc !== 'string') return null;
+    if (!o) return null;
+    /* a pointer carries no drawing: autosaveFetch goes and gets it */
+    if (o.big) return o;
+    if (typeof o.doc !== 'string') return null;
     return o;
   } catch (e) {
     try { STORE.removeItem(AUTOSAVE.key); } catch (e2) { /* ignore */ }
     return null;
   }
+}
+/** The record with its drawing actually in it, whichever store that took.
+    cb is always called, with null when there is nothing to recover — recovery
+    that never hears back would hang the program at startup. */
+function autosaveFetch(cb) {
+  const rec = autosaveFound();
+  if (!rec) return cb(null);
+  if (!rec.big) return cb(rec);
+  if (!BIGSTORE) return cb(null);
+  let answered = false;
+  const once = (v) => { if (answered) return; answered = true; cb(v); };
+  try {
+    BIGSTORE.get(AUTOSAVE.key, raw => {
+      if (!raw) return once(null);
+      try {
+        const o = JSON.parse(raw);
+        once(o && typeof o.doc === 'string' ? o : null);
+      } catch (e) { once(null); }
+    });
+  } catch (e) { once(null); }
 }
 /** how long ago, in words a person reads without doing arithmetic */
 function agoText(ms) {
