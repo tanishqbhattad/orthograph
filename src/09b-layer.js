@@ -265,3 +265,85 @@ defc('dimbase', {
     draw();
   },
 });
+
+/* ============================================================
+   Block attributes
+   ------------------------------------------------------------
+   An attribute is a text field that belongs to the block
+   DEFINITION but whose value belongs to each INSERT. That is how
+   one door block serves forty doors with forty numbers, and how
+   a title block is a block at all rather than a drawing of one.
+   Without them a block is a rubber stamp; with them it is a
+   thing that carries information.
+   ============================================================ */
+/** the attribute definitions of a block, in the order they were declared */
+function blockAttdefs(name) {
+  const b = (DOC.blocks || {})[name];
+  if (!b) return [];
+  return (b.ents || []).filter(e => e.t === 'attdef');
+}
+/** the value an insert carries for one tag, falling back to the default */
+function attValue(ins, def) {
+  const own = ins && ins.att && ins.att[def.tag];
+  if (own != null && own !== '') return own;
+  return def.val == null ? '' : def.val;
+}
+defc('attdef', {
+  key: 'attdef', group: 'annotate',
+  hint: 'Pick where the attribute sits',
+  point(c, p) {
+    modal('<h3>Define an attribute</h3>' +
+      '<div class="row"><label>Tag</label><input class="f" id="atg" value="TAG"></div>' +
+      '<div class="row"><label>Prompt</label><input class="f" id="apr" value=""></div>' +
+      '<div class="row"><label>Default</label><input class="f" id="ade" value=""></div>' +
+      '<div class="row"><label>Height</label><input class="f" id="ahh" value="' +
+        (+(DOC.textH / U[DOC.units]).toFixed(4)) + '"></div>' +
+      '<div class="row"><label>Visible</label><select class="f" id="avi">' +
+        '<option value="1">shown on the drawing</option>' +
+        '<option value="0">hidden — data only</option></select></div>', () => {
+      const tag = ($('#atg').value || 'TAG').trim().toUpperCase().replace(/\s+/g, '_');
+      begin();
+      addEnt({ t: 'attdef', p: p.slice(), tag,
+               prompt: $('#apr').value, val: $('#ade').value,
+               h: parseLen($('#ahh').value) || DOC.textH,
+               hidden: $('#avi').value === '0',
+               rot: 0, anchor: 'l', layer: annoLayer('TEXT') });
+      commit('Attribute ' + tag);
+      cliPrint('Attribute ' + tag + ' defined — include it in a block to use it');
+      endCmd();
+    });
+  },
+});
+
+/** EATTEDIT — edit the attribute values carried by one insert */
+defc('eattedit', {
+  key: 'eattedit', group: 'annotate', hint: 'Pick a block to edit its attributes',
+  point(c, p) {
+    const ins = pickAt(p, 10, e => e.t === 'insert');
+    if (!ins) return echo('Pick a block insert');
+    const defs = blockAttdefs(ins.name);
+    if (!defs.length) return echo('That block has no attributes');
+    const rows = defs.map((d, i) =>
+      '<div class="row"><label>' + esc(d.prompt || d.tag) + '</label>' +
+      '<input class="f" id="av' + i + '" value="' + esc(attValue(ins, d)) + '"></div>').join('');
+    modal('<h3>' + esc(ins.name) + '</h3>' + rows, () => {
+      const vals = {};
+      defs.forEach((d, i) => { vals[d.tag] = $('#av' + i).value; });
+      setAttValues(ins, vals);
+    });
+  },
+});
+
+/** Write attribute values onto ONE insert. Kept out of the dialog because a
+    block's data should not depend on whether a modal rendered — and because
+    the values belong to the insert, never to the definition: editing the door
+    number on one door must not renumber the other thirty-nine. */
+function setAttValues(ins, vals) {
+  if (!ins || !vals) return false;
+  begin(); mut(ins);
+  ins.att = Object.assign({}, ins.att);
+  for (const k of Object.keys(vals)) ins.att[k] = vals[k];
+  commit('Attributes');
+  if (typeof draw === 'function') draw();
+  return true;
+}

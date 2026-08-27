@@ -772,10 +772,50 @@ function insertEnts(ins) {
   };
   return b.ents.map(e => { const n = clone(e); delete n.id; n.layer = n.layer === '0' ? ins.layer : n.layer; return xf(n, f); });
 }
+/* ---------------- colour inside a block ----------------
+   An insert flattened its contents into one shape list and drew the lot in the
+   insert's colour, so a block could only ever be monochrome: a door leaf and
+   its swing could not differ, and a red note inside a block came out whatever
+   the insert was. AutoCAD's three cases are all real and all different:
+
+     explicit  — the entity's own colour, wherever it is inserted
+     ByLayer   — the colour of the layer the entity is on (the default here,
+                 expressed by having no colour of its own)
+     ByBlock   — the INSERT's colour, which is what makes one block definition
+                 usable in several colours
+
+   ByBlock needs a marker, since "no colour" already means ByLayer. */
+const BYBLOCK = 'byblock';
+/** the colour a block's contents should draw in, or null to inherit */
+function blockPartColor(e) {
+  if (!e) return null;
+  if (e.color === BYBLOCK) return null;         /* inherit from the insert */
+  if (e.color) return e.color;                  /* explicit */
+  if (e.layer && hasLayer(e.layer)) return layer(e.layer).color;   /* ByLayer */
+  return null;
+}
 GEOM.insert = {
   shapes(ins, tol) {
     const out = [];
-    for (const e of insertEnts(ins)) out.push(...(GEOM[e.t] ? shapes(e, tol) : shapesOfPrimitive(e, tol)));
+    for (const e of insertEnts(ins)) {
+      /* An attdef inside an insert draws as that insert's VALUE, not as the
+         tag typed into the definition. Use the entity from insertEnts, which
+         has already been moved, turned and scaled into place — reading the
+         definition's own coordinates instead stacks every insert's text on
+         top of the first one, which is exactly what it did. */
+      if (e.t === 'attdef') {
+        if (e.hidden) continue;
+        const v = (typeof attValue === 'function') ? attValue(ins, e) : (e.val || '');
+        if (!v) continue;
+        out.push({ text: v, p: e.p, h: e.h || DOC.textH, rot: e.rot || 0,
+                   anchor: e.anchor || 'l', col: blockPartColor(e) });
+        continue;
+      }
+      const col = blockPartColor(e);
+      const got = GEOM[e.t] ? shapes(e, tol) : shapesOfPrimitive(e, tol);
+      if (col) for (const g of got) { if (g.col == null) g.col = col; }
+      out.push(...got);
+    }
     return out;
   },
   grips: ins => [{ p: ins.p, k: 'p' }],
@@ -794,6 +834,7 @@ function shapesOfPrimitive(e, tol) {
     case 'arc': return [{ c: e.c, r: e.r, a0: e.a0, a1: e.a1, lt: e.lt }];
     case 'ellipse': return [{ pts: poly(e, tol || 48), lt: e.lt }];
     case 'text': return [{ text: e.s, p: e.p, h: e.h, rot: e.rot || 0, anchor: e.anchor || 'l' }];
+    case 'attdef': return [{ text: e.tag, p: e.p, h: e.h, rot: e.rot || 0, anchor: e.anchor || 'l' }];
     case 'dim': return flattenToPrimitives(e).flatMap(q => shapesOfPrimitive(q, tol));
     default: return [];
   }

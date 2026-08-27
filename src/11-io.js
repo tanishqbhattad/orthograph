@@ -77,7 +77,7 @@ function svgEntityBody(lwMul) {
       out.push(`<path d="M${e.p[0] - r},${-e.p[1]}L${e.p[0] + r},${-e.p[1]}M${e.p[0]},${-e.p[1] - r}L${e.p[0]},${-e.p[1] + r}" ${strokeOf(col, lw, '')}/>`);
       continue;
     }
-    for (const s of shapes(e, 96)) emitShape(s, col, lw, lt);
+    for (const s of shapes(e, 96)) emitShape(s, ink(s.col || entColor(e)), lw, lt);
   }
   return out;
 }

@@ -1268,6 +1268,13 @@ function bbox(e) {
         acc([r.p[0] + q[0] * c - q[1] * sn, r.p[1] + q[0] * sn + q[1] * c]));
     }
   }
+  else if (e.t === 'attdef') {
+    const w = String(e.tag || '').length * (e.h || 2.5) * MT_CHAR, h = e.h || 2.5;
+    const c = Math.cos(e.rot || 0), sn = Math.sin(e.rot || 0);
+    const ox = e.anchor === 'c' ? -w / 2 : e.anchor === 'r' ? -w : 0;
+    [[ox, 0], [ox + w, 0], [ox + w, h], [ox, h]].forEach(q =>
+      acc([e.p[0] + q[0] * c - q[1] * sn, e.p[1] + q[0] * sn + q[1] * c]));
+  }
   else if (e.t === 'text') {
     const w = e.s.length * e.h * 0.62, h = e.h;
     const c = Math.cos(e.rot || 0), s = Math.sin(e.rot || 0);
@@ -1407,7 +1414,7 @@ function entDist(p, e) {
     if (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) d = Math.min(d, 0);
     return d;
   }
-  if (e.t === 'text' || e.t === 'mtext') {
+  if (e.t === 'text' || e.t === 'mtext' || e.t === 'attdef') {
     const b = bbox(e);
     if (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) return 0;
     const dx = Math.max(b[0] - p[0], 0, p[0] - b[2]);
@@ -1477,6 +1484,12 @@ function xf(e, fn) {
       E.pts = E.pts.map(fn);
       E.h = (E.h || DOC.textH || 2.5) * dist(E.pts[0], q);
       break;
+    }
+    case 'attdef': {
+      const c0 = Math.cos(E.rot || 0), s0 = Math.sin(E.rot || 0);
+      const p2 = fn(E.p), q = fn(add(E.p, [c0, s0]));
+      E.h = (E.h || 2.5) * dist(p2, q);
+      E.rot = ang(p2, q); E.p = p2; break;
     }
     case 'mtext': {
       /* the same readable-text rule as a single line, plus the column width,
@@ -4293,7 +4306,10 @@ function drawShapes(e, col, mode) {
     const lw = baseLw * (ROLE_W[role] || 1) + boost;
     const lt = s.lt || eLt;
     /* a window keeps the wall visible: same line, much softer */
-    const scol = role === 'faceGhost' ? col + GHOST_FACE_A : col;
+    /* a shape may carry its own colour: that is how a block keeps the colours
+       of the things inside it instead of coming out monochrome */
+    const own = s.col || col;
+    const scol = role === 'faceGhost' ? own + GHOST_FACE_A : own;
     /* filled shapes cannot be batched — they need their own path */
     if (!batch || s.fill || (s.closed && role === 'arrowhead')) {
       ctx.beginPath();
@@ -4309,7 +4325,7 @@ function drawShapes(e, col, mode) {
   flushBuckets();
   if (texts) for (let i = 0; i < texts.length; i++) {
     const s = texts[i];
-    drawTextAt(s.text, s.p, s.h, s.rot, s.anchor, col);
+    drawTextAt(s.text, s.p, s.h, s.rot, s.anchor, s.col || col);
   }
   ctx.setLineDash(DASH_SOLID);
 }
@@ -4349,6 +4365,12 @@ function drawEnt(e, mode) {
   const col = S ? (S.col || lift(fcol(e), S.lift)) : fcol(e);
   if (e.t === 'dim') return drawDim(e, col, mode);
   if (e.t === 'text') return drawTextAt(e.s, e.p, e.h, e.rot, e.anchor, col);
+  /* An attribute definition on its own is not yet carrying a value, so it
+     shows its TAG — that is what you are placing and what you will fill in. */
+  if (e.t === 'attdef') {
+    return drawTextAt(e.tag || 'TAG', e.p, e.h || DOC.textH, e.rot || 0,
+                      e.anchor || 'l', e.hidden ? col + '77' : col);
+  }
   if (e.t === 'leader') {
     const g = leaderGeom(e);
     if (!g) return;
@@ -10583,10 +10605,50 @@ function insertEnts(ins) {
   };
   return b.ents.map(e => { const n = clone(e); delete n.id; n.layer = n.layer === '0' ? ins.layer : n.layer; return xf(n, f); });
 }
+/* ---------------- colour inside a block ----------------
+   An insert flattened its contents into one shape list and drew the lot in the
+   insert's colour, so a block could only ever be monochrome: a door leaf and
+   its swing could not differ, and a red note inside a block came out whatever
+   the insert was. AutoCAD's three cases are all real and all different:
+
+     explicit  — the entity's own colour, wherever it is inserted
+     ByLayer   — the colour of the layer the entity is on (the default here,
+                 expressed by having no colour of its own)
+     ByBlock   — the INSERT's colour, which is what makes one block definition
+                 usable in several colours
+
+   ByBlock needs a marker, since "no colour" already means ByLayer. */
+const BYBLOCK = 'byblock';
+/** the colour a block's contents should draw in, or null to inherit */
+function blockPartColor(e) {
+  if (!e) return null;
+  if (e.color === BYBLOCK) return null;         /* inherit from the insert */
+  if (e.color) return e.color;                  /* explicit */
+  if (e.layer && hasLayer(e.layer)) return layer(e.layer).color;   /* ByLayer */
+  return null;
+}
 GEOM.insert = {
   shapes(ins, tol) {
     const out = [];
-    for (const e of insertEnts(ins)) out.push(...(GEOM[e.t] ? shapes(e, tol) : shapesOfPrimitive(e, tol)));
+    for (const e of insertEnts(ins)) {
+      /* An attdef inside an insert draws as that insert's VALUE, not as the
+         tag typed into the definition. Use the entity from insertEnts, which
+         has already been moved, turned and scaled into place — reading the
+         definition's own coordinates instead stacks every insert's text on
+         top of the first one, which is exactly what it did. */
+      if (e.t === 'attdef') {
+        if (e.hidden) continue;
+        const v = (typeof attValue === 'function') ? attValue(ins, e) : (e.val || '');
+        if (!v) continue;
+        out.push({ text: v, p: e.p, h: e.h || DOC.textH, rot: e.rot || 0,
+                   anchor: e.anchor || 'l', col: blockPartColor(e) });
+        continue;
+      }
+      const col = blockPartColor(e);
+      const got = GEOM[e.t] ? shapes(e, tol) : shapesOfPrimitive(e, tol);
+      if (col) for (const g of got) { if (g.col == null) g.col = col; }
+      out.push(...got);
+    }
     return out;
   },
   grips: ins => [{ p: ins.p, k: 'p' }],
@@ -10605,6 +10667,7 @@ function shapesOfPrimitive(e, tol) {
     case 'arc': return [{ c: e.c, r: e.r, a0: e.a0, a1: e.a1, lt: e.lt }];
     case 'ellipse': return [{ pts: poly(e, tol || 48), lt: e.lt }];
     case 'text': return [{ text: e.s, p: e.p, h: e.h, rot: e.rot || 0, anchor: e.anchor || 'l' }];
+    case 'attdef': return [{ text: e.tag, p: e.p, h: e.h, rot: e.rot || 0, anchor: e.anchor || 'l' }];
     case 'dim': return flattenToPrimitives(e).flatMap(q => shapesOfPrimitive(q, tol));
     default: return [];
   }
@@ -11872,6 +11935,88 @@ defc('dimbase', {
   },
 });
 
+/* ============================================================
+   Block attributes
+   ------------------------------------------------------------
+   An attribute is a text field that belongs to the block
+   DEFINITION but whose value belongs to each INSERT. That is how
+   one door block serves forty doors with forty numbers, and how
+   a title block is a block at all rather than a drawing of one.
+   Without them a block is a rubber stamp; with them it is a
+   thing that carries information.
+   ============================================================ */
+/** the attribute definitions of a block, in the order they were declared */
+function blockAttdefs(name) {
+  const b = (DOC.blocks || {})[name];
+  if (!b) return [];
+  return (b.ents || []).filter(e => e.t === 'attdef');
+}
+/** the value an insert carries for one tag, falling back to the default */
+function attValue(ins, def) {
+  const own = ins && ins.att && ins.att[def.tag];
+  if (own != null && own !== '') return own;
+  return def.val == null ? '' : def.val;
+}
+defc('attdef', {
+  key: 'attdef', group: 'annotate',
+  hint: 'Pick where the attribute sits',
+  point(c, p) {
+    modal('<h3>Define an attribute</h3>' +
+      '<div class="row"><label>Tag</label><input class="f" id="atg" value="TAG"></div>' +
+      '<div class="row"><label>Prompt</label><input class="f" id="apr" value=""></div>' +
+      '<div class="row"><label>Default</label><input class="f" id="ade" value=""></div>' +
+      '<div class="row"><label>Height</label><input class="f" id="ahh" value="' +
+        (+(DOC.textH / U[DOC.units]).toFixed(4)) + '"></div>' +
+      '<div class="row"><label>Visible</label><select class="f" id="avi">' +
+        '<option value="1">shown on the drawing</option>' +
+        '<option value="0">hidden — data only</option></select></div>', () => {
+      const tag = ($('#atg').value || 'TAG').trim().toUpperCase().replace(/\s+/g, '_');
+      begin();
+      addEnt({ t: 'attdef', p: p.slice(), tag,
+               prompt: $('#apr').value, val: $('#ade').value,
+               h: parseLen($('#ahh').value) || DOC.textH,
+               hidden: $('#avi').value === '0',
+               rot: 0, anchor: 'l', layer: annoLayer('TEXT') });
+      commit('Attribute ' + tag);
+      cliPrint('Attribute ' + tag + ' defined — include it in a block to use it');
+      endCmd();
+    });
+  },
+});
+
+/** EATTEDIT — edit the attribute values carried by one insert */
+defc('eattedit', {
+  key: 'eattedit', group: 'annotate', hint: 'Pick a block to edit its attributes',
+  point(c, p) {
+    const ins = pickAt(p, 10, e => e.t === 'insert');
+    if (!ins) return echo('Pick a block insert');
+    const defs = blockAttdefs(ins.name);
+    if (!defs.length) return echo('That block has no attributes');
+    const rows = defs.map((d, i) =>
+      '<div class="row"><label>' + esc(d.prompt || d.tag) + '</label>' +
+      '<input class="f" id="av' + i + '" value="' + esc(attValue(ins, d)) + '"></div>').join('');
+    modal('<h3>' + esc(ins.name) + '</h3>' + rows, () => {
+      const vals = {};
+      defs.forEach((d, i) => { vals[d.tag] = $('#av' + i).value; });
+      setAttValues(ins, vals);
+    });
+  },
+});
+
+/** Write attribute values onto ONE insert. Kept out of the dialog because a
+    block's data should not depend on whether a modal rendered — and because
+    the values belong to the insert, never to the definition: editing the door
+    number on one door must not renumber the other thirty-nine. */
+function setAttValues(ins, vals) {
+  if (!ins || !vals) return false;
+  begin(); mut(ins);
+  ins.att = Object.assign({}, ins.att);
+  for (const k of Object.keys(vals)) ins.att[k] = vals[k];
+  commit('Attributes');
+  if (typeof draw === 'function') draw();
+  return true;
+}
+
 /* ===== 10-dxf.js ===== */
 /* ============================================================
    ORTHOGRAPH — 10 DXF in and out
@@ -12740,7 +12885,7 @@ function svgEntityBody(lwMul) {
       out.push(`<path d="M${e.p[0] - r},${-e.p[1]}L${e.p[0] + r},${-e.p[1]}M${e.p[0]},${-e.p[1] - r}L${e.p[0]},${-e.p[1] + r}" ${strokeOf(col, lw, '')}/>`);
       continue;
     }
-    for (const s of shapes(e, 96)) emitShape(s, col, lw, lt);
+    for (const s of shapes(e, 96)) emitShape(s, ink(s.col || entColor(e)), lw, lt);
   }
   return out;
 }

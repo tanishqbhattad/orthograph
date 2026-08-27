@@ -116,6 +116,13 @@ function bbox(e) {
         acc([r.p[0] + q[0] * c - q[1] * sn, r.p[1] + q[0] * sn + q[1] * c]));
     }
   }
+  else if (e.t === 'attdef') {
+    const w = String(e.tag || '').length * (e.h || 2.5) * MT_CHAR, h = e.h || 2.5;
+    const c = Math.cos(e.rot || 0), sn = Math.sin(e.rot || 0);
+    const ox = e.anchor === 'c' ? -w / 2 : e.anchor === 'r' ? -w : 0;
+    [[ox, 0], [ox + w, 0], [ox + w, h], [ox, h]].forEach(q =>
+      acc([e.p[0] + q[0] * c - q[1] * sn, e.p[1] + q[0] * sn + q[1] * c]));
+  }
   else if (e.t === 'text') {
     const w = e.s.length * e.h * 0.62, h = e.h;
     const c = Math.cos(e.rot || 0), s = Math.sin(e.rot || 0);
@@ -255,7 +262,7 @@ function entDist(p, e) {
     if (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) d = Math.min(d, 0);
     return d;
   }
-  if (e.t === 'text' || e.t === 'mtext') {
+  if (e.t === 'text' || e.t === 'mtext' || e.t === 'attdef') {
     const b = bbox(e);
     if (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) return 0;
     const dx = Math.max(b[0] - p[0], 0, p[0] - b[2]);
@@ -325,6 +332,12 @@ function xf(e, fn) {
       E.pts = E.pts.map(fn);
       E.h = (E.h || DOC.textH || 2.5) * dist(E.pts[0], q);
       break;
+    }
+    case 'attdef': {
+      const c0 = Math.cos(E.rot || 0), s0 = Math.sin(E.rot || 0);
+      const p2 = fn(E.p), q = fn(add(E.p, [c0, s0]));
+      E.h = (E.h || 2.5) * dist(p2, q);
+      E.rot = ang(p2, q); E.p = p2; break;
     }
     case 'mtext': {
       /* the same readable-text rule as a single line, plus the column width,

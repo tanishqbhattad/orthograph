@@ -823,7 +823,10 @@ function drawShapes(e, col, mode) {
     const lw = baseLw * (ROLE_W[role] || 1) + boost;
     const lt = s.lt || eLt;
     /* a window keeps the wall visible: same line, much softer */
-    const scol = role === 'faceGhost' ? col + GHOST_FACE_A : col;
+    /* a shape may carry its own colour: that is how a block keeps the colours
+       of the things inside it instead of coming out monochrome */
+    const own = s.col || col;
+    const scol = role === 'faceGhost' ? own + GHOST_FACE_A : own;
     /* filled shapes cannot be batched — they need their own path */
     if (!batch || s.fill || (s.closed && role === 'arrowhead')) {
       ctx.beginPath();
@@ -839,7 +842,7 @@ function drawShapes(e, col, mode) {
   flushBuckets();
   if (texts) for (let i = 0; i < texts.length; i++) {
     const s = texts[i];
-    drawTextAt(s.text, s.p, s.h, s.rot, s.anchor, col);
+    drawTextAt(s.text, s.p, s.h, s.rot, s.anchor, s.col || col);
   }
   ctx.setLineDash(DASH_SOLID);
 }
@@ -879,6 +882,12 @@ function drawEnt(e, mode) {
   const col = S ? (S.col || lift(fcol(e), S.lift)) : fcol(e);
   if (e.t === 'dim') return drawDim(e, col, mode);
   if (e.t === 'text') return drawTextAt(e.s, e.p, e.h, e.rot, e.anchor, col);
+  /* An attribute definition on its own is not yet carrying a value, so it
+     shows its TAG — that is what you are placing and what you will fill in. */
+  if (e.t === 'attdef') {
+    return drawTextAt(e.tag || 'TAG', e.p, e.h || DOC.textH, e.rot || 0,
+                      e.anchor || 'l', e.hidden ? col + '77' : col);
+  }
   if (e.t === 'leader') {
     const g = leaderGeom(e);
     if (!g) return;
