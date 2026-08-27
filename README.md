@@ -4,7 +4,7 @@
 architecture layer on top. No build step required to *use* it — `orthograph.html` is a
 single self-contained file. Open it in any browser.
 
-102 commands, 93 acad.pgp aliases, 590 tests.
+108 commands, 93 acad.pgp aliases, 655 tests.
 
 ## Layout
 
@@ -63,7 +63,7 @@ node tools/serve.js            # → http://127.0.0.1:8017/
 
 ```
 node build.js                  # → orthograph.html
-node test/run.js               # 590 tests
+node test/run.js               # 655 tests
 node test/run.js wall          # run a subset by name
 node tools/verify.js           # behavioural checks + drag latency
 
@@ -110,7 +110,7 @@ blue → hover → hot red with the full stretch/move/rotate/scale/mirror cycle.
 **Drafting** is the AutoCAD-shaped half: line, polyline, spline, rectangle, circle, arc,
 ellipse, polygon, donut, point, construction line, ray, revision cloud, hatch, text,
 paragraph text, leader, dimensions (linear, aligned, horizontal, vertical, radius,
-diameter, angular, continue, baseline). Modify: move, copy, rotate, scale, mirror, offset,
+diameter, angular, continue, baseline, ordinate, arc length). Modify: move, copy, rotate, scale, mirror, offset,
 array (rectangular, polar, path), stretch, align, trim, extend, lengthen, fillet, chamfer,
 break, join, pedit, explode, divide, measure, match properties, blocks, erase. Inquiry:
 distance, area, id, list, quick select.
@@ -241,7 +241,8 @@ noticed months later.
 - Door and window types carry size and swing, not fire, acoustic or finish data.
 - Schedules export as CSV, one file per schedule; there is no live link back
   from a spreadsheet into the drawing.
-- No ordinate or arc-length dimensions.
+- An arc-length dimension has no DXF R2000 equivalent, so it exports as flattened
+  geometry rather than as an editable dimension.
 - No fields, and no stacked fractions in text.
 - Blocks have no attribute manager, in-place reference editing or dynamic parameters.
 - Keyboard picking is Ctrl+Enter rather than a rebindable key, and the
