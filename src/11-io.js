@@ -263,6 +263,13 @@ function saveNative() {
    faces cross over each other. Nothing here rejects a file — a drawing that
    opens with one bad number repaired is worth far more than a refusal — but a
    value that cannot mean anything is dropped so the type default takes over. */
+/** Types this build can draw. Anything else is carried but not understood. */
+function knownType(t) {
+  if (GEOM[t]) return true;
+  return ['line', 'pline', 'spline', 'circle', 'arc', 'ellipse', 'point',
+          'ray', 'xline', 'text', 'mtext', 'attdef', 'leader', 'dim',
+          'cloud', 'donut'].indexOf(t) >= 0;
+}
 function sanitiseEnt(e) {
   if (!e || typeof e !== 'object' || !e.t) return null;
   const num = (v, min) => (typeof v === 'number' && isFinite(v) && v > (min || 0));
@@ -282,10 +289,81 @@ function sanitiseEnt(e) {
     if (e.pts.length < 2 && (e.t === 'pline' || e.t === 'spline')) return null;
   }
   if (e.r != null && !num(e.r)) return null;
+  /* Present-and-valid is not the same as present. The checks above pass an
+     entity that simply has no geometry at all — {"t":"wall"} went straight
+     through and then threw the first time anything measured it. */
+  const NEEDS = {
+    line: ['a', 'b'], wall: ['a', 'b'], stair: ['a', 'b'], section: ['a', 'b'],
+    circle: ['c', 'r'], arc: ['c', 'r'], ellipse: ['c'],
+    text: ['p'], mtext: ['p'], attdef: ['p'], point: ['p'], column: ['p'],
+    insert: ['p'], table: ['p'], grid: ['a', 'b'],
+    pline: ['pts'], spline: ['pts'], room: [], floor: ['pts'], roof: ['pts'],
+    door: ['host'], window: ['host'], dim: ['p1', 'p2'], leader: ['pts'],
+    hatch: ['loops'],
+  };
+  const need = NEEDS[e.t];
+  if (need) for (const k of need) if (e[k] == null) return null;
+  /* an insert of a block the file does not contain is a reference to nothing:
+     it draws nothing, measures nothing, and cannot be repaired by hand */
+  if (e.t === 'insert' && !((DOC.blocks || {})[e.name])) return null;
+  /* a room is either traced from a seed or drawn as a polygon; one that is
+     neither describes no space at all */
+  if (e.t === 'room' && !okPt(e.seed) && !(Array.isArray(e.pts) && e.pts.length > 2)) return null;
   return e;
 }
+/* A snapshot of the whole document, deep enough to put back. Restoring is
+   done by emptying and refilling what is there rather than by replacing DOC
+   or DOC.ents, because plenty of code holds a reference to both. */
+function docSnapshot() {
+  const keys = {};
+  for (const k of Object.keys(DOC)) { if (k !== 'ents') keys[k] = clone(DOC[k]); }
+  const ents = [];
+  for (const [id, e] of DOC.ents) ents.push([id, clone(e)]);
+  return { keys, ents, uid: UID, sel: [...SEL] };
+}
+function docRestore(s) {
+  if (JN && JN.on) { try { rollback(); } catch (e) { JN.on = false; } }
+  for (const k of Object.keys(DOC)) if (k !== 'ents') delete DOC[k];
+  for (const k of Object.keys(s.keys)) DOC[k] = s.keys[k];
+  DOC.ents.clear();
+  for (const [id, e] of s.ents) DOC.ents.set(id, e);
+  UID = s.uid;
+  SEL.clear(); for (const id of s.sel) SEL.add(id);
+  idxInvalidate();
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
+}
+/** Open a project file. Returns true when it opened, false when it did not.
+
+    A file that is not a drawing must not take the drawing that IS open with
+    it. This used to write straight into DOC as it parsed, so anything that
+    threw partway left the document half-replaced — the work on screen gone
+    AND the program unable to paint another frame, which is precisely the
+    failure this project already refuses to accept from a corrupt autosave. */
 function loadNative(txt) {
-  const d = JSON.parse(txt);
+  let d = null;
+  try { d = JSON.parse(txt); } catch (e) { return loadRefused('That file is not a drawing.'); }
+  if (!d || typeof d !== 'object' || Array.isArray(d))
+    return loadRefused('That file is not a drawing.');
+  if ('ents' in d && d.ents !== undefined && !Array.isArray(d.ents))
+    return loadRefused('That file is not a drawing.');
+  if ('layers' in d && d.layers !== undefined && !Array.isArray(d.layers))
+    return loadRefused('That file is not a drawing.');
+  const undoAll = docSnapshot();
+  try {
+    loadNativeInto(d);
+    return true;
+  } catch (err) {
+    docRestore(undoAll);
+    if (typeof draw === 'function') draw();
+    return loadRefused('That file could not be read. The drawing is unchanged.');
+  }
+}
+function loadRefused(msg) {
+  if (typeof cliPrint === 'function') cliPrint(msg, 'err');
+  else if (typeof echo === 'function') echo(msg);
+  return false;
+}
+function loadNativeInto(d) {
   begin();
   DOC.layers = d.layers && d.layers.length ? d.layers : [newLayer('0')];
   DOC.cur = d.cur || '0';
@@ -314,7 +392,27 @@ function loadNative(txt) {
     ...DOC.sheets.flatMap(sh => (sh.viewports || []).map(v => (v.id || 0) + 1)));
   DOC.ents.clear(); SEL.clear(); UID = 1;
   idxInvalidate();
-  (d.ents || []).forEach(e => { const c = sanitiseEnt(e); if (c) addEnt(c); });
+  const offered = Array.isArray(d.ents) ? d.ents.length : 0;
+  let unknown = 0;
+  (d.ents || []).forEach(e => {
+    const c = sanitiseEnt(e);
+    if (!c) return;
+    if (!knownType(c.t)) unknown++;
+    addEnt(c);
+  });
+  /* An object of a type this build does not know is most likely a file from a
+     later one. Dropping it would lose it on the next save; keeping it quietly
+     would show a drawing with content missing and no sign of it. So it is kept
+     — it rides through a save intact — and said out loud. */
+  if (unknown && typeof cliPrint === 'function')
+    cliPrint(unknown + (unknown === 1 ? ' object is' : ' objects are') +
+             ' of a type this version does not know. They are kept, but not drawn.', 'err');
+  /* A file with no objects in it is an empty drawing and opens fine. A file
+     that OFFERED objects and had none of them survive is a corrupt file, and
+     opening it would replace the drawing on screen with nothing — which is
+     the same loss as the crash, arrived at politely. */
+  if (offered && DOC.ents.size === 0)
+    throw new Error('nothing in that file could be read');
   for (const [n, c] of ARCH_LAYERS) if (!hasLayer(n) && [...DOC.ents.values()].some(e => e.layer === n)) ensureLayer(n, c);
   const u = $('#unit'); if (u) u.value = DOC.units;
   commit('Opened project');

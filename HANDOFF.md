@@ -298,10 +298,23 @@ they were, because this file has now been wrong in both directions:
 - ~~Imperial is inconsistent between `fmt()` and `dispNum()`.~~ Fixed: both
   give `9'-10 1/8"`.
 
-Genuinely open:
+Genuinely open: nothing.
 
-- A negative wall thickness set in memory is not rejected; nothing in the
-  normal path can produce one.
+**Hostile input (28 Aug 2026).** Probing rather than using the program turned
+up three faults, all fixed and pinned by `test/suites/hostile.js`:
+
+- **Opening a corrupt file destroyed the drawing already open.** Not "failed to
+  open" — `loadNative` wrote straight into DOC as it parsed, so anything that
+  threw partway left the document half-replaced: the work on screen gone AND
+  the program unable to paint another frame. 8 of 11 malformed inputs did this.
+  It now snapshots, and puts everything back on failure.
+- **`bbox` threw on a polyline of one vertex** — which is what a polyline looks
+  like halfway through being drawn — taking the frame down with it, since bbox
+  is on the path of every draw, pick and zoom-to-fit.
+- **Negative sizes were read back as sizes.** A negative wall thickness draws as
+  though it were positive, so it looks right and every number taken off it is
+  wrong. Guarded on the read, not the write: a size is read on every draw and
+  written from a dozen places.
 
 **DWG is experimental and should stay labelled that way.** The reader covers
 R13–R2000 and refuses R2004+ rather than half-reading. The bit codec, object

@@ -261,7 +261,17 @@ function openingsByHost() {
 }
 
 /* ---------------- wall basics ---------------- */
-function wallT(w) { return w.th != null ? w.th : ((wallType(w.wt) || {}).t || 100); }
+/* Guarded on the way OUT, not on the way in. A thickness is read on every
+   draw, pick, join and measurement and written from a dozen places — a
+   setter-side check is one route away from being got round, and a negative
+   thickness draws as though it were positive, so it looks right and every
+   number taken off it is wrong. */
+function wallT(w) {
+  const own = w && w.th;
+  if (typeof own === 'number' && isFinite(own) && own > 0) return own;
+  const ty = (wallType(w && w.wt) || {}).t;
+  return (typeof ty === 'number' && isFinite(ty) && ty > 0) ? ty : 100;
+}
 function wallU(w) { const u = norm(sub(w.b, w.a)); return (u[0] || u[1]) ? u : [1, 0]; }
 function wallLen(w) { return dist(w.a, w.b); }
 /** [leftOffset, rightOffset] along perp(u) for the wall's justification */

@@ -46,7 +46,7 @@ function shapes(e, tol) {
     case 'point': return [];
     /* an annotative note is sized in paper units; annoFor turns that into the
        model height the scale currently looking at it calls for */
-    case 'text': return [{ text: resolveFields(e.s), p: e.p, h: e.h * annoFor(e),
+    case 'text': return [{ text: resolveFields(e.s), p: e.p, h: textH(e) * annoFor(e),
                            rot: e.rot || 0, anchor: e.anchor || 'l' }];
     /* mtext, leader and attdef were each given their own drawing path and never
        added here, so shapes() answered EMPTY for all three. Everything that
@@ -134,7 +134,13 @@ function poly(e, tol) {
 
 function bbox(e) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  /* Skip anything that is not a point. A polyline of one vertex is what a
+     polyline looks like halfway through being drawn, and it used to throw
+     here — which took the whole frame down, because bbox is on the path of
+     every draw, every pick and every zoom-to-fit. */
   const acc = p => {
+    if (!p || typeof p[0] !== 'number' || typeof p[1] !== 'number') return;
+    if (!isFinite(p[0]) || !isFinite(p[1])) return;
     if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
     if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
   };
@@ -174,7 +180,8 @@ function bbox(e) {
     const c = Math.cos(e.rot || 0), s = Math.sin(e.rot || 0);
     const ox = e.anchor === 'c' ? -w / 2 : e.anchor === 'r' ? -w : 0;
     [[ox, 0], [ox + w, 0], [ox + w, h], [ox, h]].forEach(q => acc([e.p[0] + q[0] * c - q[1] * s, e.p[1] + q[0] * s + q[1] * c]));
-  } else poly(e, 40).forEach(acc);
+  } else { let pts = null; try { pts = poly(e, 40); } catch (err) { pts = null; }
+    if (Array.isArray(pts)) pts.forEach(acc); }
   if (x0 === Infinity) { x0 = y0 = x1 = y1 = 0; }
   return [x0, y0, x1, y1];
 }
@@ -224,6 +231,12 @@ function mtextWrap(str, h, w) {
    the answer. A field nobody can resolve comes out as #### rather than as
    nothing, because a gap on a drawing is a gap nobody can explain.
    ============================================================ */
+/** A height that can actually be drawn. Zero or negative renders as nothing
+    or upside down, and reaches the DXF as an invalid text height. */
+function textH(e) {
+  const h = e && e.h;
+  return (typeof h === 'number' && isFinite(h) && h > 0) ? h : (DOC.textH || 2.5);
+}
 const FIELD_RE = /%<([a-z]+)(?::([^>]*))?>%/gi;
 function hasField(s) { return typeof s === 'string' && s.indexOf('%<') >= 0; }
 function fieldValue(name, arg) {
@@ -324,7 +337,7 @@ function lineShapes(row) {
 }
 
 function mtextLines(e) {
-  const h = e.h || 2.5;
+  const h = textH(e);
   const lead = h * MT_LEAD;
   const rows = mtextWrap(e.s, h, e.w);
   const c = Math.cos(e.rot || 0), sn = Math.sin(e.rot || 0);

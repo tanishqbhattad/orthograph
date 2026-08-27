@@ -13,7 +13,10 @@
    it. A roof is the same with a pitch.
    ============================================================ */
 
-function slabThick(f) { return f.th != null ? f.th : 200; }
+function slabThick(f) {
+  const t = f && f.th;
+  return (typeof t === 'number' && isFinite(t) && t > 0) ? t : 200;
+}
 /** the top of a slab: its own datum if given, otherwise its storey's */
 function slabTop(f) {
   if (f.top != null) return f.top;

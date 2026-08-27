@@ -1320,7 +1320,7 @@ function shapes(e, tol) {
     case 'point': return [];
     /* an annotative note is sized in paper units; annoFor turns that into the
        model height the scale currently looking at it calls for */
-    case 'text': return [{ text: resolveFields(e.s), p: e.p, h: e.h * annoFor(e),
+    case 'text': return [{ text: resolveFields(e.s), p: e.p, h: textH(e) * annoFor(e),
                            rot: e.rot || 0, anchor: e.anchor || 'l' }];
     /* mtext, leader and attdef were each given their own drawing path and never
        added here, so shapes() answered EMPTY for all three. Everything that
@@ -1408,7 +1408,13 @@ function poly(e, tol) {
 
 function bbox(e) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  /* Skip anything that is not a point. A polyline of one vertex is what a
+     polyline looks like halfway through being drawn, and it used to throw
+     here — which took the whole frame down, because bbox is on the path of
+     every draw, every pick and every zoom-to-fit. */
   const acc = p => {
+    if (!p || typeof p[0] !== 'number' || typeof p[1] !== 'number') return;
+    if (!isFinite(p[0]) || !isFinite(p[1])) return;
     if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
     if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
   };
@@ -1448,7 +1454,8 @@ function bbox(e) {
     const c = Math.cos(e.rot || 0), s = Math.sin(e.rot || 0);
     const ox = e.anchor === 'c' ? -w / 2 : e.anchor === 'r' ? -w : 0;
     [[ox, 0], [ox + w, 0], [ox + w, h], [ox, h]].forEach(q => acc([e.p[0] + q[0] * c - q[1] * s, e.p[1] + q[0] * s + q[1] * c]));
-  } else poly(e, 40).forEach(acc);
+  } else { let pts = null; try { pts = poly(e, 40); } catch (err) { pts = null; }
+    if (Array.isArray(pts)) pts.forEach(acc); }
   if (x0 === Infinity) { x0 = y0 = x1 = y1 = 0; }
   return [x0, y0, x1, y1];
 }
@@ -1498,6 +1505,12 @@ function mtextWrap(str, h, w) {
    the answer. A field nobody can resolve comes out as #### rather than as
    nothing, because a gap on a drawing is a gap nobody can explain.
    ============================================================ */
+/** A height that can actually be drawn. Zero or negative renders as nothing
+    or upside down, and reaches the DXF as an invalid text height. */
+function textH(e) {
+  const h = e && e.h;
+  return (typeof h === 'number' && isFinite(h) && h > 0) ? h : (DOC.textH || 2.5);
+}
 const FIELD_RE = /%<([a-z]+)(?::([^>]*))?>%/gi;
 function hasField(s) { return typeof s === 'string' && s.indexOf('%<') >= 0; }
 function fieldValue(name, arg) {
@@ -1598,7 +1611,7 @@ function lineShapes(row) {
 }
 
 function mtextLines(e) {
-  const h = e.h || 2.5;
+  const h = textH(e);
   const lead = h * MT_LEAD;
   const rows = mtextWrap(e.s, h, e.w);
   const c = Math.cos(e.rot || 0), sn = Math.sin(e.rot || 0);
@@ -2897,7 +2910,17 @@ function openingsByHost() {
 }
 
 /* ---------------- wall basics ---------------- */
-function wallT(w) { return w.th != null ? w.th : ((wallType(w.wt) || {}).t || 100); }
+/* Guarded on the way OUT, not on the way in. A thickness is read on every
+   draw, pick, join and measurement and written from a dozen places — a
+   setter-side check is one route away from being got round, and a negative
+   thickness draws as though it were positive, so it looks right and every
+   number taken off it is wrong. */
+function wallT(w) {
+  const own = w && w.th;
+  if (typeof own === 'number' && isFinite(own) && own > 0) return own;
+  const ty = (wallType(w && w.wt) || {}).t;
+  return (typeof ty === 'number' && isFinite(ty) && ty > 0) ? ty : 100;
+}
 function wallU(w) { const u = norm(sub(w.b, w.a)); return (u[0] || u[1]) ? u : [1, 0]; }
 function wallLen(w) { return dist(w.a, w.b); }
 /** [leftOffset, rightOffset] along perp(u) for the wall's justification */
@@ -14168,7 +14191,10 @@ defm('SECTIONFLIP', () => {
    it. A roof is the same with a pitch.
    ============================================================ */
 
-function slabThick(f) { return f.th != null ? f.th : 200; }
+function slabThick(f) {
+  const t = f && f.th;
+  return (typeof t === 'number' && isFinite(t) && t > 0) ? t : 200;
+}
 /** the top of a slab: its own datum if given, otherwise its storey's */
 function slabTop(f) {
   if (f.top != null) return f.top;
@@ -15870,6 +15896,13 @@ function saveNative() {
    faces cross over each other. Nothing here rejects a file — a drawing that
    opens with one bad number repaired is worth far more than a refusal — but a
    value that cannot mean anything is dropped so the type default takes over. */
+/** Types this build can draw. Anything else is carried but not understood. */
+function knownType(t) {
+  if (GEOM[t]) return true;
+  return ['line', 'pline', 'spline', 'circle', 'arc', 'ellipse', 'point',
+          'ray', 'xline', 'text', 'mtext', 'attdef', 'leader', 'dim',
+          'cloud', 'donut'].indexOf(t) >= 0;
+}
 function sanitiseEnt(e) {
   if (!e || typeof e !== 'object' || !e.t) return null;
   const num = (v, min) => (typeof v === 'number' && isFinite(v) && v > (min || 0));
@@ -15889,10 +15922,81 @@ function sanitiseEnt(e) {
     if (e.pts.length < 2 && (e.t === 'pline' || e.t === 'spline')) return null;
   }
   if (e.r != null && !num(e.r)) return null;
+  /* Present-and-valid is not the same as present. The checks above pass an
+     entity that simply has no geometry at all — {"t":"wall"} went straight
+     through and then threw the first time anything measured it. */
+  const NEEDS = {
+    line: ['a', 'b'], wall: ['a', 'b'], stair: ['a', 'b'], section: ['a', 'b'],
+    circle: ['c', 'r'], arc: ['c', 'r'], ellipse: ['c'],
+    text: ['p'], mtext: ['p'], attdef: ['p'], point: ['p'], column: ['p'],
+    insert: ['p'], table: ['p'], grid: ['a', 'b'],
+    pline: ['pts'], spline: ['pts'], room: [], floor: ['pts'], roof: ['pts'],
+    door: ['host'], window: ['host'], dim: ['p1', 'p2'], leader: ['pts'],
+    hatch: ['loops'],
+  };
+  const need = NEEDS[e.t];
+  if (need) for (const k of need) if (e[k] == null) return null;
+  /* an insert of a block the file does not contain is a reference to nothing:
+     it draws nothing, measures nothing, and cannot be repaired by hand */
+  if (e.t === 'insert' && !((DOC.blocks || {})[e.name])) return null;
+  /* a room is either traced from a seed or drawn as a polygon; one that is
+     neither describes no space at all */
+  if (e.t === 'room' && !okPt(e.seed) && !(Array.isArray(e.pts) && e.pts.length > 2)) return null;
   return e;
 }
+/* A snapshot of the whole document, deep enough to put back. Restoring is
+   done by emptying and refilling what is there rather than by replacing DOC
+   or DOC.ents, because plenty of code holds a reference to both. */
+function docSnapshot() {
+  const keys = {};
+  for (const k of Object.keys(DOC)) { if (k !== 'ents') keys[k] = clone(DOC[k]); }
+  const ents = [];
+  for (const [id, e] of DOC.ents) ents.push([id, clone(e)]);
+  return { keys, ents, uid: UID, sel: [...SEL] };
+}
+function docRestore(s) {
+  if (JN && JN.on) { try { rollback(); } catch (e) { JN.on = false; } }
+  for (const k of Object.keys(DOC)) if (k !== 'ents') delete DOC[k];
+  for (const k of Object.keys(s.keys)) DOC[k] = s.keys[k];
+  DOC.ents.clear();
+  for (const [id, e] of s.ents) DOC.ents.set(id, e);
+  UID = s.uid;
+  SEL.clear(); for (const id of s.sel) SEL.add(id);
+  idxInvalidate();
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
+}
+/** Open a project file. Returns true when it opened, false when it did not.
+
+    A file that is not a drawing must not take the drawing that IS open with
+    it. This used to write straight into DOC as it parsed, so anything that
+    threw partway left the document half-replaced — the work on screen gone
+    AND the program unable to paint another frame, which is precisely the
+    failure this project already refuses to accept from a corrupt autosave. */
 function loadNative(txt) {
-  const d = JSON.parse(txt);
+  let d = null;
+  try { d = JSON.parse(txt); } catch (e) { return loadRefused('That file is not a drawing.'); }
+  if (!d || typeof d !== 'object' || Array.isArray(d))
+    return loadRefused('That file is not a drawing.');
+  if ('ents' in d && d.ents !== undefined && !Array.isArray(d.ents))
+    return loadRefused('That file is not a drawing.');
+  if ('layers' in d && d.layers !== undefined && !Array.isArray(d.layers))
+    return loadRefused('That file is not a drawing.');
+  const undoAll = docSnapshot();
+  try {
+    loadNativeInto(d);
+    return true;
+  } catch (err) {
+    docRestore(undoAll);
+    if (typeof draw === 'function') draw();
+    return loadRefused('That file could not be read. The drawing is unchanged.');
+  }
+}
+function loadRefused(msg) {
+  if (typeof cliPrint === 'function') cliPrint(msg, 'err');
+  else if (typeof echo === 'function') echo(msg);
+  return false;
+}
+function loadNativeInto(d) {
   begin();
   DOC.layers = d.layers && d.layers.length ? d.layers : [newLayer('0')];
   DOC.cur = d.cur || '0';
@@ -15921,7 +16025,27 @@ function loadNative(txt) {
     ...DOC.sheets.flatMap(sh => (sh.viewports || []).map(v => (v.id || 0) + 1)));
   DOC.ents.clear(); SEL.clear(); UID = 1;
   idxInvalidate();
-  (d.ents || []).forEach(e => { const c = sanitiseEnt(e); if (c) addEnt(c); });
+  const offered = Array.isArray(d.ents) ? d.ents.length : 0;
+  let unknown = 0;
+  (d.ents || []).forEach(e => {
+    const c = sanitiseEnt(e);
+    if (!c) return;
+    if (!knownType(c.t)) unknown++;
+    addEnt(c);
+  });
+  /* An object of a type this build does not know is most likely a file from a
+     later one. Dropping it would lose it on the next save; keeping it quietly
+     would show a drawing with content missing and no sign of it. So it is kept
+     — it rides through a save intact — and said out loud. */
+  if (unknown && typeof cliPrint === 'function')
+    cliPrint(unknown + (unknown === 1 ? ' object is' : ' objects are') +
+             ' of a type this version does not know. They are kept, but not drawn.', 'err');
+  /* A file with no objects in it is an empty drawing and opens fine. A file
+     that OFFERED objects and had none of them survive is a corrupt file, and
+     opening it would replace the drawing on screen with nothing — which is
+     the same loss as the crash, arrived at politely. */
+  if (offered && DOC.ents.size === 0)
+    throw new Error('nothing in that file could be read');
   for (const [n, c] of ARCH_LAYERS) if (!hasLayer(n) && [...DOC.ents.values()].some(e => e.layer === n)) ensureLayer(n, c);
   const u = $('#unit'); if (u) u.value = DOC.units;
   commit('Opened project');
