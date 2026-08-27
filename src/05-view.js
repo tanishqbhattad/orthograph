@@ -493,6 +493,12 @@ function entShapes(e) {
     return [{ pts: [e.a, e.b] }];
   }
   if (e.id == null || DOC.ents.get(e.id) !== e) return shapes(e, SHAPE_TOL) || [];
+  /* An annotative object is sized by whichever scale is looking at it, and a
+     sheet paints two viewports at two scales one after the other in a single
+     frame. The cache is keyed by id alone, so caching these would hand the
+     second viewport the size worked out for the first. They are notes and
+     dimensions — few, and cheap to build — so they are simply not cached. */
+  if (e.anno) return shapes(e, SHAPE_TOL) || [];
   const hit = SHPC.get(e.id);
   if (hit !== undefined) return hit.shapes;
   const sh = shapes(e, SHAPE_TOL) || [];
@@ -1616,7 +1622,11 @@ function drawSheet(sh) {
     /* the one we are standing in is already the current view; the rest are
        drawn by pointing the same renderer through their own transform */
     if (!live) Object.assign(V, vpViewState(sh, vp));
+    /* annotation inside this window is sized for THIS viewport's scale, which
+       is the whole reason an annotative object exists */
+    annoPush(vp.scale);
     try { drawEntitiesInView(); } catch (err) { /* one bad viewport must not take the page down */ }
+    finally { annoPop(); }
     if (!live) Object.assign(V, keep);
     ctx.restore();
     /* the frame is screen furniture: it marks the window while you work and is

@@ -398,8 +398,10 @@ function dimStyle(e) {
   const base = (e && e.style && dimStyleRec(e.style)) || curDimStyleRec() || {};
   const d = (e && e.ovr) ? Object.assign({}, base, e.ovr) : base;
   /* DIMSCALE multiplies every size on a dimension and nothing else, exactly as
-     it does in AutoCAD — the measurement itself is untouched. */
-  const k = DOC.dimScale == null ? 1 : DOC.dimScale;
+     it does in AutoCAD — the measurement itself is untouched. An annotative
+     dimension takes its size from the scale looking at it INSTEAD: applying
+     both would square the scaling, which is how annotation ends up enormous. */
+  const k = (e && e.anno) ? annoK() : (DOC.dimScale == null ? 1 : DOC.dimScale);
   return {
     txt: (d.txt || h) * k,
     arrow: (d.arrow || h * 0.8) * k,

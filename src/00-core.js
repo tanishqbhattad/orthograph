@@ -154,6 +154,32 @@ const SCALES = [
 ];
 /** the label for a ratio, falling back to a computed 1:n so a custom scale
     still prints something honest rather than nothing */
+/* ---------------- annotation scale ----------------
+   Text and dimensions are sized in model units, so a 250mm note is 2.5mm on
+   paper at 1:100 and 5mm at 1:50. Put one plan in two viewports at two scales
+   — the ordinary reason to have two viewports — and the annotation in one of
+   them is the wrong size on the sheet. DIMSCALE was the fix: set by hand, for
+   one scale at a time.
+
+   An annotative object is sized in PAPER units. What varies is its model
+   height, derived from whichever scale is looking at it: the viewport's while
+   one is being drawn, the drawing's otherwise. A stack rather than a plain
+   variable because a scale left behind by a viewport that threw mid-paint
+   would quietly resize every annotation on the rest of the sheet. */
+const ANNO_STACK = [];
+const ANNO_DEFAULT = 1 / 100;
+function annoValid(s) { return typeof s === 'number' && isFinite(s) && s > 0; }
+function annoScale() {
+  if (ANNO_STACK.length) return ANNO_STACK[ANNO_STACK.length - 1];
+  return annoValid(DOC.annoScale) ? DOC.annoScale : ANNO_DEFAULT;
+}
+/** paper units to model units: what an annotative size is multiplied by */
+function annoK() { return 1 / annoScale(); }
+function annoPush(s) { ANNO_STACK.push(annoValid(s) ? s : annoScale()); }
+function annoPop() { ANNO_STACK.pop(); }
+/** the multiplier for one entity: 1 unless it is annotative */
+function annoFor(e) { return (e && e.anno) ? annoK() : 1; }
+
 function scaleLabel(r) {
   const hit = SCALES.find(s => Math.abs(s.r - r) < 1e-12);
   if (hit) return hit.label;

@@ -812,9 +812,44 @@ function buildProps() {
     () => pickColor(e.color || entColor(e), c => { begin(); es.forEach(x => { mut(x); x.color = c; }); commit('Colour'); upd(); }, true));
   selRow(w, 'Linetype', [['', 'ByLayer'], ['solid', 'solid'], ['dashed', 'dashed'], ['hidden', 'hidden'], ['center', 'center'], ['dashdot', 'dashdot']],
     e.lt || '', v => { begin(); es.forEach(x => { mut(x); x.lt = v || null; }); commit('Linetype'); draw(); });
+  /* Only what is annotation. A wall is drawn at the size it is built, and
+     offering to scale it with the drawing would be offering nonsense. */
+  if (es.every(x => ANNOTATABLE[x.t])) {
+    segRow(w, 'Annotative', [[0, 'No'], [1, 'Yes']], e.anno ? 1 : 0,
+      v => { setAnno(es, !!+v); upd(); });
+  }
 
   showQuickProps(one ? e : es);
 }
+/* what can be sized in paper units at all */
+const ANNOTATABLE = { text: 1, mtext: 1, dim: 1, leader: 1, attdef: 1 };
+/** Turn annotative on or off, CONVERTING the height as it goes.
+
+    The number means two different things either side of the flag: model units
+    when off, paper units when on. Setting the flag without converting turns a
+    250mm note into 250mm of paper — a quarter of a metre of text on the sheet
+    — so the stored height is divided by the scale going in and multiplied
+    coming out, and the size on screen never moves at the moment the meaning of
+    the number changes.
+
+    A dimension takes its sizes from its style rather than from a height of its
+    own, so there is nothing on it to convert. */
+function setAnno(es, on) {
+  const list = (es || []).filter(x => ANNOTATABLE[x.t]);
+  if (!list.length) return 0;
+  const k = annoK();
+  begin();
+  for (const x of list) {
+    if (!!x.anno === !!on) continue;
+    mut(x);
+    if (x.h != null && x.t !== 'dim') x.h = on ? x.h / k : x.h * k;
+    if (on) x.anno = true; else delete x.anno;
+  }
+  commit(on ? 'Annotative' : 'Not annotative');
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
+  return list.length;
+}
+
 function kindSummary(es) {
   const c = {}; for (const e of es) c[e.t] = (c[e.t] || 0) + 1;
   return Object.keys(c).sort().map(k => c[k] + '×' + k).join('  ');

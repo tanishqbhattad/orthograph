@@ -667,6 +667,20 @@ defvar('TAGS', {
   get: () => VS.tags ? 1 : 0,
   set(v) { VS.tags = v ? 1 : 0; draw(); },
 });
+defvar('CANNOSCALE', {
+  desc: 'Annotation scale for model space, as a ratio (0.01 is 1:100)',
+  type: 'real',
+  get: () => annoScale(),
+  set(v) {
+    const n = parseFloat(v);
+    /* a scale of zero divides every annotative height by nothing; refuse it
+       rather than filling the drawing with infinities */
+    if (!(isFinite(n) && n > 0)) { echo('That is not a scale'); return; }
+    DOC.annoScale = n;
+    if (typeof shapeCacheClear === 'function') shapeCacheClear();
+    draw();
+  },
+});
 defvar('CONTRAST', {
   desc: 'High-contrast palette: 1 on, 0 the default drawing colours',
   get: () => VS.contrast ? 1 : 0,

@@ -136,6 +136,11 @@ they are cut, everything beyond the cut line drawn as seen elevation, respecting
 depth and which way the section looks. Layers apply to a section; levels do not, because
 a section through a building is a section through all of it.
 
+**Annotation that comes out right.** Text and dimensions can be marked annotative,
+which sizes them in paper millimetres instead of model ones: the model height is derived
+from whichever scale is looking at them, so one note is the same size on the sheet through
+a 1:50 viewport and a 1:200 one. `CANNOSCALE` sets the scale for model space.
+
 **Sheets.** Paper space with named layouts, viewports onto model space at a stated scale,
 title blocks and plotting. A viewport is a rectangle on the paper in millimetres plus the
 model point at its centre and the scale it looks through; everything about plotting falls
@@ -236,7 +241,7 @@ noticed months later.
 - Door and window types carry size and swing, not fire, acoustic or finish data.
 - Schedules export as CSV, one file per schedule; there is no live link back
   from a spreadsheet into the drawing.
-- No ordinate or arc-length dimensions, and no annotative scaling.
+- No ordinate or arc-length dimensions.
 - No fields, and no stacked fractions in text.
 - Blocks have no attribute manager, in-place reference editing or dynamic parameters.
 - Keyboard picking is Ctrl+Enter rather than a rebindable key, and the

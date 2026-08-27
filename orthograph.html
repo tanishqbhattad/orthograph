@@ -719,6 +719,32 @@ const SCALES = [
 ];
 /** the label for a ratio, falling back to a computed 1:n so a custom scale
     still prints something honest rather than nothing */
+/* ---------------- annotation scale ----------------
+   Text and dimensions are sized in model units, so a 250mm note is 2.5mm on
+   paper at 1:100 and 5mm at 1:50. Put one plan in two viewports at two scales
+   — the ordinary reason to have two viewports — and the annotation in one of
+   them is the wrong size on the sheet. DIMSCALE was the fix: set by hand, for
+   one scale at a time.
+
+   An annotative object is sized in PAPER units. What varies is its model
+   height, derived from whichever scale is looking at it: the viewport's while
+   one is being drawn, the drawing's otherwise. A stack rather than a plain
+   variable because a scale left behind by a viewport that threw mid-paint
+   would quietly resize every annotation on the rest of the sheet. */
+const ANNO_STACK = [];
+const ANNO_DEFAULT = 1 / 100;
+function annoValid(s) { return typeof s === 'number' && isFinite(s) && s > 0; }
+function annoScale() {
+  if (ANNO_STACK.length) return ANNO_STACK[ANNO_STACK.length - 1];
+  return annoValid(DOC.annoScale) ? DOC.annoScale : ANNO_DEFAULT;
+}
+/** paper units to model units: what an annotative size is multiplied by */
+function annoK() { return 1 / annoScale(); }
+function annoPush(s) { ANNO_STACK.push(annoValid(s) ? s : annoScale()); }
+function annoPop() { ANNO_STACK.pop(); }
+/** the multiplier for one entity: 1 unless it is annotative */
+function annoFor(e) { return (e && e.anno) ? annoK() : 1; }
+
 function scaleLabel(r) {
   const hit = SCALES.find(s => Math.abs(s.r - r) < 1e-12);
   if (hit) return hit.label;
@@ -1287,25 +1313,35 @@ function shapes(e, tol) {
     case 'arc': return [{ c: e.c, r: e.r, a0: e.a0, a1: e.a1 }];
     case 'ellipse': return [{ pts: poly(e, tol || 48) }];
     case 'point': return [];
-    case 'text': return [{ text: e.s, p: e.p, h: e.h, rot: e.rot || 0, anchor: e.anchor || 'l' }];
+    /* an annotative note is sized in paper units; annoFor turns that into the
+       model height the scale currently looking at it calls for */
+    case 'text': return [{ text: e.s, p: e.p, h: e.h * annoFor(e),
+                           rot: e.rot || 0, anchor: e.anchor || 'l' }];
     /* mtext, leader and attdef were each given their own drawing path and never
        added here, so shapes() answered EMPTY for all three. Everything that
        goes through shapes() therefore skipped them silently: they exported to
        SVG (which has its own cases) but vanished from DXF, and EXPLODE did
        nothing to them. A drawing sent to a consultant lost every paragraph,
        every leader note and every attribute definition, with no error. */
-    case 'mtext':
-      return mtextLines(e).map(r => ({ text: r.text, p: r.p, h: r.h,
-                                       rot: r.rot || 0, anchor: r.anchor || 'l' }));
+    case 'mtext': {
+      /* laid out at the scaled height rather than scaled afterwards: the line
+         spacing and the wrap come out of the height, so scaling the result
+         would leave the lines at the old spacing */
+      const mk = annoFor(e);
+      const src = mk === 1 ? e : Object.assign({}, e, { h: e.h * mk });
+      return mtextLines(src).map(r => ({ text: r.text, p: r.p, h: r.h,
+                                         rot: r.rot || 0, anchor: r.anchor || 'l' }));
+    }
     case 'leader': {
-      const g = leaderGeom(e);
+      const lk = annoFor(e);
+      const g = leaderGeom(lk === 1 ? e : Object.assign({}, e, { h: (e.h || 2.5) * lk }));
       if (!g) return [];
       const out = [{ pts: g.spine }, { pts: g.head, closed: true, fill: true, role: 'arrowhead' }];
       if (g.text) out.push({ text: g.text, p: g.tp, h: g.h, rot: 0, anchor: g.anchor });
       return out;
     }
     case 'attdef':
-      return [{ text: e.tag || 'TAG', p: e.p, h: e.h || 2.5,
+      return [{ text: e.tag || 'TAG', p: e.p, h: (e.h || 2.5) * annoFor(e),
                 rot: e.rot || 0, anchor: e.anchor || 'l' }];
     /* A dimension has its own drawing path, its own flatten case and its own
        SVG case, and was never taught to shapes() — consistent special-casing
@@ -2219,8 +2255,10 @@ function dimStyle(e) {
   const base = (e && e.style && dimStyleRec(e.style)) || curDimStyleRec() || {};
   const d = (e && e.ovr) ? Object.assign({}, base, e.ovr) : base;
   /* DIMSCALE multiplies every size on a dimension and nothing else, exactly as
-     it does in AutoCAD — the measurement itself is untouched. */
-  const k = DOC.dimScale == null ? 1 : DOC.dimScale;
+     it does in AutoCAD — the measurement itself is untouched. An annotative
+     dimension takes its size from the scale looking at it INSTEAD: applying
+     both would square the scaling, which is how annotation ends up enormous. */
+  const k = (e && e.anno) ? annoK() : (DOC.dimScale == null ? 1 : DOC.dimScale);
   return {
     txt: (d.txt || h) * k,
     arrow: (d.arrow || h * 0.8) * k,
@@ -4343,6 +4381,12 @@ function entShapes(e) {
     return [{ pts: [e.a, e.b] }];
   }
   if (e.id == null || DOC.ents.get(e.id) !== e) return shapes(e, SHAPE_TOL) || [];
+  /* An annotative object is sized by whichever scale is looking at it, and a
+     sheet paints two viewports at two scales one after the other in a single
+     frame. The cache is keyed by id alone, so caching these would hand the
+     second viewport the size worked out for the first. They are notes and
+     dimensions — few, and cheap to build — so they are simply not cached. */
+  if (e.anno) return shapes(e, SHAPE_TOL) || [];
   const hit = SHPC.get(e.id);
   if (hit !== undefined) return hit.shapes;
   const sh = shapes(e, SHAPE_TOL) || [];
@@ -5466,7 +5510,11 @@ function drawSheet(sh) {
     /* the one we are standing in is already the current view; the rest are
        drawn by pointing the same renderer through their own transform */
     if (!live) Object.assign(V, vpViewState(sh, vp));
+    /* annotation inside this window is sized for THIS viewport's scale, which
+       is the whole reason an annotative object exists */
+    annoPush(vp.scale);
     try { drawEntitiesInView(); } catch (err) { /* one bad viewport must not take the page down */ }
+    finally { annoPop(); }
     if (!live) Object.assign(V, keep);
     ctx.restore();
     /* the frame is screen furniture: it marks the window while you work and is
@@ -12887,6 +12935,20 @@ defvar('TAGS', {
   get: () => VS.tags ? 1 : 0,
   set(v) { VS.tags = v ? 1 : 0; draw(); },
 });
+defvar('CANNOSCALE', {
+  desc: 'Annotation scale for model space, as a ratio (0.01 is 1:100)',
+  type: 'real',
+  get: () => annoScale(),
+  set(v) {
+    const n = parseFloat(v);
+    /* a scale of zero divides every annotative height by nothing; refuse it
+       rather than filling the drawing with infinities */
+    if (!(isFinite(n) && n > 0)) { echo('That is not a scale'); return; }
+    DOC.annoScale = n;
+    if (typeof shapeCacheClear === 'function') shapeCacheClear();
+    draw();
+  },
+});
 defvar('CONTRAST', {
   desc: 'High-contrast palette: 1 on, 0 the default drawing colours',
   get: () => VS.contrast ? 1 : 0,
@@ -17114,9 +17176,44 @@ function buildProps() {
     () => pickColor(e.color || entColor(e), c => { begin(); es.forEach(x => { mut(x); x.color = c; }); commit('Colour'); upd(); }, true));
   selRow(w, 'Linetype', [['', 'ByLayer'], ['solid', 'solid'], ['dashed', 'dashed'], ['hidden', 'hidden'], ['center', 'center'], ['dashdot', 'dashdot']],
     e.lt || '', v => { begin(); es.forEach(x => { mut(x); x.lt = v || null; }); commit('Linetype'); draw(); });
+  /* Only what is annotation. A wall is drawn at the size it is built, and
+     offering to scale it with the drawing would be offering nonsense. */
+  if (es.every(x => ANNOTATABLE[x.t])) {
+    segRow(w, 'Annotative', [[0, 'No'], [1, 'Yes']], e.anno ? 1 : 0,
+      v => { setAnno(es, !!+v); upd(); });
+  }
 
   showQuickProps(one ? e : es);
 }
+/* what can be sized in paper units at all */
+const ANNOTATABLE = { text: 1, mtext: 1, dim: 1, leader: 1, attdef: 1 };
+/** Turn annotative on or off, CONVERTING the height as it goes.
+
+    The number means two different things either side of the flag: model units
+    when off, paper units when on. Setting the flag without converting turns a
+    250mm note into 250mm of paper — a quarter of a metre of text on the sheet
+    — so the stored height is divided by the scale going in and multiplied
+    coming out, and the size on screen never moves at the moment the meaning of
+    the number changes.
+
+    A dimension takes its sizes from its style rather than from a height of its
+    own, so there is nothing on it to convert. */
+function setAnno(es, on) {
+  const list = (es || []).filter(x => ANNOTATABLE[x.t]);
+  if (!list.length) return 0;
+  const k = annoK();
+  begin();
+  for (const x of list) {
+    if (!!x.anno === !!on) continue;
+    mut(x);
+    if (x.h != null && x.t !== 'dim') x.h = on ? x.h / k : x.h * k;
+    if (on) x.anno = true; else delete x.anno;
+  }
+  commit(on ? 'Annotative' : 'Not annotative');
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
+  return list.length;
+}
+
 function kindSummary(es) {
   const c = {}; for (const e of es) c[e.t] = (c[e.t] || 0) + 1;
   return Object.keys(c).sort().map(k => c[k] + '×' + k).join('  ');
