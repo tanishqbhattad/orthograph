@@ -17890,6 +17890,24 @@ function focusDyn() {
 window.addEventListener('keydown', ev => {
   const tag = document.activeElement && document.activeElement.tagName;
   const inField = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+  /* Shift+letter temporary snap overrides. The whole mechanism — the letter
+     table, the apply, the release, the save-and-restore so an override can
+     never leave the drafting settings altered — was written and then called
+     from nowhere. Holding Shift+E for an endpoint did nothing at all.
+
+     It goes here, before everything else, because the point of an override is
+     that it works in the middle of whatever you are doing. Not while typing:
+     Shift+E in the command line is a capital E. */
+  if (ev.shiftKey && !inField && !ev.ctrlKey && !ev.altKey &&
+      typeof tempOverrideDown === 'function' && tempOverrideKey(ev.key)) {
+    const o = tempOverrideDown(ev.key);
+    if (o) {
+      ev.preventDefault();
+      if (typeof hint === 'function') hint(o.label + ' — while held');
+      if (typeof draw === 'function') draw();
+      return;
+    }
+  }
   if (ev.key === 'Escape') {
     if (SNAPMENU) { hideSnapMenu(); return; }
     /* leaving a viewport comes before cancelling a command: Escape on a sheet
@@ -17994,6 +18012,13 @@ window.addEventListener('keydown', ev => {
 });
 window.addEventListener('keyup', ev => {
   if (ev.key === 'Shift') ST.shift = false;
+  /* Releasing either the letter or Shift ends it — the chord is gone either
+     way, and an override that outlived its keypress would silently change what
+     the next click snapped to. */
+  if (typeof tempOverrideUp === 'function' && tempOverrideUp(ev.key)) {
+    if (typeof hint === 'function') hint('');
+    if (typeof draw === 'function') draw();
+  }
   if (ev.key === ' ') {
     const dragged = ST.panDragged;
     ST.panReady = false; ST.panDragged = false; navCursor();

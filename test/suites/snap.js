@@ -610,4 +610,87 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(at(4).k, 'end', 'zoomed in 4x, 3px from the endpoint still resolves to it');
     eq(at(0.25).k, 'end', 'zoomed out 4x, 3px from the endpoint still resolves to it');
   });
+
+  group('Shift+letter temporary overrides');
+
+  /* The letter table, the apply, the release and the save-and-restore were all
+     written and then called from nowhere: holding Shift+E for an endpoint did
+     nothing at all. These drive the key handler, not the functions, because
+     the functions were never the part that was broken. */
+  const KEY = (key, shift) => ({ key, shiftKey: shift !== false, ctrlKey: false,
+                                 altKey: false, preventDefault() {}, stopPropagation() {} });
+  const fireDown = (k) => window.__keydown && window.__keydown(KEY(k));
+  const fireUp = (k) => window.__keyup && window.__keyup(KEY(k));
+
+  t('Shift+E forces an endpoint snap while it is held', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'line', a:[0,0], b:[4000,0], layer:'0'});
+      const before = ST.osnapOne;
+      const o = tempOverrideDown('e');
+      const during = ST.osnapOne;
+      tempOverrideUp('e');
+      return { before, during, after: ST.osnapOne, label: o && o.label };`);
+    eq(r.before, null, 'nothing is overridden to start with');
+    eq(r.during, 'end', 'holding E forces endpoints');
+    eq(r.label, 'Endpoint');
+    eq(r.after, null, 'and letting go puts it back');
+  });
+
+  t('an override never leaves the drafting settings altered', () => {
+    const r = R(`${SETUP}
+      ST.polar = true; ST.ortho = false; ST.otrack = true; ST.snapgrid = false;
+      const snap = () => [ST.polar, ST.ortho, ST.otrack, ST.snapgrid, ST.osnap].join(',');
+      const before = snap();
+      const seen = [];
+      for (const k of ['e','m','c','d','a','s','x','z']) {
+        tempOverrideDown(k);
+        seen.push(k + ':' + snap());
+        tempOverrideUp(k);
+        if (snap() !== before) return { bad: k, before, after: snap() };
+      }
+      return { bad: null, before, after: snap(), seen: seen.length };`);
+    eq(r.bad, null, 'holding ' + r.bad + ' left the settings at ' + r.after);
+    eq(r.after, r.before, 'every override restores exactly what it found');
+    eq(r.seen, 8, 'all eight letters were exercised');
+  });
+
+  t('a second letter while one is held is ignored, not stacked', () => {
+    const r = R(`${SETUP}
+      tempOverrideDown('e');
+      const first = ST.osnapOne;
+      const second = tempOverrideDown('m');
+      const still = ST.osnapOne;
+      tempOverrideUp('e');
+      return { first, second, still, after: ST.osnapOne };`);
+    eq(r.first, 'end');
+    eq(r.second, null, 'the second key is refused');
+    eq(r.still, 'end', 'and the first override still stands');
+    eq(r.after, null);
+  });
+
+  t('releasing Shift ends the override even if the letter is still down', () => {
+    const r = R(`${SETUP}
+      tempOverrideDown('c');
+      const during = ST.osnapOne;
+      const ended = tempOverrideUp('Shift');
+      return { during, ended, after: ST.osnapOne };`);
+    eq(r.during, 'cen');
+    eq(r.ended, true, 'Shift alone releases it');
+    eq(r.after, null, 'the chord is gone either way');
+  });
+
+  t('D disables snapping and tracking together, then restores both', () => {
+    const r = R(`${SETUP}
+      ST.otrack = true; ST.polar = true; ST.snapgrid = true; ST.ortho = false;
+      tempOverrideDown('d');
+      const during = { snap: ST.osnapOne, otrack: ST.otrack, polar: ST.polar,
+                       grid: ST.snapgrid };
+      tempOverrideUp('d');
+      return { during, after: { otrack: ST.otrack, polar: ST.polar,
+                                grid: ST.snapgrid, snap: ST.osnapOne } };`);
+    eq(r.during.snap, 'none', 'D means no snapping at all');
+    eq(r.during.otrack, false); eq(r.during.polar, false); eq(r.during.grid, false);
+    eq(r.after.otrack, true, 'and all of it comes back');
+    eq(r.after.polar, true); eq(r.after.grid, true); eq(r.after.snap, null);
+  });
 };
