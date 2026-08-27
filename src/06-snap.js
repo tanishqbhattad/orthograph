@@ -41,8 +41,8 @@ const ST = {
   polarRel: false,        /* measure polar angles from the last segment   */
   trackPolar: true,       /* otrack follows every polar angle, not just 0/90 */
   /* ---- shared interaction contract (several modules read these) ---- */
-  crossLen: 100,          /* crosshair arm length, % of viewport; 100 = full width */
-  pickBox: 8,             /* pick aperture in screen px */
+  crossLen: CROSS_PCT,    /* crosshair arm length, % of viewport; 100 = full width */
+  pickBox: PICK_PX,       /* pick aperture in screen px */
   aperture: 10,           /* osnap aperture radius in screen px — AutoCAD's APERTURE */
   apBox: false,           /* draw the aperture box at a point prompt — APBOX */
   markerSize: 6,          /* AutoSnap marker half-size in screen px */
@@ -1360,7 +1360,7 @@ function pickCandidates(p, radius, filter) {
   /* The drawn pick box has to be the aperture that actually picks, otherwise
      the setting is decoration. Explicit radii still matter (a wall wants more
      reach than a line), so they scale with the box rather than ignoring it. */
-  const r = px((radius || 8) * ((+ST.pickBox || 8) / 8));
+  const r = px((radius || 8) * (pickBoxPx() / 8));
   const out = [];
   for (const e of query(p[0] - r, p[1] - r, p[0] + r, p[1] + r)) {
     if (!pickable(e)) continue;

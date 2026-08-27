@@ -101,9 +101,10 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
   stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .tool:hover{background:var(--bg3);color:var(--tx0)}
 .tool.on{background:var(--amber);color:#141821;box-shadow:0 0 0 1px #ffd16655}
-.tool[data-k]::after{content:attr(data-k);position:absolute;right:1px;bottom:0;
-  font-family:var(--mono);font-size:6.5px;line-height:1;opacity:.5;letter-spacing:-.02em}
-.tool.on[data-k]::after{opacity:.65}
+/* The shortcut used to be stamped into the corner of all forty icons: forty
+   pieces of 6.5px type competing with the glyphs they were labelling. It is
+   still on the tooltip, the accessible name and the ? sheet, which is where a
+   shortcut is looked up rather than read. */
 .tip{position:fixed;background:#05070a;border:1px solid var(--bd2);border-radius:5px;
   padding:5px 9px;font-size:11.5px;pointer-events:none;opacity:0;z-index:400;
   transition:opacity .1s;white-space:nowrap;box-shadow:0 6px 18px #0009}
@@ -249,7 +250,9 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
    what AutoCAD's docked command line does; F2 opens the tall history window.
    Without this the app buffered every prompt, error and variable readout and
    displayed none of them — a typo produced silence. */
-#cmdhist{flex:none;max-height:74px;overflow-y:auto;overflow-x:hidden;
+/* Two lines. Four was tall enough to sit over the panels on both sides, and
+   the history is a glance backwards — the whole of it is one keypress away. */
+#cmdhist{flex:none;max-height:39px;overflow-y:auto;overflow-x:hidden;
   padding:5px 11px 0;font-family:var(--mono);font-size:11px;line-height:1.55;
   color:var(--tx1);border-bottom:1px solid transparent;scrollbar-width:thin}
 #cmdhist:empty{display:none}
@@ -476,7 +479,6 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
   #topbar{padding:0 6px;gap:0}
   .tb{padding:6px 7px;font-size:12px}
   .mode{padding:5px 9px;font-size:11px}
-  .tool[data-k]::after{display:none}
   #coord{min-width:132px;font-size:10px}
   #hint{max-width:52%;font-size:10.5px}
   #dset .ds:nth-child(n+3){display:none}
@@ -768,6 +770,21 @@ function annoPush(s) { ANNO_STACK.push(annoValid(s) ? s : annoScale()); }
 function annoPop() { ANNO_STACK.pop(); }
 /** the multiplier for one entity: 1 unless it is annotative */
 function annoFor(e) { return (e && e.anno) ? annoK() : 1; }
+
+/* ---------------- cursor defaults ----------------
+   Named once and read everywhere. A default declared in one place and
+   defaulted-to differently in another is the same bug twice: clear the value
+   and the drawing reverts to a number nobody chose. */
+const CROSS_PCT = 20;        /* crosshair arms, % of viewport */
+const PICK_PX = 10;          /* pick aperture, screen px */
+function crosshairPct() {
+  const v = +ST.crossLen;
+  return (isFinite(v) && v > 0) ? Math.max(1, Math.min(100, v)) : CROSS_PCT;
+}
+function pickBoxPx() {
+  const v = +ST.pickBox;
+  return (isFinite(v) && v > 0) ? Math.max(2, Math.min(40, v)) : PICK_PX;
+}
 
 function scaleLabel(r) {
   const hit = SCALES.find(s => Math.abs(s.r - r) < 1e-12);
@@ -5627,7 +5644,7 @@ function drawCursor() {
   const p = w2s(ST.cur);
   if (!isFinite(p[0]) || !isFinite(p[1])) return;
   const x = snapXd(p[0], 1), y = snapYd(p[1], 1);
-  let pct = ST.crossLen == null ? 100 : +ST.crossLen;
+  let pct = crosshairPct();
   if (!isFinite(pct)) pct = 100;
   pct = clamp(pct, 1, 100);
   ctx.strokeStyle = CO.cross; ctx.globalAlpha = 0.82;
@@ -5651,7 +5668,7 @@ function drawCursor() {
     ctx.strokeRect(x - a, y - a, a * 2, a * 2);
   }
   if (typeof showPickBox === 'function' && !showPickBox()) { ctx.globalAlpha = 1; return; }
-  const b = Math.max(2, +ST.pickBox || 8);
+  const b = pickBoxPx();
   ctx.globalAlpha = 1;
   ctx.strokeStyle = CO.cross;
   const bx = snapXd(p[0] - b / 2, 1), by = snapYd(p[1] - b / 2, 1);
@@ -6062,8 +6079,8 @@ const ST = {
   polarRel: false,        /* measure polar angles from the last segment   */
   trackPolar: true,       /* otrack follows every polar angle, not just 0/90 */
   /* ---- shared interaction contract (several modules read these) ---- */
-  crossLen: 100,          /* crosshair arm length, % of viewport; 100 = full width */
-  pickBox: 8,             /* pick aperture in screen px */
+  crossLen: CROSS_PCT,    /* crosshair arm length, % of viewport; 100 = full width */
+  pickBox: PICK_PX,       /* pick aperture in screen px */
   aperture: 10,           /* osnap aperture radius in screen px — AutoCAD's APERTURE */
   apBox: false,           /* draw the aperture box at a point prompt — APBOX */
   markerSize: 6,          /* AutoSnap marker half-size in screen px */
@@ -7381,7 +7398,7 @@ function pickCandidates(p, radius, filter) {
   /* The drawn pick box has to be the aperture that actually picks, otherwise
      the setting is decoration. Explicit radii still matter (a wall wants more
      reach than a line), so they scale with the box rather than ignoring it. */
-  const r = px((radius || 8) * ((+ST.pickBox || 8) / 8));
+  const r = px((radius || 8) * (pickBoxPx() / 8));
   const out = [];
   for (const e of query(p[0] - r, p[1] - r, p[0] + r, p[1] + r)) {
     if (!pickable(e)) continue;
@@ -17696,9 +17713,9 @@ function dsField(w, tag, val, label, on, raw) {
   b.appendChild(i); w.appendChild(b); return i;
 }
 function drawSettingsExtras(w) {
-  addRow(w, 'Crosshair %', ST.crossLen == null ? 100 : ST.crossLen,
+  addRow(w, 'Crosshair %', crosshairPct(),
     v => { ST.crossLen = clamp(v, 1, 100); draw(); }, 1);
-  addRow(w, 'Pick box px', ST.pickBox || 8,
+  addRow(w, 'Pick box px', pickBoxPx(),
     v => { ST.pickBox = clamp(Math.round(v), 2, 40); draw(); }, 1);
   addRow(w, 'Grip size px', ST.gripSize || 5,
     v => { ST.gripSize = clamp(Math.round(v), 2, 20); draw(); }, 1);
@@ -19066,9 +19083,9 @@ function buildSnapGridTab(w, W) {
   chk(w, 'Grid on (F7)', W.grid, v => W.grid = v);
   addRow(w, 'Grid step', W.gridStep, v => W.gridStep = v);
   grpRow(w, 'Cursor');
-  addRow(w, 'Crosshair %', ST.crossLen == null ? 100 : ST.crossLen,
+  addRow(w, 'Crosshair %', crosshairPct(),
     v => { ST.crossLen = clamp(v, 1, 100); draw(); }, 1);
-  addRow(w, 'Pick box px', ST.pickBox || 8,
+  addRow(w, 'Pick box px', pickBoxPx(),
     v => { ST.pickBox = clamp(Math.round(v), 2, 40); draw(); }, 1);
 }
 function buildPolarTab(w, W, redraw) {

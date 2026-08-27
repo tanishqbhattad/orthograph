@@ -101,9 +101,10 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
   stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .tool:hover{background:var(--bg3);color:var(--tx0)}
 .tool.on{background:var(--amber);color:#141821;box-shadow:0 0 0 1px #ffd16655}
-.tool[data-k]::after{content:attr(data-k);position:absolute;right:1px;bottom:0;
-  font-family:var(--mono);font-size:6.5px;line-height:1;opacity:.5;letter-spacing:-.02em}
-.tool.on[data-k]::after{opacity:.65}
+/* The shortcut used to be stamped into the corner of all forty icons: forty
+   pieces of 6.5px type competing with the glyphs they were labelling. It is
+   still on the tooltip, the accessible name and the ? sheet, which is where a
+   shortcut is looked up rather than read. */
 .tip{position:fixed;background:#05070a;border:1px solid var(--bd2);border-radius:5px;
   padding:5px 9px;font-size:11.5px;pointer-events:none;opacity:0;z-index:400;
   transition:opacity .1s;white-space:nowrap;box-shadow:0 6px 18px #0009}
@@ -249,7 +250,9 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
    what AutoCAD's docked command line does; F2 opens the tall history window.
    Without this the app buffered every prompt, error and variable readout and
    displayed none of them — a typo produced silence. */
-#cmdhist{flex:none;max-height:74px;overflow-y:auto;overflow-x:hidden;
+/* Two lines. Four was tall enough to sit over the panels on both sides, and
+   the history is a glance backwards — the whole of it is one keypress away. */
+#cmdhist{flex:none;max-height:39px;overflow-y:auto;overflow-x:hidden;
   padding:5px 11px 0;font-family:var(--mono);font-size:11px;line-height:1.55;
   color:var(--tx1);border-bottom:1px solid transparent;scrollbar-width:thin}
 #cmdhist:empty{display:none}
@@ -476,7 +479,6 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
   #topbar{padding:0 6px;gap:0}
   .tb{padding:6px 7px;font-size:12px}
   .mode{padding:5px 9px;font-size:11px}
-  .tool[data-k]::after{display:none}
   #coord{min-width:132px;font-size:10px}
   #hint{max-width:52%;font-size:10.5px}
   #dset .ds:nth-child(n+3){display:none}

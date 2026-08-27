@@ -1479,7 +1479,7 @@ function drawCursor() {
   const p = w2s(ST.cur);
   if (!isFinite(p[0]) || !isFinite(p[1])) return;
   const x = snapXd(p[0], 1), y = snapYd(p[1], 1);
-  let pct = ST.crossLen == null ? 100 : +ST.crossLen;
+  let pct = crosshairPct();
   if (!isFinite(pct)) pct = 100;
   pct = clamp(pct, 1, 100);
   ctx.strokeStyle = CO.cross; ctx.globalAlpha = 0.82;
@@ -1503,7 +1503,7 @@ function drawCursor() {
     ctx.strokeRect(x - a, y - a, a * 2, a * 2);
   }
   if (typeof showPickBox === 'function' && !showPickBox()) { ctx.globalAlpha = 1; return; }
-  const b = Math.max(2, +ST.pickBox || 8);
+  const b = pickBoxPx();
   ctx.globalAlpha = 1;
   ctx.strokeStyle = CO.cross;
   const bx = snapXd(p[0] - b / 2, 1), by = snapYd(p[1] - b / 2, 1);

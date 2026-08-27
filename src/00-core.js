@@ -180,6 +180,21 @@ function annoPop() { ANNO_STACK.pop(); }
 /** the multiplier for one entity: 1 unless it is annotative */
 function annoFor(e) { return (e && e.anno) ? annoK() : 1; }
 
+/* ---------------- cursor defaults ----------------
+   Named once and read everywhere. A default declared in one place and
+   defaulted-to differently in another is the same bug twice: clear the value
+   and the drawing reverts to a number nobody chose. */
+const CROSS_PCT = 20;        /* crosshair arms, % of viewport */
+const PICK_PX = 10;          /* pick aperture, screen px */
+function crosshairPct() {
+  const v = +ST.crossLen;
+  return (isFinite(v) && v > 0) ? Math.max(1, Math.min(100, v)) : CROSS_PCT;
+}
+function pickBoxPx() {
+  const v = +ST.pickBox;
+  return (isFinite(v) && v > 0) ? Math.max(2, Math.min(40, v)) : PICK_PX;
+}
+
 function scaleLabel(r) {
   const hit = SCALES.find(s => Math.abs(s.r - r) < 1e-12);
   if (hit) return hit.label;

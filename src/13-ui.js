@@ -418,9 +418,9 @@ function dsField(w, tag, val, label, on, raw) {
   b.appendChild(i); w.appendChild(b); return i;
 }
 function drawSettingsExtras(w) {
-  addRow(w, 'Crosshair %', ST.crossLen == null ? 100 : ST.crossLen,
+  addRow(w, 'Crosshair %', crosshairPct(),
     v => { ST.crossLen = clamp(v, 1, 100); draw(); }, 1);
-  addRow(w, 'Pick box px', ST.pickBox || 8,
+  addRow(w, 'Pick box px', pickBoxPx(),
     v => { ST.pickBox = clamp(Math.round(v), 2, 40); draw(); }, 1);
   addRow(w, 'Grip size px', ST.gripSize || 5,
     v => { ST.gripSize = clamp(Math.round(v), 2, 20); draw(); }, 1);
@@ -1788,9 +1788,9 @@ function buildSnapGridTab(w, W) {
   chk(w, 'Grid on (F7)', W.grid, v => W.grid = v);
   addRow(w, 'Grid step', W.gridStep, v => W.gridStep = v);
   grpRow(w, 'Cursor');
-  addRow(w, 'Crosshair %', ST.crossLen == null ? 100 : ST.crossLen,
+  addRow(w, 'Crosshair %', crosshairPct(),
     v => { ST.crossLen = clamp(v, 1, 100); draw(); }, 1);
-  addRow(w, 'Pick box px', ST.pickBox || 8,
+  addRow(w, 'Pick box px', pickBoxPx(),
     v => { ST.pickBox = clamp(Math.round(v), 2, 40); draw(); }, 1);
 }
 function buildPolarTab(w, W, redraw) {
