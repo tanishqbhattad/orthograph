@@ -136,6 +136,7 @@ function resetDoc() {
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];
   DOC.dimStyles = stdDimStyles(); DOC.curDim = 'Standard';
+  DOC.textStyles = stdTextStyles(); DOC.curTextStyle = 'Standard';
   DOC.levelUid = (DOC.levels || []).length;
   /* a document straight off the shelf has nothing unsaved in it */
   DOC.savedSeq = HIST.seq;

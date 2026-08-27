@@ -701,7 +701,7 @@ function pathEnt(e) {
     }
   }
 }
-function drawTextAt(str, p, h, rotAng, anchor, col) {
+function drawTextAt(str, p, h, rotAng, anchor, col, style) {
   if (HALO) return;                               /* text is never haloed — it smears */
   const s = w2s(p), hp = h * V.z;
   if (hp < 3) {
@@ -713,8 +713,17 @@ function drawTextAt(str, p, h, rotAng, anchor, col) {
   if (s[0] < -4000 || s[0] > V.w + 4000 || s[1] < -4000 || s[1] > V.h + 4000) return;
   ctx.save();
   ctx.translate(s[0], s[1]); ctx.rotate(-((rotAng || 0) + V.rot));
+  /* A style's width factor and oblique are a transform, not a font: no browser
+     font has a 0.8-wide variant, and skewing is how a slanted CAD font has
+     always been made. Applied here so every caller gets them without knowing. */
+  const TS = style || (typeof textStyle === 'function' ? textStyle(null) : null);
+  if (TS && (TS.wf !== 1 || TS.oblique)) {
+    const sk = Math.tan((TS.oblique || 0) * Math.PI / 180);
+    ctx.transform(TS.wf || 1, 0, -sk, 1, 0, 0);
+  }
   ctx.fillStyle = col;
-  ctx.font = '500 ' + hp.toFixed(1) + "px 'Inter',system-ui,sans-serif";
+  ctx.font = '500 ' + hp.toFixed(1) + 'px ' +
+    (TS && TS.font ? "'" + TS.font + "'," : '') + "'Inter',system-ui,sans-serif";
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = anchor === 'c' ? 'center' : anchor === 'r' ? 'right' : 'left';
   ctx.fillText(String(str), 0, 0);
@@ -917,7 +926,8 @@ function drawEntBody(e, mode) {
   const S = mode ? HL[mode] : null;
   const col = S ? (S.col || lift(fcol(e), S.lift)) : fcol(e);
   if (e.t === 'dim') return drawDim(e, col, mode);
-  if (e.t === 'text') return drawTextAt(e.s, e.p, e.h, e.rot, e.anchor, col);
+  if (e.t === 'text') return drawTextAt(e.s, e.p, e.h, e.rot, e.anchor, col,
+    typeof textStyle === 'function' ? textStyle(e) : null);
   /* An attribute definition on its own is not yet carrying a value, so it
      shows its TAG — that is what you are placing and what you will fill in. */
   if (e.t === 'attdef') {
@@ -937,7 +947,8 @@ function drawEntBody(e, mode) {
     return;
   }
   if (e.t === 'mtext') {
-    for (const r of mtextLines(e)) drawTextAt(r.text, r.p, r.h, r.rot, r.anchor, col);
+    const ts = typeof textStyle === 'function' ? textStyle(e) : null;
+    for (const r of mtextLines(e)) drawTextAt(r.text, r.p, r.h, r.rot, r.anchor, col, ts);
     return;
   }
   /* Hatch is registered in GEOM, so it MUST be tested before the GEOM branch.

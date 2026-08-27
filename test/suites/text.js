@@ -223,4 +223,72 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.filled, true, 'the arrowhead is filled');
     eq(r.text, true, 'and the note is in the file');
   });
+
+  group('B4 — named text styles');
+
+  /* There was one text height on the document and nothing else: no font, no
+     width factor, no oblique, and no way to say "all the room names look like
+     this". */
+  t('a piece of text can name a style, and falls back to the current one', () => {
+    const r = R(`${SETUP}
+      textStyles().push({ name: 'Notes', font: 'Georgia', wf: 0.85, oblique: 12 });
+      begin();
+      const a = addEnt({t:'text', s:'A', p:[0,0], h:200, rot:0, anchor:'l', layer:'0'});
+      commit('a');
+      const std = textStyle(a);
+      a.style = 'Notes';
+      const named = textStyle(a);
+      a.ovr = { wf: 2 };
+      const over = textStyle(a);
+      DOC.curTextStyle = 'Notes';
+      const plain = textStyle({ t:'text' });
+      DOC.curTextStyle = 'Standard';
+      return { std: std.font + '/' + std.wf,
+               named: named.font + '/' + named.wf + '/' + named.oblique,
+               over: over.wf, plain: plain.font };`);
+    eq(r.std, 'Inter/1', 'the default style is Inter at full width');
+    eq(r.named, 'Georgia/0.85/12', 'naming a style uses all of it');
+    eq(r.over, 2, 'and the text’s own override beats the style');
+    eq(r.plain, 'Georgia', 'text with no style of its own follows the current one');
+  });
+
+  t('STYLE saves, sets current and applies to a selection', () => {
+    const r = R(`${SETUP}
+      begin();
+      const a = addEnt({t:'text', s:'A', p:[0,0], h:200, rot:0, anchor:'l', layer:'0'});
+      commit('a');
+      cancelCmd();
+      startCmd('style'); dispatch('F'); dispatch('Georgia'); endCmd(true);
+      startCmd('style'); dispatch('W'); dispatch('0.8'); endCmd(true);
+      startCmd('style'); dispatch('S'); dispatch('Notes'); endCmd(true);
+      const saved = textStyles().map(x => x.name);
+      const cur = DOC.curTextStyle;
+      startCmd('style'); dispatch('R'); dispatch('Standard'); endCmd(true);
+      SEL.clear(); SEL.add(a.id);
+      startCmd('style'); dispatch('A'); dispatch('Notes'); endCmd(true);
+      /* nonsense is refused rather than quietly setting something */
+      startCmd('style'); dispatch('W'); dispatch('-3'); endCmd(true);
+      return { saved, cur, back: DOC.curTextStyle, applied: a.style,
+               wf: textStyleRec('Notes').wf };`);
+    eq(r.saved.join(','), 'Standard,Notes');
+    eq(r.cur, 'Notes', 'saving makes it current');
+    eq(r.back, 'Standard', 'and it can be set back');
+    eq(r.applied, 'Notes', 'applying tags the selected text');
+    eq(r.wf, 0.8, 'a negative width factor is refused, leaving 0.8');
+  });
+
+  t('text styles travel with the drawing', () => {
+    const r = R(`${SETUP}
+      textStyles().push({ name: 'Notes', font: 'Georgia', wf: 0.85, oblique: 12 });
+      DOC.curTextStyle = 'Notes';
+      const txt = saveNative();
+      resetDoc();
+      const fresh = textStyles().length;
+      loadNative(txt);
+      return { fresh, names: textStyles().map(x => x.name), cur: DOC.curTextStyle,
+               font: textStyle(null).font };`);
+    eq(r.fresh, 1, 'a new document has only Standard');
+    eq(r.names.join(','), 'Standard,Notes', 'and they come back with the file');
+    eq(r.cur, 'Notes'); eq(r.font, 'Georgia');
+  });
 };

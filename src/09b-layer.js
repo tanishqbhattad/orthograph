@@ -722,3 +722,80 @@ defc('laymrg', {
     return true;
   },
 });
+
+/** STYLE / TEXTSTYLE — make and choose named text styles, the same three-step
+    resolution the dimension styles use. */
+defc('style', {
+  key: 'style', group: 'annotate',
+  hint: '<em>S</em>ave · <em>R</em>estore · <em>A</em>pply · <em>F</em>ont · <em>W</em>idth · <em>O</em>blique · <em>?</em> list',
+  init(c) { c.data = {}; },
+  text(c, s) {
+    const raw = String(s).trim(), k = raw.toLowerCase(), d = c.data;
+    if (d.await === 'save') {
+      const cur = curTextStyleRec() || {};
+      const rec = Object.assign({}, cur, { name: raw });
+      const list = textStyles();
+      const at = list.findIndex(x => String(x.name).toLowerCase() === k);
+      begin();
+      if (at >= 0) list[at] = rec; else list.push(rec);
+      DOC.curTextStyle = raw;
+      commit('Text style');
+      cliPrint('Text style "' + raw + '" saved and made current');
+      draw(); return true;
+    }
+    if (d.await === 'set') {
+      const rec = textStyleRec(raw);
+      if (!rec) { cliPrint('No text style called "' + raw + '".', 'err'); return true; }
+      begin(); DOC.curTextStyle = rec.name; commit('Current text style');
+      cliPrint('Current text style is ' + rec.name);
+      draw(); return true;
+    }
+    if (d.await === 'apply') {
+      const rec = textStyleRec(raw);
+      if (!rec) { cliPrint('No text style called "' + raw + '".', 'err'); return true; }
+      const txt = selEnts().filter(e => e.t === 'text' || e.t === 'mtext');
+      if (!txt.length) { cliPrint('Select some text first.', 'err'); return true; }
+      begin();
+      for (const e of txt) { mut(e); e.style = rec.name; }
+      commit('Text style');
+      cliPrint(txt.length + ' set to ' + rec.name);
+      draw(); return true;
+    }
+    if (d.await === 'font') {
+      const cur = curTextStyleRec();
+      begin(); cur.font = raw || cur.font; commit('Text style font');
+      cliPrint(cur.name + ' now uses ' + cur.font);
+      draw(); return true;
+    }
+    if (d.await === 'width') {
+      const v = parseFloat(raw);
+      if (!(v > 0)) { cliPrint('A width factor is a positive number.', 'err'); return true; }
+      const cur = curTextStyleRec();
+      begin(); cur.wf = v; commit('Text style width');
+      cliPrint(cur.name + ' width factor ' + v);
+      draw(); return true;
+    }
+    if (d.await === 'oblique') {
+      const v = parseFloat(raw);
+      if (isNaN(v) || Math.abs(v) >= 85) { cliPrint('An oblique angle between -85 and 85.', 'err'); return true; }
+      const cur = curTextStyleRec();
+      begin(); cur.oblique = v; commit('Text style oblique');
+      cliPrint(cur.name + ' oblique ' + v + '°');
+      draw(); return true;
+    }
+    if (k === 's' || k === 'save') { d.await = 'save'; hint('Name for this text style:'); return true; }
+    if (k === 'r' || k === 'restore') { d.await = 'set'; hint('Style to make current:'); return true; }
+    if (k === 'a' || k === 'apply') { d.await = 'apply'; hint('Style to apply to the selection:'); return true; }
+    if (k === 'f' || k === 'font') { d.await = 'font'; hint('Font name:'); return true; }
+    if (k === 'w' || k === 'width') { d.await = 'width'; hint('Width factor:'); return true; }
+    if (k === 'o' || k === 'oblique') { d.await = 'oblique'; hint('Oblique angle, degrees:'); return true; }
+    if (k === '?' || k === 'list') {
+      cliPrint(textStyles().map(x =>
+        (x.name === (curTextStyleRec() || {}).name ? '* ' : '  ') + x.name +
+        '  ' + (x.font || 'Inter') + (x.wf && x.wf !== 1 ? '  x' + x.wf : '') +
+        (x.oblique ? '  ' + x.oblique + '°' : '')).join('\n'));
+      return true;
+    }
+    return false;
+  },
+});

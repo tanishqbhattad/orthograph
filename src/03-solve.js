@@ -338,6 +338,38 @@ function dirFrom(P, L, click) {
    name one, and may carry its own overrides on top of it — that three-step
    resolution is AutoCAD's, and it is what makes a style worth having rather
    than a global you keep changing back. */
+/* ---------------- named text styles ----------------
+   There was one text height on the document and nothing else: no font, no
+   width factor, no oblique, and no way to say "all the room names look like
+   this". A style is a named set and a piece of text may name one, resolved the
+   same three ways a dimension style is — the text's own overrides, then the
+   style it names, then the current one. */
+function stdTextStyles() {
+  return [{ name: 'Standard', font: 'Inter', wf: 1, oblique: 0 }];
+}
+function textStyles() {
+  if (!Array.isArray(DOC.textStyles) || !DOC.textStyles.length)
+    DOC.textStyles = stdTextStyles();
+  return DOC.textStyles;
+}
+function textStyleRec(name) {
+  const n = String(name || '').trim().toLowerCase();
+  return textStyles().find(x => String(x.name).toLowerCase() === n) || null;
+}
+function curTextStyleRec() {
+  return textStyleRec(DOC.curTextStyle) || textStyles()[0];
+}
+/** the settings that apply to one piece of text */
+function textStyle(e) {
+  const base = (e && e.style && textStyleRec(e.style)) || curTextStyleRec() || {};
+  const d = (e && e.ovr) ? Object.assign({}, base, e.ovr) : base;
+  return {
+    font: d.font || 'Inter',
+    wf: d.wf > 0 ? d.wf : 1,                      /* width factor */
+    oblique: d.oblique || 0,                      /* degrees, leaning right */
+    h: d.h || null,                               /* a style may fix the height */
+  };
+}
 function stdDimStyles() {
   return [{ name: 'Standard' }];
 }

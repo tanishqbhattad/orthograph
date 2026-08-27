@@ -252,6 +252,7 @@ function saveNative() {
     sheets: DOC.sheets || [], curSheet: DOC.curSheet,
     layerStates: DOC.layerStates || [],
     dimStyles: dimStyles(), curDim: DOC.curDim || 'Standard',
+    textStyles: textStyles(), curTextStyle: DOC.curTextStyle || 'Standard',
     levelUid: DOC.levelUid || 0,
     ents: [...DOC.ents.values()].map(roomForSave),
   });
@@ -304,6 +305,8 @@ function loadNative(txt) {
   DOC.layerStates = Array.isArray(d.layerStates) ? d.layerStates : [];
   DOC.dimStyles = Array.isArray(d.dimStyles) && d.dimStyles.length ? d.dimStyles : null;
   DOC.curDim = d.curDim || 'Standard';
+  DOC.textStyles = Array.isArray(d.textStyles) && d.textStyles.length ? d.textStyles : null;
+  DOC.curTextStyle = d.curTextStyle || 'Standard';
   DOC.levelUid = d.levelUid || 0;
   DOC.sheets = Array.isArray(d.sheets) ? d.sheets.filter(sh => sh && sh.w > 0 && sh.h > 0) : [];
   DOC.curSheet = DOC.sheets.some(sh => sh.id === d.curSheet) ? d.curSheet : null;
