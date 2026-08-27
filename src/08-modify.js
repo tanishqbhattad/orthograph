@@ -949,8 +949,13 @@ defc('hatch', {
   },
   point(c, p) {
     const b = findBoundary(p);
-    if (!b) return echo('No closed boundary around that point');
-    hatchRings([b.outer, ...b.holes]);
+    if (b) return hatchRings([b.outer, ...b.holes]);
+    /* Nothing already-closed encloses the pick, so trace one out of whatever
+       loose geometry is there. Four lines drawn as four lines enclose a space
+       perfectly well, and that is most of how a drawing actually gets made. */
+    const traced = (typeof traceBoundary === 'function') ? traceBoundary(p) : null;
+    if (traced) return hatchRings([traced]);
+    echo('Nothing encloses that point');
   },
 });
 /** the closed ring an entity encloses, or null if it does not enclose one */

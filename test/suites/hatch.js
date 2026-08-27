@@ -150,4 +150,81 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(r.hatchCalls > 0, 'the hatch renderer must be reached, got ' + r.hatchCalls + ' calls');
     eq(r.shapeCalls, 0, 'and the generic shape path must not claim it');
   });
+
+  group('B5 — a boundary traced out of loose lines');
+
+  /* HATCH could only fill something that was already ONE closed object. Four
+     lines drawn as four lines enclose a space perfectly well, and that is most
+     of how a drawing actually gets made. */
+  t('four separate lines enclose an area that can be traced', () => {
+    const r = R(`${SETUP}
+      V.z = 0.05; V.px = 100; V.py = 700;
+      begin();
+      addEnt({t:'line', a:[0,0], b:[6000,0], layer:'0'});
+      addEnt({t:'line', a:[6000,0], b:[6000,4000], layer:'0'});
+      addEnt({t:'line', a:[6000,4000], b:[0,4000], layer:'0'});
+      addEnt({t:'line', a:[0,4000], b:[0,0], layer:'0'});
+      commit('box');
+      const ring = traceBoundary([3000, 2000]);
+      return { found: !!ring, n: ring && ring.length,
+               area: ring && Math.round(Math.abs(polyArea(ring))),
+               outside: traceBoundary([9000, 2000]) === null };`);
+    eq(r.found, true, 'the loop is found');
+    eq(r.n, 4, 'with one point per corner');
+    eq(r.area, 24000000, 'and exactly the right area');
+    eq(r.outside, true, 'a pick outside encloses nothing');
+  });
+
+  /* Without splitting at crossings, two lines that overshoot each other are
+     two edges meeting nowhere and the walk steps straight over the corner. */
+  t('lines that overshoot each other still make a corner', () => {
+    const r = R(`${SETUP}
+      V.z = 0.05; V.px = 100; V.py = 700;
+      begin();
+      addEnt({t:'line', a:[-500,0],    b:[6500,0],    layer:'0'});
+      addEnt({t:'line', a:[6000,-500], b:[6000,4500], layer:'0'});
+      addEnt({t:'line', a:[6500,4000], b:[-500,4000], layer:'0'});
+      addEnt({t:'line', a:[0,4500],    b:[0,-500],    layer:'0'});
+      commit('box');
+      const ring = traceBoundary([3000, 2000]);
+      return { n: ring && ring.length, area: ring && Math.round(Math.abs(polyArea(ring))) };`);
+    eq(r.n, 4, 'the overshoots are cut off at the corners');
+    eq(r.area, 24000000, 'leaving the enclosed area, got ' + r.area);
+  });
+
+  t('a partition splits the space, and the pick decides which side', () => {
+    const r = R(`${SETUP}
+      V.z = 0.05; V.px = 100; V.py = 700;
+      begin();
+      addEnt({t:'line', a:[0,0], b:[6000,0], layer:'0'});
+      addEnt({t:'line', a:[6000,0], b:[6000,4000], layer:'0'});
+      addEnt({t:'line', a:[6000,4000], b:[0,4000], layer:'0'});
+      addEnt({t:'line', a:[0,4000], b:[0,0], layer:'0'});
+      addEnt({t:'line', a:[2500,-200], b:[2500,4200], layer:'0'});
+      commit('box');
+      const A = q => { const g = traceBoundary(q); return g && Math.round(Math.abs(polyArea(g))); };
+      return { left: A([1000,2000]), right: A([4000,2000]) };`);
+    eq(r.left, 10000000, 'the left room is 2500 x 4000');
+    eq(r.right, 14000000, 'and the right one 3500 x 4000');
+  });
+
+  t('HATCH falls back to tracing when nothing closed encloses the pick', () => {
+    const r = R(`${SETUP}
+      V.z = 0.05; V.px = 100; V.py = 700;
+      begin();
+      addEnt({t:'line', a:[0,0], b:[6000,0], layer:'0'});
+      addEnt({t:'line', a:[6000,0], b:[6000,4000], layer:'0'});
+      addEnt({t:'line', a:[6000,4000], b:[0,4000], layer:'0'});
+      addEnt({t:'line', a:[0,4000], b:[0,0], layer:'0'});
+      commit('box');
+      const closed = findBoundary([3000,2000]);
+      cancelCmd(); startCmd('boundary'); cmdPoint([3000,2000]); endCmd(true);
+      const pl = [...DOC.ents.values()].find(e => e.t === 'pline' && e.closed);
+      return { noClosedEntity: closed === null,
+               madePline: !!pl, pts: pl && pl.pts.length,
+               area: pl && Math.round(Math.abs(polyArea(pl.pts))) };`);
+    eq(r.noClosedEntity, true, 'there is no already-closed object to find');
+    eq(r.madePline, true, 'BOUNDARY makes a real polyline out of the loose lines');
+    eq(r.pts, 4); eq(r.area, 24000000);
+  });
 };
