@@ -12920,6 +12920,42 @@ function sectionGeometry(sec) {
     }
   }
 
+  /* ---------------- projection beyond the cut ----------------
+     A section shows what is cut AND what is seen beyond it. Without this a
+     room reads as two posts and a floor with nothing between them, when in
+     fact you are looking at the far wall. Anything on the side you are facing,
+     within the view depth, is drawn in elevation: its extent along the section
+     line, from its base to its top, in lighter lines because it is behind the
+     cut and must not compete with it. */
+  const depth = sec.depth || 20000;
+  for (const e of DOC.ents.values()) {
+    if (e.t !== 'wall' || !inSection(e)) continue;
+    if (cuts.some(c => c.w.id === e.id)) continue;      /* already cut, not seen */
+    /* how far beyond the line each end sits, measured along the way we look */
+    const n = [F.n[0] * F.look, F.n[1] * F.look];
+    const dA = (e.a[0] - F.a[0]) * n[0] + (e.a[1] - F.a[1]) * n[1];
+    const dB = (e.b[0] - F.a[0]) * n[0] + (e.b[1] - F.a[1]) * n[1];
+    if (dA < -1e-6 && dB < -1e-6) continue;             /* behind the viewer */
+    if (dA > depth && dB > depth) continue;             /* past the view depth */
+    /* its extent along the section line */
+    const xA = (e.a[0] - F.a[0]) * F.u[0] + (e.a[1] - F.a[1]) * F.u[1];
+    const xB = (e.b[0] - F.a[0]) * F.u[0] + (e.b[1] - F.a[1]) * F.u[1];
+    const x0 = clamp(Math.min(xA, xB), 0, F.L), x1 = clamp(Math.max(xA, xB), 0, F.L);
+    if (x1 - x0 < 1e-6) continue;                       /* end-on: nothing to see */
+    const base = levelElev(e.lvl), top = base + wallHeight(e);
+    parts.push({ kind: 'seen', pts: [[x0, base], [x1, base], [x1, top], [x0, top]], w: e });
+    /* the openings in it are what make an elevation read as a building */
+    for (const o of wallOpenings(e)) {
+      const oh = openH(o.o);
+      const sill = o.o.t === 'window' ? (o.o.sill != null ? o.o.sill : 900) : 0;
+      const s0 = clamp(Math.min(xA, xB) + Math.min(o.s, o.e), x0, x1);
+      const s1 = clamp(Math.min(xA, xB) + Math.max(o.s, o.e), x0, x1);
+      if (s1 - s0 < 1e-6) continue;
+      parts.push({ kind: 'seen', pts: [[s0, base + sill], [s1, base + sill],
+                                       [s1, base + sill + oh], [s0, base + sill + oh]], w: e });
+    }
+  }
+
   /* the storey datums, drawn right across so the section reads as a building
      rather than a row of unrelated posts */
   const datums = [];
@@ -12951,6 +12987,14 @@ function placeSection(sec, at) {
     n++;
   }
   for (const p of G.parts) {
+    if (p.kind === 'seen') {
+      /* outlined, never poched: poche means CUT, and a face you are merely
+         looking at must not read as one you sliced through */
+      addEnt({ t: 'pline', closed: true, pts: p.pts.map(q => P(q[0], q[1])),
+               layer: lay, lw: 0.13 });
+      n++;
+      continue;
+    }
     if (p.kind === 'wall' || p.kind === 'slab') {
       addEnt({ t: 'hatch', loops: [p.pts.map(q => P(q[0], q[1]))], solid: true,
                pattern: 'solid', layer: lay });

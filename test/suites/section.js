@@ -197,4 +197,87 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.before, 3);
     eq(r.after, 0, 'turning a layer off means you do not want it anywhere');
   });
+
+  group('what is seen beyond the cut');
+
+  /* A section shows what is cut AND what is seen past it. Without projection a
+     room reads as two posts and a floor with nothing between them, when what
+     you are actually looking at is the far wall. */
+  t('a wall beyond the line is drawn in elevation', () => {
+    const r = R(`${SETUP}
+      const w = plan();
+      const G = sectionGeometry(cutLine());
+      const seen = G.parts.filter(p => p.kind === 'seen').map(p => {
+        const xs = p.pts.map(q => q[0]), ys = p.pts.map(q => q[1]);
+        return { x0: Math.round(Math.min(...xs)), x1: Math.round(Math.max(...xs)),
+                 lo: Math.round(Math.min(...ys)), hi: Math.round(Math.max(...ys)) };
+      });
+      return { cut: G.cuts, seen: seen.length, first: seen[0] };`);
+    eq(r.cut, 3, 'the three crossed walls are still cut');
+    ok(r.seen >= 1, 'and the far wall is seen, got ' + r.seen);
+    eq(r.first.lo + '..' + r.first.hi, '0..3000', 'at its full storey height');
+  });
+
+  t('openings in a wall beyond the line show as openings', () => {
+    const r = R(`${SETUP}
+      const w = plan();
+      begin();
+      addEnt({t:'window', host:w.N.id, pos:2500, w:1500, h:1400, sill:800, layer:'A-GLAZ'});
+      commit('far window');
+      const G = sectionGeometry(cutLine());
+      const seen = G.parts.filter(p => p.kind === 'seen').map(p => {
+        const ys = p.pts.map(q => q[1]);
+        return Math.round(Math.min(...ys)) + '..' + Math.round(Math.max(...ys));
+      });
+      return { seen };`);
+    ok(r.seen.includes('800..2200'),
+      'the window reads sill to head, got ' + r.seen.join(', '));
+  });
+
+  /* A face you are merely looking at must not read as one you sliced through. */
+  t('what is seen is outlined, never poched', () => {
+    const r = R(`${SETUP}
+      plan();
+      const s = cutLine();
+      placeSection(s, [0, -9000]);
+      const made = [...DOC.ents.values()].filter(e => e.layer === 'A-SECT' && e.t !== 'section');
+      const hatches = made.filter(e => e.t === 'hatch').length;
+      const plines = made.filter(e => e.t === 'pline').length;
+      const G = sectionGeometry(s);
+      return { hatches, plines,
+               cutBands: G.parts.filter(p => p.kind === 'wall').length,
+               seen: G.parts.filter(p => p.kind === 'seen').length };`);
+    eq(r.hatches, r.cutBands,
+      'exactly the cut bands are poched, got ' + r.hatches + ' for ' + r.cutBands);
+    eq(r.plines, r.cutBands + r.seen,
+      'and everything is outlined, cut and seen alike');
+  });
+
+  t('a wall past the view depth is not drawn', () => {
+    const r = R(`${SETUP}
+      begin();
+      /* one wall just beyond the line, one far past any sensible depth */
+      addEnt({t:'wall', a:[0,4000], b:[8000,4000], wt:'cav300', layer:'A-WALL'});
+      addEnt({t:'wall', a:[0,80000], b:[8000,80000], wt:'cav300', layer:'A-WALL'});
+      commit('w');
+      const s = cutLine();
+      s.depth = 20000;
+      const seen = sectionGeometry(s).parts.filter(p => p.kind === 'seen');
+      return { seen: seen.length };`);
+    eq(r.seen, 1, 'the near one is seen and the distant one is not');
+  });
+
+  t('a wall behind the viewer is not drawn either', () => {
+    const r = R(`${SETUP}
+      begin();
+      addEnt({t:'wall', a:[0,-4000], b:[8000,-4000], wt:'cav300', layer:'A-WALL'});
+      commit('w');
+      const s = cutLine();
+      const facing = sectionGeometry(s).parts.filter(p => p.kind === 'seen').length;
+      s.dir = -1;
+      const turned = sectionGeometry(s).parts.filter(p => p.kind === 'seen').length;
+      return { facing, turned };`);
+    eq(r.facing, 0, 'looking away from it, it is not there');
+    eq(r.turned, 1, 'and turning the section round brings it into view');
+  });
 };
