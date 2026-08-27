@@ -4,7 +4,7 @@
 architecture layer on top. No build step required to *use* it — `orthograph.html` is a
 single self-contained file. Open it in any browser.
 
-108 commands, 93 acad.pgp aliases, 655 tests.
+107 commands, 93 acad.pgp aliases, 655 tests.
 
 ## Layout
 
