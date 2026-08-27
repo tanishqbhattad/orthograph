@@ -4,7 +4,7 @@
 architecture layer on top. No build step required to *use* it — `orthograph.html` is a
 single self-contained file. Open it in any browser.
 
-111 commands, 93 acad.pgp aliases, 694 tests.
+111 commands, 93 acad.pgp aliases, 704 tests.
 
 ## Layout
 
@@ -63,7 +63,7 @@ node tools/serve.js            # → http://127.0.0.1:8017/
 
 ```
 node build.js                  # → orthograph.html
-node test/run.js               # 694 tests
+node test/run.js               # 704 tests
 node test/run.js wall          # run a subset by name
 node tools/verify.js           # behavioural checks + drag latency
 
@@ -243,6 +243,8 @@ noticed months later.
 - Everything is 2D. Walls, openings and slabs carry height, sill and level data already,
   so the model is ready for a 3D view later without a data migration.
 - DWG remains experimental and unverified against AutoCAD — use DXF.
+- PDF is produced through the browser's own print pipeline at the sheet's page
+  size, rather than by a PDF writer carried inside the app.
 - Splines are drawn through fit points (Catmull-Rom) and exported as clamped B-splines;
   imported NURBS are evaluated properly but stored tessellated.
 - Poche weight varies by material but is not hatched: there are no material
