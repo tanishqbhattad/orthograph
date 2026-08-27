@@ -45,6 +45,38 @@ function shapes(e, tol) {
     case 'ellipse': return [{ pts: poly(e, tol || 48) }];
     case 'point': return [];
     case 'text': return [{ text: e.s, p: e.p, h: e.h, rot: e.rot || 0, anchor: e.anchor || 'l' }];
+    /* mtext, leader and attdef were each given their own drawing path and never
+       added here, so shapes() answered EMPTY for all three. Everything that
+       goes through shapes() therefore skipped them silently: they exported to
+       SVG (which has its own cases) but vanished from DXF, and EXPLODE did
+       nothing to them. A drawing sent to a consultant lost every paragraph,
+       every leader note and every attribute definition, with no error. */
+    case 'mtext':
+      return mtextLines(e).map(r => ({ text: r.text, p: r.p, h: r.h,
+                                       rot: r.rot || 0, anchor: r.anchor || 'l' }));
+    case 'leader': {
+      const g = leaderGeom(e);
+      if (!g) return [];
+      const out = [{ pts: g.spine }, { pts: g.head, closed: true, fill: true, role: 'arrowhead' }];
+      if (g.text) out.push({ text: g.text, p: g.tp, h: g.h, rot: 0, anchor: g.anchor });
+      return out;
+    }
+    case 'attdef':
+      return [{ text: e.tag || 'TAG', p: e.p, h: e.h || 2.5,
+                rot: e.rot || 0, anchor: e.anchor || 'l' }];
+    /* A dimension has its own drawing path, its own flatten case and its own
+       SVG case, and was never taught to shapes() — consistent special-casing
+       rather than a bug, but it left the one function everything else travels
+       through answering "nothing" for a whole entity type. */
+    case 'dim': {
+      let g; try { g = dimGeom(e); } catch (err) { return []; }
+      if (!g) return [];
+      const out = g.lines.map(([a, b]) => ({ pts: [a, b] }));
+      for (const ar of g.arrows)
+        out.push({ pts: arrowPoly(ar.p, ar.a, g.S.arrow), closed: true, fill: true, role: 'arrowhead' });
+      out.push({ text: g.txt, p: g.tp, h: g.S.txt, rot: g.tr || 0, anchor: 'c' });
+      return out;
+    }
     default: return [];
   }
 }

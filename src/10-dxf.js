@@ -365,6 +365,15 @@ function P(o, c, v) { o.push(String(c), String(v)); }
 function pt(o, base, p, z) { P(o, base, num(p[0])); P(o, base + 10, num(p[1])); P(o, base + 20, num(z || 0)); }
 function num(v) { return (Math.round(v * 1e9) / 1e9).toString(); }
 
+/** The entity types writeEnt() can put into a DXF as themselves. Everything
+    else is flattened to these first. Kept beside the writer so adding a case
+    to the switch and forgetting this list is the only way to get it wrong,
+    rather than adding an entity type anywhere in the program and silently
+    losing it. */
+const DXF_DIRECT = {
+  line: 1, pline: 1, spline: 1, circle: 1, arc: 1, ellipse: 1, point: 1,
+  ray: 1, xline: 1, text: 1, dim: 1, hatch: 1, insert: 1,
+};
 function exportDXF() {
   const W = new DxfWriter();
   return W.build();
@@ -560,9 +569,15 @@ class DxfWriter {
     for (const name in (DOC.blocks || {})) this.blockRecHandles[name] = this.H();
     P(o, 0, 'SECTION'); P(o, 2, 'ENTITIES');
     for (const e of DOC.ents.values()) {
-      if (GEOM[e.t] && e.t !== 'insert' && e.t !== 'hatch') {
-        for (const q of flattenToPrimitives(e)) this.writeEnt(o, q, K.msBlockRec);
-      } else this.writeEnt(o, e, K.msBlockRec);
+      /* Anything the writer cannot put down directly is flattened first.
+         Testing only for GEOM was the bug: mtext, leader and attdef are not
+         GEOM types, so they fell through to a switch with no case for them and
+         were dropped in silence — a drawing sent to a consultant arrived with
+         every paragraph, leader note and attribute missing and no error to say
+         so. Listing what CAN be written, and flattening the rest, means a new
+         entity type is exported by default instead of being lost by default. */
+      if (DXF_DIRECT[e.t]) this.writeEnt(o, e, K.msBlockRec);
+      else for (const q of flattenToPrimitives(e)) this.writeEnt(o, q, K.msBlockRec);
     }
     P(o, 0, 'ENDSEC');
     return o;
