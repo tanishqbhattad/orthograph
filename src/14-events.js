@@ -988,6 +988,8 @@ function boot() {
   echo('Ready');
   offerRecovery();
   autosaveStart();
+  /* the theme first: it decides what everything after this is painted in */
+  if (typeof themeReset === 'function') themeReset();
   /* a machine that asks for more contrast gets it without being told twice */
   if (typeof contrastWanted === 'function' && contrastWanted()) setContrast(true);
   /* A tab closes faster than any timer fires, so take the last chance. Both

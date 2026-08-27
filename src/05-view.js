@@ -45,19 +45,40 @@ const CO = {
      the wrong way round and every draughtsman notices inside a second. */
   selWin: '#6ba8ff', selCross: '#4ee6a8',};
 
-/* ---------------- high contrast ----------------
-   The default palette is AutoCAD's model space, tuned so that white geometry
-   on 33/40/48 is readable without glare. That trade is the right one for most
-   eyes and the wrong one for some: a 1px grid at 3:1 against its background is
-   a grid you cannot find.
+/* ---------------- themes ----------------
+   A drawing is a thing that ends up on paper and is usually made in a lit
+   room, so light is the default. Dark is the one that has to be asked for.
 
-   This is the same drawing at a contrast somebody can actually use — black
-   ground, geometry at full white, and every accent pushed until it clears
-   WCAG AA against that ground. It is a swap of the SAME keys rather than a
-   second table consulted at every draw: nothing downstream has to know the
-   theme exists, and a colour nobody has thought about cannot silently go
-   undefined. The defaults are kept so it can be turned off exactly. */
+   Every palette is a swap of the SAME keys rather than a second table
+   consulted at every draw: nothing downstream has to know a theme exists, and
+   a colour nobody thought about cannot silently go undefined — setPalette
+   writes every key of the default, so a palette that omits one inherits it
+   rather than leaving it blank.
+
+   The part that makes a theme switch actually work is the ink, further down:
+   a white line on a white page is not a line. */
 const CO_DEFAULT = Object.assign({}, CO);
+const CO_LIGHT = {
+  /* AutoCAD's paper-space white, which is not pure white: a full #ffffff page
+     under an office light is glare, and every drawing office screen is set
+     slightly off it. */
+  bg: '#f7f7f4',
+  gridm: '#dcdcd4', gridM: '#b9b9ad',
+  axisX: '#c0392b', axisY: '#2e7d4f',
+  sel: '#b8860b', hot: '#8a5a00', snap: '#00845c', prev: '#2f6fd0',
+  grip: '#2f6fd0', gripHover: '#c0392b', gripHot: '#c0261a', tx: '#5a6270',
+  cross: '#1a1a1a', ucsX: '#c0392b', ucsY: '#2e7d4f',
+  selWin: '#2f6fd0', selCross: '#00845c',
+};
+const CO_LIGHT_HIGH = {
+  bg: '#ffffff',
+  gridm: '#c9c9c9', gridM: '#8a8a8a',
+  axisX: '#b00000', axisY: '#00661f',
+  sel: '#8a5a00', hot: '#000000', snap: '#005c3f', prev: '#0040a0',
+  grip: '#0040a0', gripHover: '#b00000', gripHot: '#8a0000', tx: '#1a1a1a',
+  cross: '#000000', ucsX: '#b00000', ucsY: '#00661f',
+  selWin: '#0040a0', selCross: '#005c3f',
+};
 const CO_HIGH = {
   bg: '#000000',
   gridm: '#4a5666', gridM: '#8b9bb0',
@@ -75,15 +96,87 @@ function contrastWanted() {
     return !!(matchMedia('(prefers-contrast: more)') || {}).matches;
   } catch (e) { return false; }
 }
-function setContrast(on) {
-  const from = on ? CO_HIGH : CO_DEFAULT;
-  /* every key of the default palette is written, so a key the high-contrast
-     table forgot falls back to the default rather than becoming undefined */
-  for (const k of Object.keys(CO_DEFAULT)) CO[k] = from[k] != null ? from[k] : CO_DEFAULT[k];
-  VS.contrast = on ? 1 : 0;
+const THEME_KEY = 'orthograph.theme';
+let THEME = 'light';
+function themeName() { return THEME; }
+/** every key of the default palette is written, so a palette that omits one
+    inherits it rather than leaving it undefined */
+function setPalette(p) {
+  for (const k of Object.keys(CO_DEFAULT)) CO[k] = p[k] != null ? p[k] : CO_DEFAULT[k];
+}
+function applyTheme() {
+  const dark = THEME === 'dark';
+  const hc = !!VS.contrast;
+  setPalette(dark ? (hc ? CO_HIGH : CO_DEFAULT) : (hc ? CO_LIGHT_HIGH : CO_LIGHT));
+  /* the stylesheet dresses the shell off this, so the chrome and the canvas
+     can never disagree about which theme is on */
+  try {
+    if (typeof document !== 'undefined' && document.documentElement)
+      document.documentElement.setAttribute('data-theme', THEME);
+  } catch (e) { /* no document: headless */ }
   if (typeof shapeCacheClear === 'function') shapeCacheClear();
   if (typeof draw === 'function') draw();
+}
+/** Returns false for a name that is not a theme, rather than applying it. */
+function setTheme(name) {
+  const n = String(name || '').toLowerCase();
+  if (n !== 'light' && n !== 'dark') return false;
+  THEME = n;
+  try { if (STORE) STORE.setItem(THEME_KEY, n); } catch (e) { /* private window */ }
+  applyTheme();
+  return true;
+}
+/** What to open with: whatever was chosen last, and otherwise LIGHT.
+
+    Deliberately not prefers-color-scheme. A drawing is a thing that ends up on
+    paper, and the desktop being dark says something about the desktop, not
+    about the drawing. Dark is one click away and is then remembered. */
+function themeReset() {
+  let saved = null;
+  try { saved = STORE ? STORE.getItem(THEME_KEY) : null; } catch (e) { saved = null; }
+  THEME = (saved === 'light' || saved === 'dark') ? saved : 'light';
+  applyTheme();
+  return THEME;
+}
+function setContrast(on) {
+  VS.contrast = on ? 1 : 0;
+  applyTheme();
   return VS.contrast;
+}
+
+/* how near-grey a colour has to be to count as ink rather than a choice */
+const INK_SAT = 24;          /* channel spread: above this it is a colour */
+const INK_LIGHT = 190;       /* this bright and grey: the default light ink */
+const INK_DARK = 70;         /* this dark and grey: the default dark ink */
+const INK_ON_LIGHT = '#000000';
+const INK_ON_DARK = '#ffffff';
+
+/* ---------------- ink ----------------
+   AutoCAD draws colour 7 as white on a dark background and black on a light
+   one, and it has to: a line in the default colour would otherwise vanish the
+   moment the background changed. Only the two ends of the scale flip. A red
+   is a red on both, because somebody chose it — and the LAYER keeps the
+   colour that was chosen, so the swatch in the layer list and the colour
+   dialog still show what is stored rather than what happens to be drawn. */
+function inkFor(hex) {
+  const c = String(hex || '');
+  if (c.charCodeAt(0) !== 35 || (c.length !== 7 && c.length !== 4)) return hex;
+  let r, g, b;
+  if (c.length === 4) {
+    r = parseInt(c[1] + c[1], 16); g = parseInt(c[2] + c[2], 16); b = parseInt(c[3] + c[3], 16);
+  } else {
+    r = parseInt(c.slice(1, 3), 16); g = parseInt(c.slice(3, 5), 16); b = parseInt(c.slice(5, 7), 16);
+  }
+  if (!isFinite(r) || !isFinite(g) || !isFinite(b)) return hex;
+  const hi = Math.max(r, g, b), lo = Math.min(r, g, b);
+  /* Only a colour with no colour IN it: a red is a red on both grounds because
+     somebody chose it. The shipped default layer is #d7dee8 rather than pure
+     white, which is why matching #ffffff alone left the default ink almost
+     invisible on paper. A mid grey is left alone too — nobody arrives at
+     #808080 by accident, and it reads on either ground. */
+  if (hi - lo > INK_SAT) return hex;
+  if (hi >= INK_LIGHT || hi <= INK_DARK) return THEME === 'light' ? INK_ON_LIGHT : INK_ON_DARK;
+  return hex;
 }
 function w2s(p) {
   if (!V.rot) return [p[0] * V.z + V.px, -p[1] * V.z + V.py];
@@ -426,7 +519,7 @@ const fvis = e => {
   if (!l.on || l.frozen) return false;
   return onCurLevel(e) || isUnderlay(e);
 };
-const fcol = e => e.color || flay(e.layer).color;
+const fcol = e => inkFor(e.color || flay(e.layer).color);
 const flt = e => e.lt || flay(e.layer).lt || 'solid';
 const flw = e => (e.lw != null ? e.lw : flay(e.layer).lw);
 

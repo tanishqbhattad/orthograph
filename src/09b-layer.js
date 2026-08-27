@@ -980,6 +980,12 @@ defvar('CANNOSCALE', {
     draw();
   },
 });
+defvar('THEME', {
+  desc: 'Light or dark. A drawing ends up on paper, so light is the default',
+  type: 'str',
+  get: () => themeName(),
+  set(v) { if (!setTheme(v)) echo('Themes are light and dark'); },
+});
 defvar('CONTRAST', {
   desc: 'High-contrast palette: 1 on, 0 the default drawing colours',
   get: () => VS.contrast ? 1 : 0,

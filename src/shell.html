@@ -22,6 +22,17 @@
   --tool:26px; --tgap:3px; --rpad:6px; --rhead:14px; --rgap:4px;
   --rail:96px;                     /* 3*26 + 2*3 + 2*6 */
 }
+/* Light is the default and dark is the variant, because a drawing ends up on
+   paper and is usually made in a lit room. The canvas palette in 05-view.js is
+   switched by the same setTheme() that stamps data-theme here, so the chrome
+   and the drawing cannot end up disagreeing. */
+:root[data-theme="light"]{
+  --bg0:#eceae5; --bg1:#f4f3ef; --bg2:#fbfbf9; --bg3:#ffffff;
+  --canvas:#f7f7f4;
+  --bd:#d6d3cb; --bd2:#bcb8ad;
+  --tx0:#1e2228; --tx1:#5a6270; --tx2:#8b93a0;
+  --amber:#a9761a; --mint:#00845c; --steel:#2f6fd0; --rose:#c0392b;
+}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden;background:var(--bg0);color:var(--tx0);
   font-family:var(--ui);font-size:13px;-webkit-font-smoothing:antialiased;
@@ -30,10 +41,18 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 input,select,textarea{font:inherit;color:inherit;background:none;border:none;outline:none}
 :focus-visible{outline:2px solid var(--amber);outline-offset:1px}
 
+/* The bottom row is sized by what is IN it, not by a number. It was 60px
+   against contents that measure 84 — tabs 24, command line 32, status 28 — so
+   the bar hung 24px below the viewport on every screen, and opening the
+   command history pushed it further. `auto` also means the history can open
+   and close without anything having to be told a new height. */
 #app{display:grid;height:100%;
   grid-template-columns:var(--rail) 1fr var(--right);
-  grid-template-rows:var(--top) 1fr var(--bot);
+  grid-template-rows:var(--top) 1fr auto;
   grid-template-areas:"top top top" "rail stage panel" "bot bot bot"}
+/* and it can never eat the drawing: the stage keeps at least a third */
+#bot{max-height:60vh}
+#stage{min-height:0}
 
 /* ---------------- top bar ---------------- */
 #topbar{grid-area:top;display:flex;align-items:center;gap:2px;padding:0 10px;
@@ -391,6 +410,7 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
 .snapmenu .smsep{height:1px;background:var(--bd);margin:5px 4px}
 
 /* ---------------- drafting settings dialog ---------------- */
+.dshint{color:var(--tx2);font-size:11.5px;line-height:1.5;margin:2px 0 10px;max-width:44ch}
 .dstabs{display:flex;gap:2px;margin:2px 0 12px;border-bottom:1px solid var(--bd)}
 .dstab{font-size:11.5px;padding:6px 11px;color:var(--tx2);border-bottom:2px solid transparent;
   margin-bottom:-1px;border-radius:5px 5px 0 0}

@@ -4,7 +4,7 @@
 architecture layer on top. No build step required to *use* it — `orthograph.html` is a
 single self-contained file. Open it in any browser.
 
-111 commands, 93 acad.pgp aliases, 704 tests.
+111 commands, 93 acad.pgp aliases, 718 tests.
 
 ## Layout
 
@@ -63,7 +63,7 @@ node tools/serve.js            # → http://127.0.0.1:8017/
 
 ```
 node build.js                  # → orthograph.html
-node test/run.js               # 704 tests
+node test/run.js               # 718 tests
 node test/run.js wall          # run a subset by name
 node tools/verify.js           # behavioural checks + drag latency
 
@@ -137,6 +137,16 @@ it. `REFEDIT` opens the contents into the drawing at the size and angle the inse
 sits, so what you edit is what you were looking at, and `REFCLOSE` maps it back through
 the exact inverse; every other insert updates with it. `BVSTATE` gives a block
 visibility states, so one door block can be four swings rather than four blocks.
+
+**Light and dark.** Light is the default, because a drawing ends up on paper and is
+usually made in a lit room; dark is one click away in Drafting settings → Display, and
+is remembered. Deliberately not taken from `prefers-color-scheme`: a dark desktop says
+something about the desktop, not about the drawing.
+
+Lines drawn in the default colour follow the background the way AutoCAD's colour 7 does
+— black on a light ground, white on a dark one — so nothing vanishes when the theme
+changes. A colour somebody chose is left exactly alone, including a mid grey; only
+near-white and near-black greys count as ink.
 
 ## Storeys, sheets and output
 
@@ -263,8 +273,10 @@ noticed months later.
   length or count; there is no field browser, so they are typed by hand.
 - Dynamic blocks cover visibility states only: there are no stretch, array or
   lookup parameters.
-- Keyboard picking is Ctrl+Enter rather than a rebindable key, and the
-  high-contrast palette is one alternative rather than a set you can edit.
+- Keyboard picking is Ctrl+Enter rather than a rebindable key, and the themes are
+  light, dark and a high-contrast variant of each rather than an editable set.
+- The theme is remembered per browser, not stored in the drawing: two people
+  opening the same file see it in their own.
 
 ## Licence
 

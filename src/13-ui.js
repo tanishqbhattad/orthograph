@@ -1688,7 +1688,7 @@ function openOsnapSettings(tab) {
     apBox: !!ST.apBox,
     gridStep: DOC.gridStep, snapStep: DOC.snapStep,
   };
-  const tabs = ['Snap and grid', 'Polar tracking', 'Object snap'];
+  const tabs = ['Snap and grid', 'Polar tracking', 'Object snap', 'Display'];
   let cur = tab == null ? 2 : tab;
 
   modal(`<h3>Drafting settings</h3>
@@ -1715,6 +1715,7 @@ function openOsnapSettings(tab) {
     clearNode(b);
     if (cur === 0) buildSnapGridTab(b, W);
     else if (cur === 1) buildPolarTab(b, W, body);
+    else if (cur === 3) buildDisplayTab(b, body);
     else buildOsnapTab(b, W, body);
   };
   const tb = $('#dsTabs');
@@ -1726,6 +1727,31 @@ function openOsnapSettings(tab) {
     };
   });
   body();
+}
+/* Display — the theme, and the contrast variant of it.
+
+   Applied on the spot rather than on OK. A theme is the one setting you judge
+   by looking at it, and a preview you have to accept before you can see is not
+   a preview. */
+function buildDisplayTab(w, redraw) {
+  grpRow(w, 'Theme');
+  segRow(w, 'Colours', [['light', 'Light'], ['dark', 'Dark']],
+    (typeof themeName === 'function' ? themeName() : 'light'),
+    v => { setTheme(v); if (redraw) redraw(); });
+  hintRow(w, 'Lines drawn in the default colour follow the background, the way ' +
+             'they do in AutoCAD: white on a dark ground, black on a light one. ' +
+             'A colour you chose yourself is left alone.');
+  grpRow(w, 'Contrast');
+  segRow(w, 'High contrast', [[0, 'Off'], [1, 'On']], VS.contrast ? 1 : 0,
+    v => { setContrast(!!+v); if (redraw) redraw(); });
+  hintRow(w, 'Heavier ink and a stronger grid, for when the default does not ' +
+             'separate enough. Follows the theme rather than replacing it.');
+}
+/** a line of explanation under a control, in the dialog's own quiet voice */
+function hintRow(w, text) {
+  const d = el('div', 'dshint', esc(text));
+  w.appendChild(d);
+  return d;
 }
 function chk(w, label, val, on, hintText) {
   const r = el('label', 'osr');

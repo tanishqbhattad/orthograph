@@ -178,6 +178,9 @@ function install(g) {
   const byId = new Map();
   const doc = {
     body: new El('body'),
+    /* the real <html> element: the app stamps the theme onto it so the
+       stylesheet and the canvas cannot disagree about which one is on */
+    documentElement: new El('html'),
     createElement: t => new El(t),
     getElementById: id => {
       if (!byId.has(id)) { const e = new El(TAG_OF[id] || 'div'); e.id = id; byId.set(id, e); }
