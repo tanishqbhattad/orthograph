@@ -748,6 +748,7 @@ function doExport() {
       <button class="btn" id="eDxf">DXF R2000</button>
       <button class="btn" id="eSvg">SVG</button>
       <button class="btn" id="ePng">PNG</button>
+      <button class="btn" id="eCsv">Schedules (.csv)</button>
       <button class="btn" id="eDwg">DWG (experimental)</button>
     </div>`, null);
   $('#mo').style.display = 'none';
@@ -758,6 +759,25 @@ function doExport() {
     /* the work has reached a file, so there is nothing left to recover */
     markSaved(); toast('Saved drawing.ocad'); };
   $('#eDwg').onclick = () => { closeModal(); doSaveDWG(); };
+  $('#eCsv').onclick = () => { closeModal(); exportSchedules(); };
+}
+/** Every schedule in the drawing, one CSV each. The drawing is where they are
+    read; a spreadsheet is where they are ordered from. */
+function exportSchedules() {
+  const tables = [...DOC.ents.values()].filter(e => e.t === 'table' && (e.rows || []).length);
+  if (!tables.length) {
+    toast('There are no schedules in this drawing yet');
+    return 0;
+  }
+  let n = 0;
+  for (const tb of tables) {
+    const csv = tableCSV(tb);
+    if (!csv) continue;
+    download(tableFileName(tb), csv, 'text/csv;charset=utf-8');
+    n++;
+  }
+  toast(n === 1 ? 'Saved 1 schedule' : 'Saved ' + n + ' schedules');
+  return n;
 }
 function readFile(f) {
   if (/\.dwg$/i.test(f.name)) return importDWG(f);

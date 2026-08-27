@@ -136,6 +136,8 @@ out of those three numbers.
 **Schedules.** Doors and windows are marked (D-01, W-01…) in reading order, marks are
 stable when new openings are added, and `DOORSCHEDULE`/`WINDOWSCHEDULE` place a real
 table that counts only the current storey. Rooms schedule the same way.
+Every schedule writes out as CSV — from the Export dialog, or `TABLEEXPORT` for
+the ones you have selected — because a schedule is a thing somebody orders from.
 
 ## Not losing your work
 
@@ -223,7 +225,8 @@ noticed months later.
 - Grid bubbles are labelled and can be turned off per end. Storey datums are drawn
   in sections but there is no datum symbol for use in a plan.
 - Door and window types carry size and swing, not fire, acoustic or finish data.
-- Schedules place as tables in the drawing; there is no CSV export.
+- Schedules export as CSV, one file per schedule; there is no live link back
+  from a spreadsheet into the drawing.
 - No ordinate or arc-length dimensions, and no annotative scaling.
 - No fields, and no stacked fractions in text.
 - Blocks have no attribute manager, in-place reference editing or dynamic parameters.

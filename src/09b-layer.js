@@ -458,6 +458,56 @@ defm('LEVELDOWN', () => {
    the plan it came from. Rebuild it after moving a wall and the
    number changes, because it was never a copy.
    ============================================================ */
+/* ------------------------------------------------------------
+   A schedule you can order from.
+
+   A table could be placed in the drawing and read. Getting the numbers into
+   an order or a cost plan meant retyping them, which is how a schedule and a
+   building stop agreeing with each other.
+
+   RFC 4180 quoting, and only where it is needed: a cell is wrapped only if it
+   contains a comma, a quote or a line break. An unquoted comma moves every
+   column after it one to the left, which is the quiet way a schedule becomes
+   wrong without looking wrong.
+   ------------------------------------------------------------ */
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  if (!/[",\r\n]/.test(s)) return s;
+  return '"' + s.replace(/"/g, '""') + '"';
+}
+function tableCSV(tb) {
+  const rows = (tb && tb.rows) || [];
+  if (!rows.length) return '';
+  return rows.map(r => (r || []).map(csvCell).join(',')).join('\r\n');
+}
+/** what to call the file: the kind of schedule it is, not "table" */
+function tableFileName(tb) {
+  const k = (tb && tb.kind) || 'table';
+  const base = String(k).replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+  return (DOC.name ? DOC.name.replace(/\.[^.]*$/, '') + '-' : '') + base + '.csv';
+}
+defc('tableexport', {
+  key: 'tableexport', group: 'arch',
+  hint: 'Select a schedule, then <em>Enter</em> to write it out as CSV',
+  init(c) {
+    const tables = selEnts().filter(e => e.t === 'table');
+    if (!tables.length) {
+      echo(SEL.size ? 'That is not a schedule' : 'Select a schedule first');
+      c.done = true; return;
+    }
+    let n = 0;
+    for (const tb of tables) {
+      const csv = tableCSV(tb);
+      if (!csv) { echo('That schedule is empty'); continue; }
+      download(tableFileName(tb), csv, 'text/csv;charset=utf-8');
+      n++;
+    }
+    if (n) cliPrint('Wrote ' + n + (n === 1 ? ' schedule' : ' schedules') + ' as CSV.');
+    c.done = true;
+  },
+  enter() { endCmd(); },
+});
+
 GEOM.table = {
   shapes(tb) {
     const rows = tb.rows || [];
