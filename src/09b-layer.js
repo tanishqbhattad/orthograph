@@ -980,6 +980,15 @@ defvar('CANNOSCALE', {
     draw();
   },
 });
+defvar('GRIDTONE', {
+  desc: 'How strongly the grid reads against the background, 0 to 100',
+  get: () => gridTone(),
+  set(v) {
+    const n = parseFloat(v);
+    VS.gridTone = isFinite(n) ? Math.max(0, Math.min(100, n)) : 50;
+    applyTheme();
+  },
+});
 defvar('THEME', {
   desc: 'Light or dark. A drawing ends up on paper, so light is the default',
   type: 'str',

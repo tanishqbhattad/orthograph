@@ -4,7 +4,7 @@
 architecture layer on top. No build step required to *use* it — `orthograph.html` is a
 single self-contained file. Open it in any browser.
 
-111 commands, 93 acad.pgp aliases, 721 tests.
+111 commands, 93 acad.pgp aliases, 726 tests.
 
 ## Layout
 
@@ -63,7 +63,7 @@ node tools/serve.js            # → http://127.0.0.1:8017/
 
 ```
 node build.js                  # → orthograph.html
-node test/run.js               # 721 tests
+node test/run.js               # 726 tests
 node test/run.js wall          # run a subset by name
 node tools/verify.js           # behavioural checks + drag latency
 
@@ -142,6 +142,11 @@ visibility states, so one door block can be four swings rather than four blocks.
 usually made in a lit room; dark is the button on the top bar, and is remembered. The
 same switch is in the drawing settings panel under Display. Deliberately not taken from `prefers-color-scheme`: a dark desktop says
 something about the desktop, not about the drawing.
+
+The grid is drawn at half strength, faded toward the background rather than lightened
+so it quietens in both themes. `GRIDTONE` sets that from 0 to 100, and high contrast
+keeps its full grid regardless — that palette exists because the default does not
+separate enough for somebody.
 
 Lines drawn in the default colour follow the background the way AutoCAD's colour 7 does
 — black on a light ground, white on a dark one — so nothing vanishes when the theme

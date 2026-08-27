@@ -440,6 +440,8 @@ function drawSettingsExtras(w) {
   btnRow(w, 'High contrast', VS.contrast ? 'on' : 'off', () => {
     setContrast(!VS.contrast); buildDrawPop();
   });
+  addRow(w, 'Grid tone %', (typeof gridTone === 'function' ? gridTone() : 50),
+    v => { setvar('gridtone', v); buildDrawPop(); }, 1);
   addRow(w, 'LTSCALE', ltScale(), v => { DOC.ltScale = clamp(v, 1e-4, 1e6); draw(); }, 1);
   addRow(w, 'Grid major', VS.gridMajor, v => { VS.gridMajor = clamp(Math.round(v), 1, 100); draw(); }, 1);
   btnRow(w, 'Lineweights', ST.lwt === false ? 'off' : 'on', () => {

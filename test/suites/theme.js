@@ -75,6 +75,95 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.bad.length, 0, 'none of them went undefined: ' + r.bad.join(', '));
   });
 
+  group('how loud the grid is');
+
+  /* The grid is background: it is there to be measured against, not read. At
+     full strength it competes with the drawing, which is most obvious on a
+     light ground where the lines are dark on pale. */
+  const CONTRAST = `
+    const chan = (hex) => { const h = String(hex).replace('#','');
+      return [0,2,4].map(i => parseInt(h.slice(i,i+2),16)); };
+    const gap = (a, b) => { const A = chan(a), B = chan(b);
+      return Math.max(Math.abs(A[0]-B[0]), Math.abs(A[1]-B[1]), Math.abs(A[2]-B[2])); };
+  `;
+
+  t('sits at half strength by default, in both themes', () => {
+    const r = R(`${SETUP}${CONTRAST}
+      const out = {};
+      for (const th of ['light', 'dark']) {
+        setvar('gridtone', 100); setTheme(th);
+        const full = { m: gap(CO.bg, CO.gridm), M: gap(CO.bg, CO.gridM) };
+        setvar('gridtone', 50);
+        const half = { m: gap(CO.bg, CO.gridm), M: gap(CO.bg, CO.gridM) };
+        out[th] = { full, half };
+      }
+      setvar('gridtone', 50); setTheme('light');
+      return out;`);
+    for (const th of ['light', 'dark']) {
+      const c = r[th];
+      ok(c.full.m > 0, th + ': the grid is visible at full strength');
+      close(c.half.m / c.full.m, 0.5, 0.08,
+        th + ': the minor grid is half as strong, ' + c.half.m + ' against ' + c.full.m);
+      close(c.half.M / c.full.M, 0.5, 0.08,
+        th + ': and so is the major, ' + c.half.M + ' against ' + c.full.M);
+    }
+  });
+
+  t('the axes fade with it, since they are part of the grid', () => {
+    const r = R(`${SETUP}${CONTRAST}
+      setTheme('light');
+      setvar('gridtone', 100); const full = gap(CO.bg, CO.axisX);
+      setvar('gridtone', 50);  const half = gap(CO.bg, CO.axisX);
+      setvar('gridtone', 50);
+      return { full, half };`);
+    ok(r.half < r.full, 'the axis is quieter too: ' + r.half + ' against ' + r.full);
+  });
+
+  /* Only the grid. Fading the drawing would be a different and much worse
+     thing to have done. */
+  t('the drawing itself is not touched by it', () => {
+    const r = R(`${SETUP}
+      setTheme('light');
+      setvar('gridtone', 100); const inkFull = inkFor('#ffffff'); const crossFull = CO.cross;
+      setvar('gridtone', 20);  const inkFaint = inkFor('#ffffff'); const crossFaint = CO.cross;
+      setvar('gridtone', 50);
+      return { inkFull, inkFaint, crossFull, crossFaint };`);
+    eq(r.inkFaint, r.inkFull, 'the ink is the ink');
+    eq(r.crossFaint, r.crossFull, 'and the crosshair does not fade with the grid');
+  });
+
+  /* High contrast is turned on BY someone who cannot see the default. Fading
+     its grid afterwards would take back the one thing they asked for. */
+  t('high contrast keeps its full grid, whatever the tone is set to', () => {
+    const r = R(`${SETUP}${CONTRAST}
+      setTheme('light');
+      setvar('gridtone', 20);
+      const normal = gap(CO.bg, CO.gridM);
+      setContrast(true);
+      const strong = gap(CO.bg, CO.gridM);
+      setContrast(false);
+      setvar('gridtone', 50);
+      return { normal, strong };`);
+    ok(r.strong > r.normal * 2,
+      'the high-contrast grid is not faded with the rest: ' + r.strong + ' against ' + r.normal);
+  });
+
+  t('GRIDTONE is a system variable, and refuses nonsense', () => {
+    const r = R(`${SETUP}${CONTRAST}
+      setTheme('light');
+      setvar('gridtone', 100); const loud = gap(CO.bg, CO.gridm);
+      setvar('gridtone', 0);   const off = gap(CO.bg, CO.gridm);
+      setvar('gridtone', 999); const capped = getvar('GRIDTONE');
+      setvar('gridtone', -5);  const floored = getvar('GRIDTONE');
+      setvar('gridtone', 50);
+      return { loud, off, capped, floored, known: 'GRIDTONE' in SYSVAR };`);
+    eq(r.known, true, 'it is in the variable table');
+    ok(r.loud > 0, 'a hundred is the palette as drawn');
+    eq(r.off, 0, 'and zero is a grid you cannot see');
+    ok(r.capped <= 100, 'over a hundred is capped, got ' + r.capped);
+    ok(r.floored >= 0, 'and below zero floored, got ' + r.floored);
+  });
+
   group('ink follows the background');
 
   /* The whole point. A line in the default colour has to stay visible. */

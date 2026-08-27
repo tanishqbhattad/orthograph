@@ -104,12 +104,40 @@ function themeName() { return THEME; }
 function setPalette(p) {
   for (const k of Object.keys(CO_DEFAULT)) CO[k] = p[k] != null ? p[k] : CO_DEFAULT[k];
 }
+/* ---------------- how loud the grid is ----------------
+   The grid is background. It is there to be measured against, not read, and at
+   full strength it competes with the drawing — most obviously on a light
+   ground, where its lines are dark on pale rather than pale on dark.
+
+   Faded toward the background rather than lightened, so it works out correctly
+   in both themes: on paper it goes paler, on a dark ground it goes darker, and
+   in both it gets quieter. The axes go with it because they are part of the
+   same furniture. Nothing the drawing is made of is touched. */
+function mixHex(a, b, t) {
+  const ch = (h) => { const s = String(h).replace('#', '');
+    return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)]; };
+  const A = ch(a), B = ch(b);
+  if (A.some(isNaN) || B.some(isNaN)) return b;
+  const p = (n) => { const v = Math.max(0, Math.min(255, Math.round(n))); return (v < 16 ? '0' : '') + v.toString(16); };
+  return '#' + p(A[0] + (B[0] - A[0]) * t) + p(A[1] + (B[1] - A[1]) * t) + p(A[2] + (B[2] - A[2]) * t);
+}
+function gridTone() {
+  const v = VS.gridTone;
+  return (typeof v === 'number' && isFinite(v)) ? Math.max(0, Math.min(100, v)) : 50;
+}
 /* The colours and the attribute only. Safe to call at module load, where the
    things applyTheme goes on to touch do not exist yet. */
 function applyPalette() {
   const dark = THEME === 'dark';
   const hc = !!VS.contrast;
   setPalette(dark ? (hc ? CO_HIGH : CO_DEFAULT) : (hc ? CO_LIGHT_HIGH : CO_LIGHT));
+  /* Not under high contrast. That palette exists because the default does not
+     separate enough for somebody, and quietly halving its grid afterwards
+     would take back the one thing they turned it on for. */
+  if (!hc) {
+    const t = gridTone() / 100;
+    for (const k of ['gridm', 'gridM', 'axisX', 'axisY']) CO[k] = mixHex(CO.bg, CO[k], t);
+  }
   /* the stylesheet dresses the shell off this, so the chrome and the canvas
      can never disagree about which theme is on */
   try {
