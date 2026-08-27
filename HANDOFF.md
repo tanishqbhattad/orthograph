@@ -3,11 +3,11 @@
 Browser CAD: AutoCAD-style drafting with a Revit-style parametric architecture
 layer, shipped as one self-contained HTML file.
 
-**State: everything builds, 348 unit tests pass, 12 behavioural checks pass,
-DXF validates against ezdxf with 0 audit errors.** No known blockers and no
-known correctness bugs — the `roomBoundary()` write-during-read described under
-*Known bugs* was fixed on 21 Aug 2026 and is pinned by a regression test that
-was confirmed to fail against the old code.
+**State: everything builds, 590 unit tests pass, 12 behavioural checks pass,
+`tools/check_dxf.py` is a gate and reports PASS.** No known blockers and no
+known correctness bugs. Waves 1-5 are done: drafting semantics, model
+semantics, paper space and plotting, sections, levels, schedules, robustness,
+accessibility and DXF interoperability.
 
 ---
 
@@ -26,13 +26,13 @@ C:\Users\Tanishq\projects\orthograph
 
 ```
 orthograph/
-├─ orthograph.html          THE ARTEFACT — 432 KB, open in any browser. Generated.
+├─ orthograph.html          THE ARTEFACT — 848 KB, open in any browser. Generated.
 ├─ build.js                 concatenates src/*.js into src/shell.html → orthograph.html
 ├─ package.json             npm run build / test / check-dxf / make-fixture
 ├─ README.md                user-facing docs
 ├─ HANDOFF.md               this file
 │
-├─ src/                     ~9,250 lines. Build order is defined in build.js ORDER.
+├─ src/                     ~18,400 lines. Build order is defined in build.js ORDER.
 │  ├─ shell.html            markup + ALL CSS, with a placeholder for the bundle
 │  ├─ 00-core.js            maths, ACI colour, units, fmt/parseLen
 │  ├─ 01-doc.js             document model, journalled history, spatial index, DIRTY set
@@ -44,22 +44,27 @@ orthograph/
 │  ├─ 05-view.js            viewport, renderer, shape cache, view rotation
 │  ├─ 06-snap.js            snap engine, ST interaction state, pickAt/pickGrip
 │  ├─ 07-cmd.js             command engine, drawing commands
+│  ├─ 07b-nav.js            named views, zoom and pan history
+│  ├─ 07c-sheet.js          paper space: sheets, viewports, plotting
 │  ├─ 08-modify.js          modify, inquiry, blocks, hatch
 │  ├─ 09-archcmd.js         architecture commands, ARCH defaults
-│  ├─ 10-dxf.js             DXF reader (R12–R2018) and writer (R2000)
-│  ├─ 11-io.js              SVG, PNG, native .ocad project file
-│  ├─ 12-dwg.js             DWG reader/writer — EXPERIMENTAL, see §6
+│  ├─ 09b-layer.js          layer tools/states, dim + text styles, tables,
+│  │                        attributes, LEVELS
+│  ├─ 09c-section.js        sections and elevations cut from the plan
+│  ├─ 09d-slab.js           floors, roofs, door/window schedules
+│  ├─ 09e-boundary.js       planar face tracing for hatch and BOUNDARY
+│  ├─ 10-dxf.js             DXF reader (R12-R2018) and writer (R2000)
+│  ├─ 11-io.js              SVG, PNG, .ocad project file, autosave + recovery
+│  ├─ 12-dwg.js             DWG reader/writer - EXPERIMENTAL, see section 6
 │  ├─ 13-ui.js              rails, menus, layers, properties + Command panel
-│  ├─ 14-events.js          events, dynamic input, files, boot, demo seed
-│  ├─ 04-arch.js            ⚠ DEAD STUB — split into 04a/04b/04c, not in build. Delete.
-│  └─ 05-view-OLDBENCH.txt  ⚠ scratch left by an agent. Delete.
+│  └─ 14-events.js          events, dynamic input, files, boot, demo seed
 │
 ├─ test/
 │  ├─ run.js                core suite + fixture emitter
 │  ├─ load.js               loads the bundle into a vm sandbox; exports run() and bootApp()
 │  ├─ dom-stub.js           minimal DOM + TRACING CANVAS (this is how rendering is tested)
 │  ├─ extra.js              auto-loads test/suites/*.js
-│  ├─ suites/               walls.js, snap.js, ui.js, arch.js, input.js
+│  ├─ suites/               26 files, one per area — auto-loaded, see §2
 │  └─ out/                  generated fixtures (fixture.dxf, hard.dxf, …) — gitignore these
 │
 └─ tools/
@@ -74,7 +79,7 @@ orthograph/
 
 ```bash
 node build.js            # → orthograph.html   (must be re-run after ANY src/ change)
-node test/run.js         # 348 unit tests, zero dependencies
+node test/run.js         # 590 unit tests, zero dependencies
 node test/run.js wall    # run a subset by name substring
 node tools/verify.js     # 12 behavioural checks
 node tools/serve.js      # serve at 127.0.0.1:8017 — file:// gives the page no origin
@@ -99,7 +104,7 @@ Wire that into CI — a stale build has bitten this project once already.
 
 ### How to test things headlessly
 
-There is no browser. `test/load.js` evaluates the bundle in a `vm` sandbox.
+`test/load.js` evaluates the bundle in a `vm` sandbox.
 Because top-level `const`/`let` live in the sandbox's lexical scope, test code
 must run **inside** it:
 
@@ -125,6 +130,19 @@ never edit `test/run.js` for feature tests.
 ⚠ **Suites share one sandbox.** Pin state in your SETUP string
 (`DOC.units='mm'` etc.) or you will inherit another suite's leftovers. This has
 caused false failures before.
+
+### And then check it in a real browser
+
+Headless is necessary and not sufficient. The sandbox has no canvas, no
+storage and no IndexedDB, so every fake you write there agrees with you.
+`node tools/serve.js`, then drive the page — anything touching rendering,
+storage or events must be seen working in a browser before it is called done.
+
+This is not a formality. The IndexedDB autosave tier passed eight headless
+tests against a fake store and was still broken: the wrapper read the outcome
+of a transaction out of the value it returned, and a `put` returns no value, so
+every successful write looked like a refusal. The fake answered with a value,
+so nothing headless could have caught it. One page load did.
 
 ---
 
@@ -185,8 +203,32 @@ so ortho and snapping stay in true world space.
 
 ## 5. Recent work worth knowing about
 
-An adversarial review found four blockers that 244 passing tests had missed.
-All are fixed, but they show where the sharp edges are:
+### The most recent round (27 Aug 2026)
+
+1. **Four wall caches were keyed on `DOCV`**, which `mut()` bumps on every
+   mutation. Any geometry read between two mutations therefore rebuilt all of
+   them, once per mutation — and moving a selection is exactly that pattern.
+   2,000 walls took 23.6 seconds, of which the mutations themselves were 1ms.
+   `allWalls()` is now structural-only (which walls exist cannot change because
+   one of them moved) and the three maps are patched in `mut()`, while the
+   entity still holds its OLD position — the only moment its existing entries
+   can be found. 23,586ms → 80ms; a 3,000-wall move 3,212ms → 239ms.
+   **The recorded claim that this was inherent to the clone-based journal was
+   wrong**: cloning 6,000 entities measures 15ms. Measure before believing a
+   note in this file, including this one.
+2. **`entLength()` reported the perimeter of whatever an object flattened to**,
+   so a 5m wall said 35m and a 5m cavity wall said 66m, counting every layer
+   line in it. That is the number the properties panel labels Length and that
+   gets ordered from. Fixed with a `GEOM len` hook, mirroring the `area` hook
+   that already existed.
+3. **Autosave now overflows to IndexedDB** past localStorage's ~5MB (about
+   25,000 objects), keeping a ~90-byte pointer in localStorage so the write
+   during `beforeunload` always fits. See the browser note in §2.
+
+### The adversarial review (Aug 2026)
+
+It found four blockers that 244 passing tests had missed. All are fixed, but
+they show where the sharp edges are:
 
 1. **The room tracer was rasterised.** Grid phase made traced edges miss their
    wall face — 8.35% area error on a plain brick room — and an axis-aligned
@@ -229,11 +271,10 @@ thicknesses for exactly this reason.
 
 **Dead code to delete**
 
-~~`src/04-arch.js`~~, ~~`src/05-view-OLDBENCH.txt`~~, ~~`isArchEnt`~~,
-~~`rotv`~~ and ~~`dir2`~~ are gone. Still open: `releaseTrack` (06),
-`bumpIndex` alias (01), and `window.saveTypeTable` leaking a global out of
-`openTypeManager` (13-ui) — deferred while branches were in flight, safe to
-remove now.
+Nothing outstanding. `src/04-arch.js`, `src/05-view-OLDBENCH.txt`, `isArchEnt`,
+`rotv`, `dir2`, the `bumpIndex` alias and the `window.saveTypeTable` global are
+all gone. `releaseTrack` was on this list and should not have been — it is
+live, called from `06-snap.js:411`. Check before deleting on this file's word.
 
 **Polish**
 
@@ -260,23 +301,16 @@ The writer is gated behind a warning dialog. DXF is the proven path.
 Decisions already made: **MIT licence**, and **commit the built
 `orthograph.html`** (the single-file download is the whole pitch).
 
-Not yet created — these are the remaining steps:
+Done already: `LICENSE` (MIT, Copyright (c) 2026 Tanishq Bhattad),
+`.gitignore`, `.github/workflows/ci.yml`, and the git history itself. CI runs
+`node build.js` then `git diff --exit-code orthograph.html` to fail a stale
+build — which has shipped from here before — followed by the tests, the
+behavioural checks and the ezdxf gate.
 
-1. `LICENSE` — MIT, `Copyright (c) 2026 Tanishq Bhattad`.
-2. `.gitignore`:
-   ```
-   node_modules/
-   test/out/
-   *.log
-   ```
-3. `.github/workflows/ci.yml` — on push: `node build.js`,
-   `git diff --exit-code orthograph.html` (catches a stale build),
-   `node test/run.js`, `node tools/verify.js`, then
-   `pip install ezdxf && python3 tools/check_dxf.py test/out/fixture.dxf`.
-4. `git init && git add -A && git commit -m "Orthograph: browser CAD"`.
-5. Create the repo and push. There is no GitHub connector in this Cowork
-   session, so this step has to be done with `gh repo create` or the web UI.
+**The one remaining step is creating the repository and pushing, and that is
+Tanishq's decision rather than an agent's.** Nothing here should run
+`gh repo create` or `git push`. Commit locally and leave it.
 
-README is current as of 22 Aug 2026 and says 348 tests, which is correct.
-`LICENSE` (MIT) and `.github/workflows/ci.yml` now exist; CI fails the build if
-the committed `orthograph.html` is stale, which has shipped from here before.
+README and this file were brought back in line with the code on 27 Aug 2026.
+Both had drifted: the README still said there was no paper space, no level
+switcher and no boundary trace, all of which had shipped.

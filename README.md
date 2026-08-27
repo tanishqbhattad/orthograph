@@ -4,6 +4,8 @@
 architecture layer on top. No build step required to *use* it — `orthograph.html` is a
 single self-contained file. Open it in any browser.
 
+102 commands, 93 acad.pgp aliases, 590 tests.
+
 ## Layout
 
 ```
@@ -21,20 +23,29 @@ src/
   05-view.js         viewport and renderer
   06-snap.js         input state and the snap engine
   07-cmd.js          command engine + drawing commands
+  07b-nav.js         named views, zoom and pan history
+  07c-sheet.js       paper space: sheets, viewports, title blocks, plotting
   08-modify.js       modify, inquiry, blocks, hatch
   09-archcmd.js      architecture commands
+  09b-layer.js       layer tools and states, dimension/text styles, tables,
+                     attributes, levels
+  09c-section.js     section and elevation views cut from the plan
+  09d-slab.js        floors and roofs; door and window schedules
+  09e-boundary.js    planar face tracing for hatch and BOUNDARY
   10-dxf.js          DXF reader (R12–R2018) and writer (R2000)
-  11-io.js           SVG, PNG, native project file
+  11-io.js           SVG, PNG, native project file, autosave and recovery
   12-dwg.js          DWG reader and writer — experimental, see below
   13-ui.js           rails, menus, layers, properties panel
   14-events.js       events, command line, files, boot
 test/
   run.js             core tests, no dependencies — `node test/run.js`
-  suites/*.js        per-area suites, auto-loaded (348 tests in total)
+  suites/*.js        per-area suites, auto-loaded
   load.js            loads the bundle into a vm sandbox
   dom-stub.js        minimal DOM + a tracing canvas, so rendering is testable
 tools/
-  check_dxf.py       validates output with ezdxf (`pip install ezdxf`)
+  serve.js           the dev server
+  verify.js          behavioural checks, including a drag-latency budget
+  check_dxf.py       validates output with ezdxf (`pip install ezdxf`) — a gate
   make_hard_dxf.py   builds a deliberately awkward R2018 file for the importer
 ```
 
@@ -42,7 +53,7 @@ tools/
 
 `orthograph.html` opens straight from disk, but **serve it if you are developing**:
 loaded over `file://` the page has no origin, which breaks canvas readback and any
-storage it touches.
+storage it touches — including autosave.
 
 ```
 node tools/serve.js            # → http://127.0.0.1:8017/
@@ -52,12 +63,13 @@ node tools/serve.js            # → http://127.0.0.1:8017/
 
 ```
 node build.js                  # → orthograph.html
-node test/run.js               # 348 tests
+node test/run.js               # 590 tests
 node test/run.js wall          # run a subset by name
+node tools/verify.js           # behavioural checks + drag latency
 
 pip install ezdxf
 python3 tools/make_hard_dxf.py # generate the import fixture
-python3 tools/check_dxf.py test/out/fixture.dxf
+python3 tools/check_dxf.py     # exits non-zero if the DXF regresses
 ```
 
 ## Precision
@@ -76,10 +88,10 @@ endpoint eight pixels away, which is the failure that makes most snap engines
 tiring to use.
 
 The command line is the real one: acad.pgp aliases, prompts whose bracketed
-keywords are typed by their capital, transparent commands, `U`/`REDO`, and about
-forty live system variables reachable through `SETVAR`. Coordinates take every
-AutoCAD form — absolute, relative `@dx,dy`, polar `@dist<angle`, direct distance
-entry and the `#` override.
+keywords are typed by their capital, transparent commands, `U`/`REDO`, and live
+system variables reachable through `SETVAR`. Coordinates take every AutoCAD form —
+absolute, relative `@dx,dy`, polar `@dist<angle`, direct distance entry and the
+`#` override.
 
 Selection follows the same rules: left-to-right windows (blue, solid, encloses),
 right-to-left crosses (green, dashed, touches), with live preview of what the box
@@ -91,8 +103,8 @@ blue → hover → hot red with the full stretch/move/rotate/scale/mirror cycle.
 **Drafting** is the AutoCAD-shaped half: line, polyline, spline, rectangle, circle, arc,
 ellipse, polygon, donut, point, construction line, ray, revision cloud, hatch, text,
 paragraph text, leader, dimensions (linear, aligned, horizontal, vertical, radius,
-diameter, angular, continue). Modify: move, copy, rotate, scale, mirror, offset, array
-(rectangular, polar, path), stretch, align, trim, extend, lengthen, fillet, chamfer,
+diameter, angular, continue, baseline). Modify: move, copy, rotate, scale, mirror, offset,
+array (rectangular, polar, path), stretch, align, trim, extend, lengthen, fillet, chamfer,
 break, join, pedit, explode, divide, measure, match properties, blocks, erase. Inquiry:
 distance, area, id, list, quick select.
 
@@ -102,22 +114,55 @@ corners and T-junction cleanup are all derived at draw time. Doors and windows a
 themselves back inside when it shortens, re-home when it splits, and are deleted with it.
 Select anything and the right-hand panel edits its parameters live.
 
-Everything is 2D. Walls and openings carry height, sill and level data already, so the
-model is ready for a 3D view later without a data migration.
+Walls carry a compound structure: a type is a stack of layers with thicknesses, and the
+layer boundaries are drawn, so a cavity wall reads as a cavity wall rather than as two
+lines.
+
+## Storeys, sheets and output
+
+**Levels.** Storeys are real: objects belong to one, `LEVEL`/`LEVELUP`/`LEVELDOWN` move
+between them, and the storey below can be shown as a faint underlay to trace against.
+
+**Sections and elevations.** `SECTION` cuts a view from the plan — walls poched where
+they are cut, everything beyond the cut line drawn as seen elevation, respecting the view
+depth and which way the section looks. Layers apply to a section; levels do not, because
+a section through a building is a section through all of it.
+
+**Sheets.** Paper space with named layouts, viewports onto model space at a stated scale,
+title blocks and plotting. A viewport is a rectangle on the paper in millimetres plus the
+model point at its centre and the scale it looks through; everything about plotting falls
+out of those three numbers.
+
+**Schedules.** Doors and windows are marked (D-01, W-01…) in reading order, marks are
+stable when new openings are added, and `DOORSCHEDULE`/`WINDOWSCHEDULE` place a real
+table that counts only the current storey. Rooms schedule the same way.
+
+## Not losing your work
+
+Autosave writes whenever the journal has moved since the last save, on a timer and again
+when the page is hidden or closed. It goes to localStorage, which is synchronous and
+therefore the only store that can be relied on during `beforeunload`.
+
+A drawing bigger than about 25,000 objects outgrows localStorage's ~5MB. Those go to
+IndexedDB instead, with a ~90-byte pointer left in localStorage so recovery can find them
+— small enough that it can always be written, including on the way out. On the next
+start, unsaved work is offered back rather than restored silently: being handed a drawing
+you cannot identify is worse than being told one exists.
 
 ## File formats
 
 | Format | Read | Write | Notes |
 |---|---|---|---|
 | `.ocad` project | yes | yes | lossless — keeps walls, openings and type libraries as live objects |
-| DXF | R12–R2018 | R2000 (AC1015) | verified against ezdxf: strict load, 0 audit errors |
+| DXF | R12–R2018 | R2000 (AC1015) | verified against ezdxf as a CI gate, and by Rhino 8 as a second reader |
 | SVG / PNG | — | yes | for showing the drawing |
 | DWG | R13–R2000, experimental | experimental | see below |
 
 DXF export writes real `ELLIPSE`, `SPLINE`, `DIMENSION` and `HATCH` entities rather than
 flattening everything to R12 polylines. Architectural objects have no DXF equivalent, so
 they export as their plan geometry on the correct `A-` layers — use the project file if
-you want them to stay editable.
+you want them to stay editable. Anything the writer has no direct mapping for is
+flattened to primitives rather than dropped.
 
 ## DWG — read this before using it
 
@@ -149,20 +194,38 @@ Rooms are a **seed point**, not a frozen polygon. The boundary is re-derived fro
 arrangement of the wall faces, so it is exact at any wall angle and it follows the walls
 when they move. A space that is not enclosed is reported, not guessed at.
 
+Hatch works the same way. `BOUNDARY` and a hatch pick both trace the face of the
+arrangement containing the point, cutting the geometry at every crossing first, so four
+lines that happen to enclose a space can be filled even though no closed object exists.
+
 Stairs are straight, L or U; L and U carry a real landing plate and split the risers
 either side of it. The point you drag to sets the first flight.
 
+## Performance
+
+The drawing is spatially indexed, and the caches derived from the walls are patched
+rather than rebuilt: they are keyed on structural change, not on the document version,
+because a version-keyed cache is thrown away by every mutation and moving a selection is
+thousands of mutations. `tools/verify.js` holds a drag-latency budget — 600 walls stay
+above 60fps while being dragged — so a regression here fails the build rather than being
+noticed months later.
+
 ## Known limits
 
-- No paper space or plotting.
+- Everything is 2D. Walls, openings and slabs carry height, sill and level data already,
+  so the model is ready for a 3D view later without a data migration.
 - DWG remains experimental and unverified against AutoCAD — use DXF.
-- Hatch boundaries come from closed objects or a point inside one, not from a full
-  arrangement trace of crossing lines.
 - Splines are drawn through fit points (Catmull-Rom) and exported as clamped B-splines;
   imported NURBS are evaluated properly but stored tessellated.
-- Wall cleanup handles L corners, straight runs, T-junctions, crossings and Y/X nodes
-  where three or more walls meet.
-- One level is drawn at a time; levels exist as data but there is no level switcher yet.
+- Poche is one fill for all cut walls, not per layer of the wall's structure.
+- Stairs do not yet appear in sections, and openings do not cut slabs.
+- Grid bubbles are labelled and can be turned off per end; there are no level datum markers.
+- Door and window types carry size and swing, not fire, acoustic or finish data.
+- Schedules place as tables in the drawing; there is no CSV export.
+- No ordinate or arc-length dimensions, and no annotative scaling.
+- No fields, and no stacked fractions in text.
+- Blocks have no attribute manager, in-place reference editing or dynamic parameters.
+- The crosshair cannot be moved from the keyboard, and there is no high-contrast theme.
 
 ## Licence
 
