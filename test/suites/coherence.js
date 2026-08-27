@@ -215,4 +215,44 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       return { bad, before, after };`);
     eq(r.bad.length, 0, 'lost on the round trip: ' + r.bad.join('; '));
   });
+
+  group('nothing is built and left unreachable');
+
+  /* A feature nobody can switch on is not a feature. All four of these were
+     read by the code and settable by nobody: they lived in VS and were never
+     registered, so typing their names did nothing. UNDERLAY was the worst —
+     the storey-below view was built, drawn and tested, and there was no way
+     for a person to turn it on. */
+  t('every system variable the code reads can be typed', () => {
+    const r = R(`${SETUP}
+      /* the flags the newer features answer to */
+      const names = ['MIRRTEXT', 'TRIMMODE', 'UNDERLAY', 'TAGS'];
+      const bad = [];
+      for (const n of names) {
+        const w = resolveWord(n);
+        if (!w || w.kind !== 'var') { bad.push(n + ': unreachable'); continue; }
+        cancelCmd();
+        dispatch(n + ' 1'); const on = VS[n.toLowerCase()];
+        dispatch(n + ' 0'); const off = VS[n.toLowerCase()];
+        if (!on || off) bad.push(n + ': set to ' + on + ' then ' + off);
+      }
+      return { bad, n: names.length };`);
+    eq(r.bad.length, 0, r.bad.join('; '));
+    eq(r.n, 4);
+  });
+
+  /* Typing a command's name is the one way in that always exists. A command
+     that cannot be resolved is one nobody can run however it is spelled. */
+  t('every command added since Wave 1 answers to its name', () => {
+    const r = R(`${SETUP}
+      const added = ['layout','mview','vpscale','pagesetup','plot','pspace','mspace',
+        'layoff','layfrz','laymcur','layon','laythw','layiso','layuniso','layerstate',
+        'dimstyle','dimbase','schedule','scheduleupdate','attdef','eattedit',
+        'section','sectioncut','sectionflip','floor','roof',
+        'markdoors','markwindows','doorschedule','windowschedule',
+        'level','levelup','leveldown'];
+      return { added: added.length, unreachable: added.filter(n => !resolveWord(n)) };`);
+    ok(r.added > 30, 'the sweep covers what was added, got ' + r.added);
+    eq(r.unreachable.length, 0, 'cannot be typed: ' + r.unreachable.join(', '));
+  });
 };

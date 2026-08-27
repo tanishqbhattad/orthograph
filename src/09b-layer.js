@@ -587,3 +587,33 @@ defm('SCHEDULEUPDATE', () => {
   cliPrint('Updated ' + tabs.length + ' schedule' + (tabs.length === 1 ? '' : 's'));
   draw();
 }, { group: 'annotate' });
+
+/* ============================================================
+   The system variables the newer features answer to
+   ------------------------------------------------------------
+   All four of these were read by the code and settable by
+   nobody: they lived in VS and were never registered, so typing
+   their names did nothing. UNDERLAY was the worst of it — the
+   storey-below view was built, drawn and tested, and there was
+   no way for a person to switch it on.
+   ============================================================ */
+defvar('MIRRTEXT', {
+  desc: 'Mirroring text: 0 keeps it readable, 1 mirrors it too',
+  get: () => VS.mirrtext ? 1 : 0,
+  set(v) { VS.mirrtext = v ? 1 : 0; draw(); },
+});
+defvar('TRIMMODE', {
+  desc: 'Fillet and chamfer trim the objects: 1 yes, 0 leave them uncut',
+  get: () => VS.trimmode ? 1 : 0,
+  set(v) { VS.trimmode = v ? 1 : 0; },
+});
+defvar('UNDERLAY', {
+  desc: 'Show the storey below the current one, faintly',
+  get: () => VS.underlay ? 1 : 0,
+  set(v) { VS.underlay = v ? 1 : 0; draw(); },
+});
+defvar('TAGS', {
+  desc: 'Draw door and window marks on the plan',
+  get: () => VS.tags ? 1 : 0,
+  set(v) { VS.tags = v ? 1 : 0; draw(); },
+});
