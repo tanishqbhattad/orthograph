@@ -3,7 +3,7 @@
 Browser CAD: AutoCAD-style drafting with a Revit-style parametric architecture
 layer, shipped as one self-contained HTML file.
 
-**State: everything builds, 590 unit tests pass, 12 behavioural checks pass,
+**State: everything builds, 694 unit tests pass, 12 behavioural checks pass,
 `tools/check_dxf.py` is a gate and reports PASS.** No known blockers and no
 known correctness bugs. Waves 1-5 are done: drafting semantics, model
 semantics, paper space and plotting, sections, levels, schedules, robustness,
@@ -26,13 +26,13 @@ C:\Users\Tanishq\projects\orthograph
 
 ```
 orthograph/
-├─ orthograph.html          THE ARTEFACT — 848 KB, open in any browser. Generated.
+├─ orthograph.html          THE ARTEFACT — 899 KB, open in any browser. Generated.
 ├─ build.js                 concatenates src/*.js into src/shell.html → orthograph.html
 ├─ package.json             npm run build / test / check-dxf / make-fixture
 ├─ README.md                user-facing docs
 ├─ HANDOFF.md               this file
 │
-├─ src/                     ~18,400 lines. Build order is defined in build.js ORDER.
+├─ src/                     ~19,600 lines. Build order is defined in build.js ORDER.
 │  ├─ shell.html            markup + ALL CSS, with a placeholder for the bundle
 │  ├─ 00-core.js            maths, ACI colour, units, fmt/parseLen
 │  ├─ 01-doc.js             document model, journalled history, spatial index, DIRTY set
@@ -64,7 +64,7 @@ orthograph/
 │  ├─ load.js               loads the bundle into a vm sandbox; exports run() and bootApp()
 │  ├─ dom-stub.js           minimal DOM + TRACING CANVAS (this is how rendering is tested)
 │  ├─ extra.js              auto-loads test/suites/*.js
-│  ├─ suites/               26 files, one per area — auto-loaded, see §2
+│  ├─ suites/               35 files, one per area — auto-loaded, see §2
 │  └─ out/                  generated fixtures (fixture.dxf, hard.dxf, …) — gitignore these
 │
 └─ tools/
@@ -79,7 +79,7 @@ orthograph/
 
 ```bash
 node build.js            # → orthograph.html   (must be re-run after ANY src/ change)
-node test/run.js         # 590 unit tests, zero dependencies
+node test/run.js         # 694 unit tests, zero dependencies
 node test/run.js wall    # run a subset by name substring
 node tools/verify.js     # 12 behavioural checks
 node tools/serve.js      # serve at 127.0.0.1:8017 — file:// gives the page no origin
