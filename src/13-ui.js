@@ -91,6 +91,14 @@ const IC = {
   eyeoff: '<path d="M2 2l12 12"/><path d="M6.2 6.3A2 2 0 0 0 8 10a2 2 0 0 0 1.7-1"/><path d="M4.2 4.4C2.6 5.6 1.5 8 1.5 8s2.6 4 6.5 4c1 0 1.9-.2 2.7-.6M12 4.9c1.6 1.2 2.5 3.1 2.5 3.1s-.5.8-1.4 1.7"/>',
   lock: '<rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>',
   snow: '<path d="M8 1.5v13M2.4 4.8l11.2 6.4M13.6 4.8L2.4 11.2"/>',
+  floor: '<rect x="2" y="6" width="12" height="7" rx="0.5"/><path d="M2 9h12"/>',
+  roof: '<path d="M1.5 11L8 3.5 14.5 11"/><path d="M3.5 12.5L8 6.5l4.5 6"/>',
+  section: '<path d="M2 8h12" stroke-dasharray="3 1.6"/><path d="M3 8V5M13 8V5"/><path d="M1.6 5.2L3 3.6 4.4 5.2M11.6 5.2L13 3.6 14.4 5.2"/>',
+  sectioncut: '<path d="M2 8h12" stroke-dasharray="3 1.6"/><rect x="5" y="9.5" width="6" height="4.5" rx="0.5"/>',
+  table: '<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M2 6h12M6 6v7M10 6v7"/>',
+  schedule: '<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M2 6h12M6 3v10"/>',
+  dimbase: '<path d="M2 13V3M14 13V3M8 13V6"/><path d="M2 11h12M2 5h6"/>',
+  attdef: '<path d="M3 12V5h4M3 8.5h3.2"/><path d="M9.5 12l2.2-7 2.3 7M10.3 10h3.4"/>',
   sun: '<circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/>',
   plot: '<rect x="2" y="6" width="12" height="6" rx="1"/><path d="M4.5 6V2.5h7V6M5 12v2h6v-2"/>',
   noplot: '<rect x="2" y="6" width="12" height="6" rx="1"/><path d="M4.5 6V2.5h7V6"/><path d="M2 2l12 12"/>',
@@ -134,7 +142,8 @@ const RAILS = {
     ['Annotate', [
       ['text', 'Single-line text', 'DT'], ['mtext', 'Paragraph text', 'MT'],
       ['leader', 'Leader note', 'LE'], ['dim', 'Dimension', 'DLI'],
-      ['dimcont', 'Continue dimension', 'DCO'],
+      ['dimcont', 'Continue dimension', 'DCO'], ['dimbase', 'Baseline dimension', 'DBA'],
+      ['table', 'Table', 'TB'], ['attdef', 'Define attribute', 'ATT'],
     ]],
     ['Transform', [
       ['move', 'Move', 'M'], ['copy', 'Copy', 'CO'], ['rotate', 'Rotate', 'RO'],
@@ -160,6 +169,7 @@ const RAILS = {
     ['Build', [
       ['wall', 'Wall', 'W'], ['wallrect', 'Room of walls', 'WR'],
       ['column', 'Column', 'COL'], ['stair', 'Stair', 'STR'],
+      ['floor', 'Floor slab', 'FL'], ['roof', 'Roof', 'RF'],
     ]],
     ['Openings', [
       ['door', 'Door', 'DR'], ['window', 'Window', 'WI'], ['wallflip', 'Flip opening', 'WF'],
@@ -169,6 +179,13 @@ const RAILS = {
     ]],
     ['Space', [
       ['room', 'Room / area tag', 'RM'], ['grid', 'Structural grid', 'CG'],
+      ['schedule', 'Room schedule', 'SCH'],
+    ]],
+    /* A section is drawn on the plan and then cut somewhere else, so the two
+       belong side by side: the line without the cut is a mark that means
+       nothing, and the cut without a line has nothing to cut along. */
+    ['Views', [
+      ['section', 'Section line', 'SE'], ['sectioncut', 'Cut the section', 'SC'],
     ]],
     ['Transform', [
       ['move', 'Move', 'M'], ['copy', 'Copy', 'CO'], ['rotate', 'Rotate', 'RO'],
@@ -176,6 +193,7 @@ const RAILS = {
     ]],
     ['Annotate', [
       ['dim', 'Dimension', 'DLI'], ['text', 'Text', 'DT'],
+      ['mtext', 'Paragraph text', 'MT'], ['leader', 'Leader note', 'LE'],
       ['dist', 'Distance', 'DI'], ['area', 'Area', 'AA'],
     ]],
   ],

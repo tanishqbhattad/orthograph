@@ -255,4 +255,40 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(r.added > 30, 'the sweep covers what was added, got ' + r.added);
     eq(r.unreachable.length, 0, 'cannot be typed: ' + r.unreachable.join(', '));
   });
+
+  /* Typing a name is the way in that always exists; the rail is the way in
+     you find without being told one. Something a person DRAWS belongs there —
+     floor, roof and the section pair were reachable only by knowing the word. */
+  t('everything a person draws is findable in the rail', () => {
+    const r = R(`${SETUP}
+      const inRail = new Set();
+      for (const mode of Object.keys(RAILS))
+        for (const [, tools] of RAILS[mode])
+          for (const [k] of tools) inRail.add(k);
+      const drawing = ['line','pline','circle','arc','text','mtext','leader','dim',
+                       'hatch','table','attdef','wall','door','window','column','stair',
+                       'room','grid','floor','roof','section','sectioncut','schedule'];
+      return { railSize: inRail.size, missing: drawing.filter(k => !inRail.has(k)) };`);
+    ok(r.railSize > 50, 'the rail is populated, got ' + r.railSize);
+    eq(r.missing.length, 0, 'reachable only by typing: ' + r.missing.join(', '));
+  });
+
+  /* A tool button with no icon is a blank square: it exists, it works, and
+     nobody can tell what it is. */
+  t('no tool button renders empty', () => {
+    const r = R(`${SETUP}
+      const blank = [];
+      const was = MODE;
+      for (const mode of Object.keys(RAILS)) {
+        MODE = mode; buildRail();
+        for (const b of document.querySelectorAll('.tool')) {
+          const html = b.innerHTML || '';
+          if (!/<(path|rect|circle|ellipse|line|polygon|polyline)/.test(html))
+            blank.push(mode + ':' + b.dataset.tool);
+        }
+      }
+      MODE = was; buildRail();
+      return { blank };`);
+    eq(r.blank.length, 0, 'blank buttons: ' + r.blank.join(', '));
+  });
 };

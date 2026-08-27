@@ -617,3 +617,33 @@ defvar('TAGS', {
   get: () => VS.tags ? 1 : 0,
   set(v) { VS.tags = v ? 1 : 0; draw(); },
 });
+
+/** TABLE — the command the rail was already offering. B4 built the table
+    ENTITY and never gave it a way in, so the button pointed at nothing. */
+defc('table', {
+  key: 'table', group: 'annotate',
+  hint: 'Pick the top-left corner of the table',
+  point(c, p) {
+    modal('<h3>Table</h3>' +
+      '<div class="row"><label>Columns</label><input class="f" id="tbc" value="3"></div>' +
+      '<div class="row"><label>Rows</label><input class="f" id="tbr" value="4"></div>' +
+      '<div class="row"><label>Text height</label><input class="f" id="tbh" value="' +
+        (+(DOC.textH / U[DOC.units]).toFixed(4)) + '"></div>', () => {
+      const cols = clamp(parseInt($('#tbc').value, 10) || 3, 1, 40);
+      const rows = clamp(parseInt($('#tbr').value, 10) || 4, 1, 200);
+      const h = parseLen($('#tbh').value) || DOC.textH;
+      /* an empty grid to type into, with the first row read as a heading */
+      const data = [];
+      for (let r = 0; r < rows; r++) {
+        const row = [];
+        for (let cc = 0; cc < cols; cc++) row.push(r === 0 ? 'Heading ' + (cc + 1) : '');
+        data.push(row);
+      }
+      begin();
+      addEnt({ t: 'table', p: p.slice(), rows: data, h,
+               colW: fitColumns(data, h), layer: annoLayer('TEXT') });
+      commit('Table');
+      draw(); endCmd();
+    });
+  },
+});
