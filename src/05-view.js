@@ -1970,7 +1970,11 @@ function drawSheet(sh) {
     const r = vpScreenRect(sh, vp);
     if (r[2] < 1 || r[3] < 1) continue;
     ctx.save();
-    ctx.beginPath(); ctx.rect(r[0], r[1], r[2], r[3]); ctx.clip();
+    ctx.beginPath();
+    /* a detail view is clipped to the circle its callout drew, not to a box */
+    if (vp.round) ctx.arc(r[0] + r[2] / 2, r[1] + r[3] / 2, Math.min(r[2], r[3]) / 2, 0, TAU);
+    else ctx.rect(r[0], r[1], r[2], r[3]);
+    ctx.clip();
     const live = insideVp() && vp.id === sh.activeVp;
     const keep = { z: V.z, px: V.px, py: V.py };
     /* the one we are standing in is already the current view; the rest are
@@ -1992,12 +1996,47 @@ function drawSheet(sh) {
                     : vp.id === sh.selVp ? CO.grip : '#b9b9b2';
     ctx.lineWidth = (vp.id === sh.activeVp || vp.id === sh.selVp) ? Math.max(HAIR, 1.5) : HAIR;
     ctx.lineWidth = HAIR; ctx.setLineDash(DASH_SOLID);
-    ctx.strokeRect(r[0], r[1], r[2], r[3]);
+    if (vp.round) {
+      ctx.beginPath();
+      ctx.arc(r[0] + r[2] / 2, r[1] + r[3] / 2, Math.min(r[2], r[3]) / 2, 0, TAU);
+      ctx.stroke();
+    } else ctx.strokeRect(r[0], r[1], r[2], r[3]);
     ctx.restore();
+    if (vp.det) drawDetailTitle(sh, vp, P);
     if (!insideVp() && vp.id === sh.selVp && typeof drawVpGrips === 'function')
       drawVpGrips(sh, vp);
   }
   drawTitleBlock(sh, P);
+}
+/* The title under a detail: its number in a bubble, the word, and the scale,
+   over a rule. Unlike the viewport frame this DOES plot — it is the label the
+   callout on the parent drawing is pointing at, and a detail with no number
+   under it is an orphan. */
+function drawDetailTitle(sh, vp, P) {
+  const y = vp.y + vp.h + 7, x = vp.x;
+  const a = P(x, y), b = P(x + vp.w, y);
+  const h = Math.abs(P(0, 0)[1] - P(0, 3.5)[1]);   /* 3.5mm of paper, in pixels */
+  const rr = h * 1.1;
+  ctx.save();
+  /* the paper is drawn as paper whatever the screen theme is, so this ink is
+     the title block's ink and not the palette's */
+  ctx.strokeStyle = '#3a3a34'; ctx.fillStyle = '#1b1b16';
+  ctx.lineWidth = Math.max(HAIR, 1);
+  ctx.setLineDash(DASH_SOLID);
+  ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+  ctx.beginPath(); ctx.arc(a[0] + rr, a[1] - rr - 1, rr, 0, TAU); ctx.stroke();
+  /* below about five pixels a glyph is a smudge; the rule and the bubble still
+     say a detail is here, which is a fair thing for a drawing to look like
+     when it is this small on screen */
+  if (h >= 5) {
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = '500 ' + Math.round(h * 0.95) + 'px Inter, sans-serif';
+    ctx.fillText(String(vp.det.key || ''), a[0] + rr, a[1] - rr - 1);
+    ctx.textAlign = 'left';
+    ctx.font = Math.round(h * 0.8) + 'px Inter, sans-serif';
+    ctx.fillText('DETAIL  ' + scaleLabel(vp.scale), a[0] + rr * 2.6, a[1] - rr - 1);
+  }
+  ctx.restore();
 }
 function drawTitleBlock(sh, P) {
   const T = sh.title; if (!T || T.show === false) return;

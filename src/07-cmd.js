@@ -353,6 +353,7 @@ const ALIAS = {
   w: 'WALL', wa: 'WALL', wr: 'WALLRECT', dr: 'DOOR', win: 'WINDOW', wi: 'WINDOW',
   col: 'COLUMN', str: 'STAIR', rm: 'ROOM', cg: 'COLUMNGRID',
   wf: 'WALLFLIP', wj: 'WALLJOIN', ws: 'WALLSPLIT',
+  det: 'DETAIL', dv: 'DETAILVIEW', vpl: 'VPLAYER',
 };
 /** aliases the user has defined this session, checked before acad.pgp */
 const USERALIAS = {};

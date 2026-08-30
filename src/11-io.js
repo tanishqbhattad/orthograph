@@ -113,8 +113,11 @@ function sheetSVG(sh) {
   if (vps.length) {
     out.push('<defs>');
     for (const vp of vps)
-      out.push(`<clipPath id="vpc${vp.id}"><rect x="${R4(vp.x)}" y="${R4(vp.y)}" ` +
-               `width="${R4(vp.w)}" height="${R4(vp.h)}"/></clipPath>`);
+      out.push(`<clipPath id="vpc${vp.id}">` + (vp.round
+        ? `<circle cx="${R4(vp.x + vp.w / 2)}" cy="${R4(vp.y + vp.h / 2)}" ` +
+          `r="${R4(Math.min(vp.w, vp.h) / 2)}"/>`
+        : `<rect x="${R4(vp.x)}" y="${R4(vp.y)}" ` +
+          `width="${R4(vp.w)}" height="${R4(vp.h)}"/>`) + '</clipPath>');
     out.push('</defs>');
   }
   for (const vp of vps) {
@@ -131,10 +134,30 @@ function sheetSVG(sh) {
     const wasFrz = vpFrzUse(vp.frz);
     try { out.push(...svgEntityBody(1 / sc)); } finally { vpFrzUse(wasFrz); }
     out.push('</g></g>');
+    /* the frame does not plot; the detail's title does */
+    if (vp.det) out.push(...detailTitleSVG(vp));
   }
   out.push(...titleBlockSVG(sh));
   out.push('</svg>');
   return out.join('\n');
+}
+/* A detail's own title: number in a bubble, then the word and the scale, over
+   a rule the width of the view. The callout on the parent drawing points at
+   this, so it plots even though the viewport frame does not. */
+function detailTitleSVG(vp) {
+  const R4 = n => +(+n).toFixed(4);
+  const ink = '#111111', y = vp.y + vp.h + 7, r = 3.9;
+  return [
+    `<g font-family="Inter,Helvetica,sans-serif" fill="${ink}">`,
+    `<line x1="${R4(vp.x)}" y1="${R4(y)}" x2="${R4(vp.x + vp.w)}" y2="${R4(y)}" ` +
+      `stroke="${ink}" stroke-width="0.35"/>`,
+    `<circle cx="${R4(vp.x + r)}" cy="${R4(y - r - 0.5)}" r="${r}" fill="none" ` +
+      `stroke="${ink}" stroke-width="0.35"/>`,
+    `<text x="${R4(vp.x + r)}" y="${R4(y - r + 0.9)}" font-size="4.2" ` +
+      `text-anchor="middle">${esc(String((vp.det && vp.det.key) || ''))}</text>`,
+    `<text x="${R4(vp.x + r * 2.8)}" y="${R4(y - r + 0.7)}" font-size="3.4">` +
+      `DETAIL  ${esc(scaleLabel(vp.scale))}</text>`,
+    '</g>'];
 }
 /* The title block. Bottom-right, inside the margin, which is where every
    drawing office in the world looks for it. */
@@ -301,7 +324,7 @@ function sanitiseEnt(e) {
     insert: ['p'], table: ['p'], grid: ['a', 'b'],
     pline: ['pts'], spline: ['pts'], room: [], floor: ['pts'], roof: ['pts'],
     door: ['host'], window: ['host'], dim: ['p1', 'p2'], leader: ['pts'],
-    hatch: ['loops'],
+    hatch: ['loops'], callout: ['c', 'r'],
   };
   const need = NEEDS[e.t];
   if (need) for (const k of need) if (e[k] == null) return null;
