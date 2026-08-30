@@ -128,7 +128,8 @@ function sheetSVG(sh) {
     out.push(`<g clip-path="url(#vpc${vp.id})"><g transform="${xf}">`);
     /* the viewport border is deliberately not drawn: in AutoCAD it lives on a
        non-plotting layer, and a box printed round every view looks amateur */
-    out.push(...svgEntityBody(1 / sc));
+    const wasFrz = vpFrzUse(vp.frz);
+    try { out.push(...svgEntityBody(1 / sc)); } finally { vpFrzUse(wasFrz); }
     out.push('</g></g>');
   }
   out.push(...titleBlockSVG(sh));

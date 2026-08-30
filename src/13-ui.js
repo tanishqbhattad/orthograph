@@ -91,6 +91,9 @@ const IC = {
   eyeoff: '<path d="M2 2l12 12"/><path d="M6.2 6.3A2 2 0 0 0 8 10a2 2 0 0 0 1.7-1"/><path d="M4.2 4.4C2.6 5.6 1.5 8 1.5 8s2.6 4 6.5 4c1 0 1.9-.2 2.7-.6M12 4.9c1.6 1.2 2.5 3.1 2.5 3.1s-.5.8-1.4 1.7"/>',
   lock: '<rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>',
   snow: '<path d="M8 1.5v13M2.4 4.8l11.2 6.4M13.6 4.8L2.4 11.2"/>',
+  /* the same snowflake inside a window frame: frozen HERE, not everywhere */
+  vpsnow: '<rect x="1" y="2.5" width="14" height="11" rx="1"/><path d="M8 5v6M5.4 6.5l5.2 3M10.6 6.5l-5.2 3"/>',
+  vpsun: '<rect x="1" y="2.5" width="14" height="11" rx="1"/><circle cx="8" cy="8" r="2"/>',
   floor: '<rect x="2" y="6" width="12" height="7" rx="0.5"/><path d="M2 9h12"/>',
   roof: '<path d="M1.5 11L8 3.5 14.5 11"/><path d="M3.5 12.5L8 6.5l4.5 6"/>',
   section: '<path d="M2 8h12" stroke-dasharray="3 1.6"/><path d="M3 8V5M13 8V5"/><path d="M1.6 5.2L3 3.6 4.4 5.2M11.6 5.2L13 3.6 14.4 5.2"/>',
@@ -539,7 +542,24 @@ function buildLayers() {
     pl.title = l.plot === false ? 'This layer does not plot' : 'This layer plots';
     a11yToggle(pl, l.name + ': ' + (l.plot === false ? 'does not plot' : 'plots'), l.plot !== false);
     pl.onclick = ev => { ev.stopPropagation(); begin(); touchLayers(); l.plot = l.plot === false; commit(); draw(); buildLayers(); };
+    /* On a sheet, a layer can be frozen in ONE window without being frozen
+       anywhere else — the thing that lets one model serve a general
+       arrangement and a setting-out plan on the same page. The control only
+       exists where it means something, which is on a sheet with a viewport. */
+    const vp = typeof vpTarget === 'function' ? vpTarget() : null;
+    let vf = null;
+    if (vp) {
+      const on = vpFrozen(vp, l.name);
+      vf = el('span', 'ic vpfz' + (on ? ' off' : ''), svg(on ? 'vpsnow' : 'vpsun', 16));
+      vf.title = on ? 'Thaw in this viewport' : 'Freeze in THIS viewport only';
+      a11yToggle(vf, l.name + ': ' + (on ? 'frozen in this viewport' : 'shown in this viewport'), on);
+      vf.onclick = ev => {
+        ev.stopPropagation();
+        vpFreeze(vp, l.name, !on); draw(); buildLayers();
+      };
+    }
     row.append(sw, nm, eye, fz, lk, pl);
+    if (vf) row.appendChild(vf);
     row.onclick = () => {
       DOC.cur = l.name;
       if (SEL.size) { begin(); selEnts().forEach(e => { mut(e); e.layer = l.name; }); commit('Moved to ' + l.name); }

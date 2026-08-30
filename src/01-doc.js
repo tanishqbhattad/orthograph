@@ -310,7 +310,7 @@ const HIST = { past: [], future: [], depth: 200, seq: 0, group: 0, groupSeq: 0, 
 /** roughly how many entity-clones a patch is carrying */
 function patchWeight(p) {
   return (p.chg ? p.chg.length * 2 : 0) + (p.add ? p.add.length : 0) +
-         (p.del ? p.del.length : 0) + (p.lay ? 8 : 1);
+         (p.del ? p.del.length : 0) + (p.lay ? 8 : 1) + (p.sh ? 8 : 0);
 }
 /** Trim the oldest steps until the journal fits both limits. The newest step is
     never dropped, however big: taking back what you just did is the one thing
@@ -326,13 +326,13 @@ function histTrim() {
   }
   if (HIST.weight < 0) HIST.weight = 0;
 }
-const JN = { on: false, before: new Map(), added: new Set(), removed: new Map(), layers: null, cur: null, uid: 0 };
+const JN = { on: false, before: new Map(), added: new Set(), removed: new Map(), layers: null, sheets: null, cur: null, uid: 0 };
 
 function begin() {
   if (JN.on) return;                             /* nested begin is a no-op */
   JN.on = true;
   JN.before.clear(); JN.added.clear(); JN.removed.clear();
-  JN.layers = null; JN.cur = DOC.cur; JN.uid = UID;
+  JN.layers = null; JN.sheets = null; JN.cur = DOC.cur; JN.uid = UID;
 }
 /** record an entity's pre-edit state. Call BEFORE mutating. */
 function touch(e) {
@@ -353,6 +353,11 @@ function mut(e) {
   return e;
 }
 function touchLayers() { if (JN.on && !JN.layers) JN.layers = clone(DOC.layers); }
+/* Sheets were outside the journal entirely, so moving a viewport, resizing one
+   or changing its scale could not be taken back — the commands went through the
+   motions of begin()/commit() and recorded nothing. A sheet is small enough to
+   snapshot whole, exactly as layers are. */
+function touchSheets() { if (JN.on && !JN.sheets) JN.sheets = clone(DOC.sheets || []); }
 
 /* ---------------- sheets (paper space) ----------------
    A sheet is a piece of paper with viewports cut into it. A viewport is a
@@ -385,6 +390,7 @@ function newViewport(sh, centre, scale) {
     scale: scale || 1 / 100,
     rot: 0,
     locked: false,
+    frz: [],                                       /* layers frozen in THIS window */
   };
 }
 function curSheet() {
@@ -450,9 +456,10 @@ function commit(label) {
   for (const id of JN.added) { const e = DOC.ents.get(id); if (e) addv.push(clone(e)); }
   const delv = [...JN.removed.values()];
   const lay = JN.layers ? { b: JN.layers, a: clone(DOC.layers) } : null;
-  const p = { chg, add: addv, del: delv, lay, cur: { b: JN.cur, a: DOC.cur }, uid: { b: JN.uid, a: UID } };
+  const sh = JN.sheets ? { b: JN.sheets, a: clone(DOC.sheets || []) } : null;
+  const p = { chg, add: addv, del: delv, lay, sh, cur: { b: JN.cur, a: DOC.cur }, uid: { b: JN.uid, a: UID } };
   JN.on = false;
-  if (chg.length || addv.length || delv.length || lay || p.cur.b !== p.cur.a) {
+  if (chg.length || addv.length || delv.length || lay || sh || p.cur.b !== p.cur.a) {
     p.seq = ++HIST.seq;
     if (HIST.group) p.grp = HIST.group;
     HIST.past.push(p);
@@ -472,6 +479,7 @@ function rollback() {
   for (const [id, e] of JN.removed) DOC.ents.set(id, clone(e));
   for (const [id, e] of JN.before) if (DOC.ents.has(id)) DOC.ents.set(id, clone(e));
   if (JN.layers) DOC.layers = JN.layers;
+  if (JN.sheets) DOC.sheets = JN.sheets;
   DOC.cur = JN.cur; UID = JN.uid;
   JN.on = false; idxInvalidate();
 }
@@ -487,6 +495,7 @@ function applyPatch(p, redoDir) {
   for (const e of back) DOC.ents.set(e.id, clone(e));
   for (const c of p.chg) if (DOC.ents.has(c.id)) DOC.ents.set(c.id, clone(c[src]));
   if (p.lay) DOC.layers = clone(p.lay[src]);
+  if (p.sh) DOC.sheets = clone(p.sh[src]);
   DOC.cur = p.cur[src]; UID = p.uid[src];
   idxInvalidate();
 }
@@ -554,15 +563,68 @@ function isUnderlay(e) {
   const b = levelBelow();
   return !!b && entLevel(e) === b.id;
 }
+/* ---------------- per-viewport layer freeze ----------------
+   Two viewports onto the same model at two scales is the ordinary reason a
+   sheet has two viewports, and the moment you have them you want one to show
+   the furniture and the other not — without the drawing existing twice. So the
+   freeze belongs to the viewport rather than to the layer. Model space never
+   sees it; it is a property of a window onto the model, not of the model.
+
+   VPFRZ is the list belonging to whichever window is being drawn. It is set
+   for the length of one viewport's paint and put back afterwards, which is the
+   same trick drawSheet already plays with V itself. */
+let VPFRZ = null;
+/** point the freeze test at one viewport's list; returns the previous one */
+function vpFrzUse(list) {
+  const was = VPFRZ;
+  VPFRZ = (list && list.length) ? list : null;
+  return was;
+}
+function vpFrozen(vp, name) {
+  return !!(vp && vp.frz && vp.frz.indexOf(name) >= 0);
+}
+/** the viewport with this id in the document as it stands now */
+function vpLive(vp) {
+  if (!vp) return null;
+  for (const s of (DOC.sheets || []))
+    for (const v of (s.viewports || [])) if (v.id === vp.id) return v;
+  return null;
+}
+/** freeze or thaw one layer in one viewport, as an undoable step */
+function vpFreeze(vp, name, on) {
+  if (!vp) return false;
+  begin(); touchSheets();
+  /* the sheet list was just cloned for the journal, so edit whatever the
+     document holds now rather than the object the caller happens to have */
+  const live = vpLive(vp) || vp;
+  if (!Array.isArray(live.frz)) live.frz = [];
+  const at = live.frz.indexOf(name);
+  if (on && at < 0) live.frz.push(name);
+  else if (!on && at >= 0) live.frz.splice(at, 1);
+  commit((on ? 'Froze ' : 'Thawed ') + name + ' in this viewport');
+  if (typeof shapeCacheClear === 'function') shapeCacheClear();
+  return true;
+}
+/** frozen in whatever window we are looking through at this moment */
+function vpHidden(e) {
+  if (DOC.curSheet == null) return false;            /* model space: no window */
+  let f = VPFRZ;
+  if (!f && typeof insideVp === 'function' && insideVp()) {
+    const vp = typeof activeVp === 'function' ? activeVp() : null;
+    f = vp && vp.frz;
+  }
+  return !!(f && f.length && f.indexOf(e.layer || '0') >= 0);
+}
 function visible(e) {
   const l = layer(e.layer);
   if (!l.on || l.frozen) return false;
+  if (vpHidden(e)) return false;
   return onCurLevel(e) || isUnderlay(e);
 }
 function pickable(e) {
   const l = layer(e.layer);
   /* an underlay is there to be traced over, not to be selected */
-  return l.on && !l.frozen && !l.lock && onCurLevel(e);
+  return l.on && !l.frozen && !l.lock && !vpHidden(e) && onCurLevel(e);
 }
 /** Counted when working out how big the drawing is. An off layer still counts,
     a frozen one does not — which is the practical difference between them and
@@ -570,5 +632,8 @@ function pickable(e) {
 function inExtents(e) { return !layer(e.layer).frozen; }
 /** Drawn on paper. A layer can be visible on screen and deliberately absent
     from the plot; that is what a non-plotting layer is for. */
-function plottable(e) { const l = layer(e.layer); return l.on && !l.frozen && l.plot !== false; }
+function plottable(e) {
+  const l = layer(e.layer);
+  return l.on && !l.frozen && l.plot !== false && !vpHidden(e);
+}
 function selEnts() { return [...SEL].map(i => DOC.ents.get(i)).filter(Boolean); }

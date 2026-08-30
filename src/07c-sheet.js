@@ -262,6 +262,71 @@ defc('vpscale', {
 });
 
 /* ============================================================
+   VPLAYER — freeze a layer in one viewport only
+   ------------------------------------------------------------
+   The piece that lets one model serve a general arrangement and
+   a setting-out plan on the same sheet. Freeze the furniture in
+   the second window and it is gone from that window and nowhere
+   else: model space is untouched, and so is the other window.
+   ============================================================ */
+/** the viewport a paper-space command should act on */
+function vpTarget() {
+  const sh = curSheet(); if (!sh) return null;
+  return activeVp() ||
+         (sh.viewports || []).find(v => v.id === sh.selVp) ||
+         (sh.viewports || [])[0] || null;
+}
+defc('vplayer', {
+  key: 'vplayer', group: 'view',
+  hint: '<em>F</em> freeze a layer here · <em>T</em> thaw · <em>R</em> reset this viewport',
+  init(c) {
+    const sh = needSheet(); if (!sh) { c.done = true; return endCmd(true); }
+    const vp = vpTarget();
+    if (!vp) { cliPrint('No viewport. Make one with MVIEW.', 'err'); c.done = true; return endCmd(true); }
+    c.data = { vp, step: 'mode', on: true };
+    const frz = (vp.frz || []);
+    cliPrint(frz.length ? 'Frozen in this viewport: ' + frz.join(', ')
+                        : 'Nothing is frozen in this viewport.');
+  },
+  text(c, s) {
+    const raw = String(s).trim();
+    if (c.data.step === 'mode') {
+      const k = raw.slice(0, 1).toLowerCase();
+      if (k === 'r') {
+        const live = vpLive(c.data.vp) || c.data.vp;
+        if (!(live.frz || []).length) { cliPrint('Nothing was frozen here.'); endCmd(true); return true; }
+        begin(); touchSheets();
+        (vpLive(c.data.vp) || c.data.vp).frz = [];
+        commit('Thawed every layer in this viewport');
+        shapeCacheClear(); draw(); endCmd(true); return true;
+      }
+      if (k !== 'f' && k !== 't') {
+        cliPrint('Type F to freeze a layer here, T to thaw one, or R to reset.', 'err');
+        return true;
+      }
+      c.data.on = k === 'f';
+      c.data.step = 'layer';
+      hint((c.data.on ? 'Layer to freeze' : 'Layer to thaw') + ' in this viewport');
+      cliPrint((c.data.on ? 'Freeze' : 'Thaw') + ' which layer?');
+      return true;
+    }
+    /* a layer name, or a comma-separated list of them, as AutoCAD takes */
+    const names = raw.split(',').map(x => x.trim()).filter(Boolean);
+    const done = [];
+    for (const n of names) {
+      const l = (DOC.layers || []).find(x => x.name.toLowerCase() === n.toLowerCase());
+      if (!l) { cliPrint('There is no layer called ' + n + '.', 'err'); continue; }
+      vpFreeze(c.data.vp, l.name, c.data.on);
+      done.push(l.name);
+    }
+    if (done.length)
+      cliPrint((c.data.on ? 'Frozen' : 'Thawed') + ' in this viewport: ' + done.join(', '));
+    draw(); syncUI(); endCmd(true);
+    return true;
+  },
+});
+
+/* ============================================================
    Viewport grips
    ------------------------------------------------------------
    MVIEW places a window; without grips nothing ever moves it

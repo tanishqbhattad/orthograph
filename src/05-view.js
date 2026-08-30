@@ -558,6 +558,7 @@ function flay(n) {
 const fvis = e => {
   const l = flay(e.layer);
   if (!l.on || l.frozen) return false;
+  if (VPFRZ && VPFRZ.indexOf(e.layer || '0') >= 0) return false;
   return onCurLevel(e) || isUnderlay(e);
 };
 const fcol = e => inkFor(e.color || flay(e.layer).color);
@@ -1978,8 +1979,10 @@ function drawSheet(sh) {
     /* annotation inside this window is sized for THIS viewport's scale, which
        is the whole reason an annotative object exists */
     annoPush(vp.scale);
+    /* the layers this window has frozen, for the length of this window's paint */
+    const wasFrz = vpFrzUse(vp.frz);
     try { drawEntitiesInView(); } catch (err) { /* one bad viewport must not take the page down */ }
-    finally { annoPop(); }
+    finally { annoPop(); vpFrzUse(wasFrz); }
     if (!live) Object.assign(V, keep);
     ctx.restore();
     /* the frame is screen furniture: it marks the window while you work and is
