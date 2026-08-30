@@ -73,6 +73,77 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     close(r.area, 16 - 4, 0.001, 'four metres of void off sixteen');
   });
 
+  group('a hatch pattern somebody else chose');
+
+  /* The reader forced pattern:'line' and threw the name away; the writer
+     emitted ANSI31 regardless. So a consultant's drawing came back with its
+     brickwork, concrete and insulation all rewritten to the same diagonal
+     hatch — we were editing their drawing without being asked. Rendering the
+     pattern is a separate job; keeping the name is not optional. */
+  t('an imported pattern keeps its name, even one we cannot draw yet', () => {
+    const r = R(`${SETUP}
+      const NL = String.fromCharCode(10);
+      const dxf = ['0','SECTION','2','ENTITIES',
+        '0','HATCH','8','0','2','AR-CONC','70','0','71','0',
+        '91','1','92','3','72','0','73','1','93','4',
+        '10','0','20','0','10','1000','20','0',
+        '10','1000','20','1000','10','0','20','1000',
+        '97','0','75','0','76','1','52','0','41','1','空','',
+        '0','ENDSEC','0','EOF'].filter(x => x !== '空' && x !== '').join(NL);
+      importDXF(dxf);
+      const h = [...DOC.ents.values()].find(e => e.t === 'hatch');
+      return { found: !!h, pattern: h && h.pattern };`);
+    eq(r.found, true, 'the hatch imported');
+    eq(r.pattern, 'AR-CONC', 'carrying the pattern that was actually in the file');
+  });
+
+  t('and writes that name back out, not a substitute', () => {
+    const r = R(`${SETUP}
+      begin();
+      addEnt({t:'hatch', loops:[[[0,0],[1000,0],[1000,1000],[0,1000]]],
+              pattern:'AR-CONC', sp:150, hatchAng:0, layer:'0'});
+      commit('h');
+      const dxf = exportDXF();
+      const NL = String.fromCharCode(10);
+      const names = dxf.split(NL).map(l => l.trim());
+      return { hasName: names.indexOf('AR-CONC') >= 0,
+               hasSubstitute: names.indexOf('ANSI31') >= 0 };`);
+    eq(r.hasName, true, 'the name we were given is the name we write');
+    eq(r.hasSubstitute, false, 'and nothing was swapped in for it');
+  });
+
+  t('the round trip is stable, so nobody else’s drawing is rewritten', () => {
+    const r = R(`${SETUP}
+      begin();
+      for (const p of ['AR-CONC', 'AR-BRSTD', 'INSUL', 'line', 'cross'])
+        addEnt({t:'hatch', loops:[[[0,0],[1000,0],[1000,1000],[0,1000]]],
+                pattern:p, sp:150, hatchAng:0, layer:'0'});
+      addEnt({t:'hatch', loops:[[[0,0],[900,0],[900,900],[0,900]]],
+              solid:true, pattern:'solid', layer:'0'});
+      commit('h');
+      const before = [...DOC.ents.values()].filter(e => e.t === 'hatch').map(e => e.pattern);
+      const dxf = exportDXF();
+      resetDoc();
+      importDXF(dxf);
+      const after = [...DOC.ents.values()].filter(e => e.t === 'hatch').map(e => e.pattern);
+      return { before: before.join(','), after: after.join(',') };`);
+    eq(r.after, r.before,
+      'every pattern came back as itself: ' + r.after + ' vs ' + r.before);
+  });
+
+  t('a solid fill is still a solid fill', () => {
+    const r = R(`${SETUP}
+      begin();
+      addEnt({t:'hatch', loops:[[[0,0],[1000,0],[1000,1000],[0,1000]]],
+              solid:true, pattern:'solid', layer:'0'});
+      commit('h');
+      const dxf = exportDXF();
+      resetDoc(); importDXF(dxf);
+      const h = [...DOC.ents.values()].find(e => e.t === 'hatch');
+      return { solid: h && !!h.solid, pattern: h && h.pattern };`);
+    eq(r.solid, true, 'solidity survives');
+  });
+
   group('a room, on the plan and in the schedule');
 
   /* A room is derived at draw time from the arrangement of the wall faces, so
@@ -163,6 +234,60 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.during, r.before, 'mid-drag it keeps the outline it had, rather than re-tracing 60 times a second');
     eq(r.after, r.fresh, 'and on release it agrees with the schedule again: ' + r.after);
     ok(/19\.1/.test(r.after), 'having followed the wall, got ' + r.after);
+  });
+
+  group('a schedule that is out of date is worse than no schedule');
+
+  /* SCHEDULEUPDATE filtered kind === 'rooms', so a door or window schedule
+     placed on a drawing was never refreshed by anything. Draw one more door
+     and the table on the sheet is silently wrong — which is the exact failure
+     a schedule exists to prevent. */
+  const SCH = `
+    resetDoc(); ensureLayer('A-WALL');
+    const plan = () => { begin();
+      const w = addEnt({t:'wall', a:[0,0], b:[16000,0], wt:'cav300', layer:'A-WALL'});
+      addEnt({t:'door', host:w.id, pos:2000, dt:'sgl900', layer:'A-DOOR'});
+      addEnt({t:'window', host:w.id, pos:6000, w:1200, h:1200, sill:900, layer:'A-GLAZ'});
+      addEnt({t:'room', pts:[[0,0],[8000,0],[8000,6000],[0,6000]], name:'HALL', layer:'A-AREA'});
+      commit('p'); markOpenings('door'); markOpenings('window'); return w; };
+    const place = (cmd) => { cancelCmd(); startCmd(cmd); cmdPoint([20000, 6000]); endCmd(true); };
+    const rowsOf = (kind) => { const t = [...DOC.ents.values()].find(e => e.t === 'table' && e.kind === kind);
+      return t ? t.rows.length : 0; };
+  `;
+
+  t('every schedule refreshes, not only the room one', () => {
+    const r = R(`${SCH}
+      const w = plan();
+      place('doorschedule'); place('windowschedule'); place('schedule');
+      const before = { doors: rowsOf('doors'), windows: rowsOf('windows'), rooms: rowsOf('rooms') };
+      begin();
+      addEnt({t:'door', host:w.id, pos:10000, dt:'dbl1500', layer:'A-DOOR'});
+      addEnt({t:'window', host:w.id, pos:13000, w:1800, h:1500, sill:750, layer:'A-GLAZ'});
+      addEnt({t:'room', pts:[[9000,0],[16000,0],[16000,6000],[9000,6000]], name:'STORE', layer:'A-AREA'});
+      commit('more');
+      markOpenings('door'); markOpenings('window');
+      scheduleUpdate();
+      return { before, after: { doors: rowsOf('doors'), windows: rowsOf('windows'), rooms: rowsOf('rooms') } };`);
+    eq(r.before.doors, 2, 'one door to start');
+    eq(r.after.doors, 3, 'and two after, got ' + r.after.doors);
+    eq(r.after.windows, 3, 'the window schedule too, got ' + r.after.windows);
+    ok(r.after.rooms > r.before.rooms, 'and the room one still works');
+  });
+
+  t('it says what it did rather than refusing when only doors are placed', () => {
+    const r = R(`${SCH}
+      plan();
+      place('doorschedule');
+      const said = [];
+      const real = cliPrint, realEcho = echo;
+      globalThis.cliPrint = m => said.push(String(m));
+      globalThis.echo = m => said.push(String(m));
+      scheduleUpdate();
+      globalThis.cliPrint = real; globalThis.echo = realEcho;
+      return { said: said.join(' | ') };`);
+    ok(!/No room schedule/.test(r.said),
+      'it does not claim there is no schedule when there is one: ' + r.said);
+    ok(/1 schedule|Updated/.test(r.said), 'it reports what it updated: ' + r.said);
   });
 
   group('what a typed dimension means');

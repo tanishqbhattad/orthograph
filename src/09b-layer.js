@@ -923,19 +923,34 @@ defc('schedule', {
 });
 /** Re-read a schedule from the drawing. It is not a copy, so this is the whole
     of "keeping it up to date" — move a wall, run it again, the number changes. */
-defm('SCHEDULEUPDATE', () => {
-  const tabs = [...DOC.ents.values()].filter(e => e.t === 'table' && e.kind === 'rooms');
-  if (!tabs.length) return echo('No room schedule in this drawing');
+/* A placed schedule is a snapshot, so it has to be re-taken. This filtered
+   kind === 'rooms', which meant a door or window schedule on a drawing was
+   never refreshed by anything at all: draw one more door and the table was
+   silently wrong, which is the exact failure a schedule exists to prevent.
+
+   Keyed off what each kind is built from, so adding a schedule type means
+   adding a line here rather than remembering to. */
+const SCHEDULE_ROWS = {
+  rooms: (tb) => roomScheduleRows(tb.lvl),
+  doors: (tb) => openingScheduleRows('door', tb.lvl),
+  windows: (tb) => openingScheduleRows('window', tb.lvl),
+};
+function scheduleUpdate() {
+  const tabs = [...DOC.ents.values()]
+    .filter(e => e.t === 'table' && SCHEDULE_ROWS[e.kind]);
+  if (!tabs.length) { echo('No schedule in this drawing'); return 0; }
   begin();
   for (const tb of tabs) {
     mut(tb);
-    tb.rows = roomScheduleRows(tb.lvl);
+    tb.rows = SCHEDULE_ROWS[tb.kind](tb);
     tb.colW = fitColumns(tb.rows, tb.h || DOC.textH);
   }
   commit('Update schedule');
-  cliPrint('Updated ' + tabs.length + ' schedule' + (tabs.length === 1 ? '' : 's'));
-  draw();
-}, { group: 'annotate' });
+  cliPrint('Updated ' + tabs.length + ' schedule' + (tabs.length === 1 ? '' : 's') + '.');
+  if (typeof draw === 'function') draw();
+  return tabs.length;
+}
+defm('SCHEDULEUPDATE', () => { scheduleUpdate(); }, { group: 'annotate' });
 
 /* ============================================================
    The system variables the newer features answer to

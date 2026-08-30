@@ -230,7 +230,19 @@ function dxfToEnts(res, body, layerOverride, depth) {
       }
       case 'HATCH': {
         const loops = hatchLoops(o);
-        if (loops.length) e = { t: 'hatch', loops, solid: GI(o, 70, 0) === 1, pattern: 'line', sp: GN(o, 41, 1) * 100 || 100, hatchAng: GN(o, 52, 45) };
+        if (loops.length) {
+          /* Group 2 is the pattern name. It used to be discarded and replaced
+             with 'line', while the writer emitted ANSI31 regardless — so a
+             consultant's brickwork, concrete and insulation all came back as
+             the same diagonal hatch. We were editing their drawing without
+             being asked. Rendering an unknown pattern is a separate job; not
+             destroying its name is not optional. */
+          const solid = GI(o, 70, 0) === 1;
+          const name = String(G(o, 2, '') || '').trim();
+          e = { t: 'hatch', loops, solid,
+                pattern: solid ? 'solid' : hatchPatIn(name),
+                sp: GN(o, 41, 1) * 100 || 100, hatchAng: GN(o, 52, 45) };
+        }
         break;
       }
       case 'INSERT': {
@@ -399,6 +411,26 @@ function num(v) { return (Math.round(v * 1e9) / 1e9).toString(); }
     rather than adding an entity type anywhere in the program and silently
     losing it. */
 /** the bulges of an LWPOLYLINE against its vertices, or null if none curve */
+/** the inverse of hatchPatName: ANSI31 and ANSI37 are simply what our own two
+    built-ins are called in a DXF, so reading them back as themselves keeps the
+    round trip an identity instead of renaming our own patterns. */
+function hatchPatIn(name) {
+  const n = String(name || '').trim().toUpperCase();
+  if (!n) return 'line';
+  if (n === 'ANSI31') return 'line';
+  if (n === 'ANSI37') return 'cross';
+  if (n === 'SOLID') return 'solid';
+  return name.trim();
+}
+/** what to write in group 2 for a hatch */
+function hatchPatName(e) {
+  if (e.solid) return 'SOLID';
+  const p = String(e.pattern || 'line');
+  if (p === 'line') return 'ANSI31';
+  if (p === 'cross') return 'ANSI37';
+  if (p === 'solid') return 'SOLID';
+  return p.toUpperCase();
+}
 function dxfBulges(o, n) {
   if (!o.B) return null;
   const out = new Array(n).fill(0);
@@ -730,7 +762,10 @@ class DxfWriter {
     this.head(o, e, 'HATCH', owner, 'AcDbHatch');
     P(o, 10, 0); P(o, 20, 0); P(o, 30, 0);
     P(o, 210, 0); P(o, 220, 0); P(o, 230, 1);
-    P(o, 2, e.solid ? 'SOLID' : (e.pattern === 'cross' ? 'ANSI37' : 'ANSI31'));
+    /* The name we were given is the name we write. 'line' and 'cross' are our
+       own two built-ins and map to their DXF equivalents; anything else came
+       from a file and goes back out untouched. */
+    P(o, 2, hatchPatName(e));
     P(o, 70, e.solid ? 1 : 0);
     P(o, 71, 0);
     P(o, 91, loops.length);
