@@ -5558,6 +5558,15 @@ function drawShapes(e, col, mode) {
       if (role === 'pocheGhost') a = alphaMul(a, GHOST_POCHE_MUL);
       /* a band that says what it is made of is drawn with that weight */
       if (s.mat) a = alphaMul(a, pocheTone(s.mat));
+      /* And with the material's own hatch over the top of it, which is the
+         difference between a section that reads as brick, cavity, block and
+         plaster and one that reads as four shades of grey. The tone stays
+         underneath: it still separates the layers when the pattern is too fine
+         to resolve at the zoom you are at. */
+      if (s.mat && VS.wallpat !== 0 && role === 'poche') {
+        const pat = materialPattern(s.mat);
+        if (pat) hatchBands(s.pts, pat, col, e);
+      }
       ctx.beginPath(); pathPts(s.pts, true);
       /* a shape may carry voids — a slab with a stairwell in it. Even-odd so
          the inner rings subtract rather than paint over. */
@@ -5693,6 +5702,121 @@ function drawEntHL(e, mode) {
   drawEnt(e, mode);
 }
 /* ---- hatch ---- */
+/* ============================================================
+   Hatch patterns
+
+   A pattern is N families of parallel lines. Each family is an angle, an
+   origin, the perpendicular spacing between its lines, the shift along the
+   line from one to the next — which is what makes a running bond stagger —
+   and an optional dash pattern. Everything below is expressed in multiples of
+   the hatch's own spacing, so one definition serves every scale.
+
+   These definitions are ours. The names are the industry ones so that a DXF
+   round trip means something to whoever opens it, but the numbers were
+   authored here: the .pat libraries shipped with other CAD are someone else's
+   work under someone else's licence.
+
+     a     angle in degrees, added to the hatch's own rotation
+     dy    spacing between the lines of this family
+     dx    shift along the line between consecutive lines
+     y0    offset of the whole family across its lines
+     dash  [on, off, ...] in the same units; absent means solid
+   ============================================================ */
+const HATCH_PATTERNS = {
+  /* the two we have always had, under their real names */
+  'line':     [{ a: 45, dy: 1 }],
+  'cross':    [{ a: 45, dy: 1 }, { a: 135, dy: 1 }],
+  'ANSI31':   [{ a: 45, dy: 1 }],
+  'ANSI32':   [{ a: 45, dy: 1 }, { a: 45, dy: 1, y0: 0.3 }],
+  'ANSI37':   [{ a: 45, dy: 1 }, { a: 135, dy: 1 }],
+
+  /* masonry: courses, with head joints staggered half a brick each course */
+  'AR-BRSTD': [{ a: 0, dy: 1 },
+               { a: 90, dy: 2, dx: 1, dash: [1, 1] }],
+  'AR-B816':  [{ a: 0, dy: 2 },
+               { a: 90, dy: 4, dx: 2, dash: [2, 2] }],
+  'AR-HBONE': [{ a: 45, dy: 1, dash: [3, 1] },
+               { a: 135, dy: 1, dx: 1.5, dash: [3, 1] }],
+
+  /* concrete: aggregate suggested by short strokes at three angles, which is
+     what the drawn convention actually is */
+  'AR-CONC':  [{ a: 50, dy: 1.6, dash: [0.7, 2.3] },
+               { a: 355, dy: 2.1, dx: 0.8, dash: [0.5, 3.1] },
+               { a: 100, dy: 2.6, dx: 1.3, dash: [0.4, 2.7] }],
+  'AR-SAND':  [{ a: 30, dy: 0.9, dash: [0.1, 1.7] },
+               { a: 120, dy: 1.1, dx: 0.5, dash: [0.1, 1.9] }],
+  'PLAST':    [{ a: 20, dy: 0.7, dash: [0.15, 1.2] },
+               { a: 110, dy: 0.8, dx: 0.4, dash: [0.15, 1.4] }],
+
+  /* insulation: the batting loop, approximated as offset dashes between two
+     containing lines, which is how it reads at plan scale anyway */
+  'INSUL':    [{ a: 0, dy: 2 },
+               { a: 0, dy: 2, y0: 1.2 },
+               { a: 90, dy: 0.9, dy0: 0, dash: [0.8, 1.2] }],
+
+  'EARTH':    [{ a: 45, dy: 1.2, dash: [2, 1.5] },
+               { a: 45, dy: 1.2, y0: 0.5, dash: [1, 2.5] }],
+  'GRAVEL':   [{ a: 15, dy: 1.4, dash: [0.3, 2.2] },
+               { a: 75, dy: 1.6, dx: 0.7, dash: [0.3, 2.6] }],
+  'STEEL':    [{ a: 45, dy: 1.6 },
+               { a: 45, dy: 1.6, y0: 0.35 }],
+  'TIMBER':   [{ a: 0, dy: 1 },
+               { a: 0, dy: 1, y0: 0.25, dash: [4, 3] }],
+  'NET':      [{ a: 0, dy: 1 }, { a: 90, dy: 1 }],
+  'TRIANG':   [{ a: 0, dy: 1.7 }, { a: 60, dy: 1.7 }, { a: 120, dy: 1.7 }],
+  'HONEY':    [{ a: 0, dy: 1.7, dash: [1, 2] },
+               { a: 60, dy: 1.7, dash: [1, 2] },
+               { a: 120, dy: 1.7, dash: [1, 2] }],
+  'DOTS':     [{ a: 0, dy: 1, dash: [0.05, 1.95] },
+               { a: 90, dy: 1, dash: [0.05, 1.95] }],
+};
+/** every pattern by name, for a dialog to offer */
+function hatchPatterns() { return Object.keys(HATCH_PATTERNS); }
+/** the families of a pattern; an unknown name still draws as plain lines,
+    because a hatch we cannot name is still a hatch somebody put there */
+function hatchPattern(name) {
+  return HATCH_PATTERNS[String(name || 'line')] ||
+         HATCH_PATTERNS[String(name || '').toUpperCase()] ||
+         HATCH_PATTERNS.line;
+}
+/* What a wall layer's material is drawn as. This is the whole point of the
+   exercise: a section through a cavity wall should read as brick, cavity,
+   block and plaster rather than as four shades of grey. A material nobody has
+   mapped gets no pattern invented for it. */
+const MATERIAL_PATTERN = {
+  brick: 'AR-BRSTD',
+  block: 'AR-B816',
+  concrete: 'AR-CONC',
+  structural: 'AR-CONC',
+  insulation: 'INSUL',
+  cavity: null,
+  finish: 'PLAST',
+  timber: 'TIMBER',
+  steel: 'STEEL',
+  earth: 'EARTH',
+};
+function materialPattern(mat) {
+  if (!mat) return null;
+  const p = MATERIAL_PATTERN[String(mat).toLowerCase()];
+  return p || null;
+}
+
+/** Draw a material pattern inside one closed band — a wall layer, in the
+    wall's own space. Shares the family generator with drawHatch by building a
+    hatch-shaped record and handing it over, so a pattern cannot look one way
+    in a hatch and another in a wall. */
+function hatchBands(pts, pat, col, e) {
+  if (!pts || pts.length < 3) return;
+  const sp = (typeof wallPatSpacing === 'function') ? wallPatSpacing(e) : 120;
+  drawHatch({ t: 'hatch', loops: [pts], pattern: pat, sp, hatchAng: 0 }, col, null);
+}
+/** How big a wall's material pattern is drawn. Tied to the wall's thickness
+    rather than fixed, so a 300 cavity and a 100 partition both read. */
+function wallPatSpacing(e) {
+  const t = (e && e.t === 'wall' && typeof wallT === 'function') ? wallT(e) : 200;
+  return Math.max(t / 3, 40);
+}
+
 function drawHatch(e, col, mode) {
   const loops = e.loops || [];
   if (!loops.length) return;
@@ -5725,14 +5849,33 @@ function drawHatch(e, col, mode) {
       const diag = hyp(x1 - x0, y1 - y0) + sp * 2;
       const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
       if (isFinite(diag) && diag > 0 && diag / sp < 6000) {
-        ctx.translate(cx, cy);
-        ctx.rotate(-(a + V.rot));                 /* hatch angle is a world angle */
         ctx.strokeStyle = col + (S ? 'ff' : 'aa');
-        ctx.lineWidth = HAIR; ctx.setLineDash(DASH_SOLID);
-        ctx.beginPath();
-        for (let y = -diag / 2; y <= diag / 2; y += sp) { ctx.moveTo(-diag / 2, y); ctx.lineTo(diag / 2, y); }
-        if (e.pattern === 'cross') for (let x = -diag / 2; x <= diag / 2; x += sp) { ctx.moveTo(x, -diag / 2); ctx.lineTo(x, diag / 2); }
-        ctx.stroke();
+        ctx.lineWidth = HAIR;
+        /* One rotate-and-stroke pass per family. Everything a family holds is
+           a multiple of the hatch's own spacing, so a definition drawn at 1:50
+           and at 1:200 is the same pattern at two sizes. */
+        for (const f of hatchPattern(e.pattern)) {
+          const gap = Math.max((f.dy || 1) * sp, 2);
+          if (diag / gap > 4000) continue;         /* denser than it is worth drawing */
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(-(a + rad(f.a || 0) + V.rot));
+          ctx.setLineDash(f.dash ? f.dash.map(d => Math.max(d * sp, 0.5)) : DASH_SOLID);
+          const shift = (f.dx || 0) * sp;
+          const off = (f.y0 || 0) * sp;
+          let i = 0;
+          ctx.beginPath();
+          for (let y = -diag / 2 + off; y <= diag / 2; y += gap, i++) {
+            /* the shift along the line is what staggers a running bond, and
+               it is expressed by phasing the dash rather than moving the ends */
+            if (shift) { ctx.stroke(); ctx.beginPath(); ctx.lineDashOffset = -i * shift; }
+            ctx.moveTo(-diag / 2, y); ctx.lineTo(diag / 2, y);
+          }
+          ctx.stroke();
+          ctx.lineDashOffset = 0;
+          ctx.restore();
+        }
+        ctx.setLineDash(DASH_SOLID);
       }
     }
     ctx.restore();
@@ -12213,7 +12356,9 @@ function hatchRings(loops) {
   if (!loops.length) return echo('Select closed shapes to hatch');
   modal(`<h3>Hatch</h3>
     <div class="row"><label>Pattern</label><select class="f" id="hp">
-      <option value="line">Diagonal lines</option><option value="cross">Cross hatch</option><option value="solid">Solid fill</option></select></div>
+      <option value="solid">Solid fill</option>` +
+      hatchPatterns().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('') + `
+      </select></div>
     <div class="row"><label>Spacing</label><input class="f" id="hs" value="${+(200 / U[DOC.units]).toFixed(4)}"></div>
     <div class="row"><label>Angle °</label><input class="f" id="ha" value="45"></div>`, () => {
     begin();
@@ -14102,6 +14247,11 @@ defvar('CANNOSCALE', {
     if (typeof shapeCacheClear === 'function') shapeCacheClear();
     draw();
   },
+});
+defvar('WALLPAT', {
+  desc: 'Hatch a cut wall by what each of its layers is made of',
+  get: () => (VS.wallpat === 0 ? 0 : 1),
+  set(v) { VS.wallpat = v ? 1 : 0; if (typeof shapeCacheClear === 'function') shapeCacheClear(); draw(); },
 });
 defvar('GRIDTONE', {
   desc: 'How strongly the grid reads against the background, 0 to 100',

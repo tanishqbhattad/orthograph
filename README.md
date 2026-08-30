@@ -4,7 +4,7 @@
 architecture layer on top. No build step required to *use* it — `orthograph.html` is a
 single self-contained file. Open it in any browser.
 
-111 commands, 93 acad.pgp aliases, 775 tests.
+111 commands, 93 acad.pgp aliases, 786 tests.
 
 ## Layout
 
@@ -63,7 +63,7 @@ node tools/serve.js            # → http://127.0.0.1:8017/
 
 ```
 node build.js                  # → orthograph.html
-node test/run.js               # 775 tests
+node test/run.js               # 786 tests
 node test/run.js wall          # run a subset by name
 node tools/verify.js           # behavioural checks + drag latency
 
@@ -127,8 +127,10 @@ Select anything and the right-hand panel edits its parameters live.
 
 Walls carry a compound structure: a type is a stack of layers with thicknesses, and the
 layer boundaries are drawn, so a cavity wall reads as a cavity wall rather than as two
-lines. Each layer is poched at its own weight — brick dense, insulation nearly open — so
-the fill agrees with the lines drawn across it.
+lines. Each layer is hatched with its own material pattern — brick as running bond,
+blockwork as 8x16, insulation as batting, plaster as stipple — over a tone that keeps the
+layers separable when the pattern is too fine to resolve at the zoom you are at.
+`WALLPAT 0` returns the plain fill.
 
 **Fields.** Text can read the drawing instead of being typed into it: `%<drawing>%`,
 `%<sheet>%`, `%<scale>%`, `%<date>%`, and `%<area:id>%`, `%<length:id>%` or
@@ -270,8 +272,9 @@ noticed months later.
   size, rather than by a PDF writer carried inside the app.
 - Splines are drawn through fit points (Catmull-Rom) and exported as clamped B-splines;
   imported NURBS are evaluated properly but stored tessellated.
-- Poche weight varies by material but is not hatched: there are no material
-  hatch patterns, so a printed section distinguishes layers by tone alone.
+- The hatch pattern library is ours: eighteen definitions authored for this file
+  under the industry names, not the .pat libraries shipped with other CAD. They
+  are approximations of the drawn conventions rather than reproductions.
 - Stairs in section are projected onto the section line rather than sliced by it,
   so a flight is drawn as what you would see rather than as a true cut.
 - Grid bubbles are labelled and can be turned off per end. Storey datums are drawn

@@ -1039,7 +1039,9 @@ function hatchRings(loops) {
   if (!loops.length) return echo('Select closed shapes to hatch');
   modal(`<h3>Hatch</h3>
     <div class="row"><label>Pattern</label><select class="f" id="hp">
-      <option value="line">Diagonal lines</option><option value="cross">Cross hatch</option><option value="solid">Solid fill</option></select></div>
+      <option value="solid">Solid fill</option>` +
+      hatchPatterns().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('') + `
+      </select></div>
     <div class="row"><label>Spacing</label><input class="f" id="hs" value="${+(200 / U[DOC.units]).toFixed(4)}"></div>
     <div class="row"><label>Angle °</label><input class="f" id="ha" value="45"></div>`, () => {
     begin();

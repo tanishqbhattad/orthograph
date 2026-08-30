@@ -995,6 +995,11 @@ defvar('CANNOSCALE', {
     draw();
   },
 });
+defvar('WALLPAT', {
+  desc: 'Hatch a cut wall by what each of its layers is made of',
+  get: () => (VS.wallpat === 0 ? 0 : 1),
+  set(v) { VS.wallpat = v ? 1 : 0; if (typeof shapeCacheClear === 'function') shapeCacheClear(); draw(); },
+});
 defvar('GRIDTONE', {
   desc: 'How strongly the grid reads against the background, 0 to 100',
   get: () => gridTone(),
