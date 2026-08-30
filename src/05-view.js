@@ -27,6 +27,7 @@ const VS = {
   ucsOrigin: true,        /* UCSICON Origin: sit on 0,0 when it is on screen   */
   vtDuration: 260,        /* VTDURATION — animated view transitions, ms        */
   coords: 1,              /* COORDS — 0 off, 1 absolute, 2 relative            */
+  plotPrev: false,        /* PLOTPREVIEW — draw a sheet the way it will plot   */
 };
 const CO = {
   /* AutoCAD's dark model space, RGB 33/40/48 — light enough that a 1px grey
@@ -561,7 +562,15 @@ const fvis = e => {
   if (VPFRZ && VPFRZ.indexOf(e.layer || '0') >= 0) return false;
   return onCurLevel(e) || isUnderlay(e);
 };
-const fcol = e => inkFor(e.color || flay(e.layer).color);
+/* While a sheet is being drawn in plot preview, the colours are the ones the
+   plotter will lay down rather than the ones the screen usually shows. It is
+   set for the length of a viewport's paint, like the freeze list beside it. */
+let PLOTPREV = false;
+let PLOTSCR = false;            /* inside one screened object, so it is not screened twice */
+const fcol = e => {
+  const c = e.color || flay(e.layer).color;
+  return PLOTPREV ? plotColor(c === '#ffffff' || c === '#d7dee8' ? '#111111' : c) : inkFor(c);
+};
 const flt = e => e.lt || flay(e.layer).lt || 'solid';
 const flw = e => (e.lw != null ? e.lw : flay(e.layer).lw);
 
@@ -1234,6 +1243,25 @@ function drawEnt(e, mode) {
      underlay: you trace over it and you can always tell which storey you are
      looking at. Drawing it at full strength — as this did until it was looked
      at — puts two plans on top of each other and tells you nothing. */
+  /* Plot preview: an object screened to 40% is drawn with 40% of the ink,
+     which is the whole point of screening and the only way to see it before
+     the paper does. Nothing here touches model space — screening is about
+     paper, and a plan that quietly faded would be a different bug. */
+  if (PLOTPREV && !PLOTSCR) {
+    const k = plotScreen(e);
+    if (k <= 0) return;
+    if (k < 1) {
+      /* PLOTSCR stops the re-entry from screening again: without it this call
+         lands back here with the same object and recurses until the stack
+         gives out, inside the try that keeps one bad viewport from taking the
+         page down — so it would have shown up as a blank window and nothing
+         else */
+      const a0 = ctx.globalAlpha;
+      ctx.globalAlpha = a0 * k; PLOTSCR = true;
+      try { drawEnt(e, mode); } finally { ctx.globalAlpha = a0; PLOTSCR = false; }
+      return;
+    }
+  }
   if (!mode && typeof isUnderlay === 'function' && isUnderlay(e)) {
     const a0 = ctx.globalAlpha;
     ctx.globalAlpha = a0 * UNDERLAY_A;
@@ -2011,8 +2039,10 @@ function drawSheet(sh) {
     annoPush(vp.scale);
     /* the layers this window has frozen, for the length of this window's paint */
     const wasFrz = vpFrzUse(vp.frz);
+    const wasPrev = PLOTPREV;
+    PLOTPREV = !!VS.plotPrev;
     try { drawEntitiesInView(); } catch (err) { /* one bad viewport must not take the page down */ }
-    finally { annoPop(); vpFrzUse(wasFrz); }
+    finally { annoPop(); vpFrzUse(wasFrz); PLOTPREV = wasPrev; }
     if (!live) Object.assign(V, keep);
     ctx.restore();
     /* the frame is screen furniture: it marks the window while you work and is

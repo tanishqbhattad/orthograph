@@ -9,21 +9,71 @@
    by the drawing scale, and a lineweight is a *plot* width — 0.35mm of ink on
    the paper whether the drawing is 1:50 or 1:500 — so the widths are divided
    by the scale here in order to survive being multiplied by it there. */
+/* ============================================================
+   Plot styles
+   ------------------------------------------------------------
+   The last thing between a drawing and a plotter, and every office makes the
+   same three decisions. How much ink a layer gets — a survey underlay or an
+   existing-to-be-demolished layer plots at 40% so the new work reads over it,
+   and without screening the only way to make something faint is to make it a
+   different colour, which is a lie about what it is. What colour the plot is —
+   most drawings go out black on white however colourful the screen was. And
+   being able to see it before the paper does.
+
+   AutoCAD keeps this in a .ctb: someone else's file format carrying someone
+   else's tables. This is ours — three numbers on a layer, one word on the
+   document — and it does the same job.
+   ============================================================ */
+const PLOT_STYLES = ['color', 'mono', 'grey'];
+/** the document's plot colour policy */
+function plotStyleName() {
+  const s = String(DOC.plotStyle || 'color').toLowerCase();
+  return PLOT_STYLES.indexOf(s) >= 0 ? s : 'color';
+}
+/** How much ink, 0..1. An object's own screening beats its layer's, the way
+    an object's own colour does. Anything that is not a sane percentage is
+    ignored rather than plotted: a NaN reaching a plotter is a wasted sheet. */
+function plotScreen(e) {
+  const own = e && e.screen;
+  const lay = e ? (layer(e.layer) || {}).screen : null;
+  const v = (typeof own === 'number' && isFinite(own)) ? own
+          : (typeof lay === 'number' && isFinite(lay)) ? lay : 100;
+  return clamp(v, 0, 100) / 100;
+}
+/** the colour this goes on paper as, under the document's policy */
+function plotColor(hex) {
+  const c = String(hex || '#111111');
+  const st = plotStyleName();
+  if (st === 'color') return c;
+  if (st === 'mono') return '#111111';
+  /* grey: the perceived luminance, so two colours that read differently on
+     screen still read differently on the paper */
+  const n = parseInt(c.replace('#', ''), 16);
+  if (!isFinite(n)) return '#111111';
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const y = Math.round(clamp(0.2126 * r + 0.7152 * g + 0.0722 * b, 0, 235));
+  const h = y.toString(16).padStart(2, '0');
+  return '#' + h + h + h;
+}
 function svgEntityBody(lwMul) {
   const K = lwMul || 1;
   const out = [];
   const T2 = p => `${(+p[0].toFixed(4))},${(+(-p[1]).toFixed(4))}`;
   const dashMap = { dashed: '4,2.5', hidden: '2.5,1.8', center: '8,2,2,2', dashdot: '6,2,1,2' };
-  const ink = c => (c.toLowerCase() === '#ffffff' || c.toLowerCase() === '#d7dee8' || c.toLowerCase() === '#e8e8e8') ? '#111111' : c;
+  const ink = c => plotColor((c.toLowerCase() === '#ffffff' || c.toLowerCase() === '#d7dee8' || c.toLowerCase() === '#e8e8e8') ? '#111111' : c);
+  /* the screening of whatever is being emitted right now, the same way the
+     viewport freeze is set for the length of one window's paint */
+  let SCR = 1;
+  const opac = () => SCR < 1 ? ` stroke-opacity="${+SCR.toFixed(3)}"` : '';
   const strokeOf = (col, lw, lt) =>
     `stroke="${col}" stroke-width="${Math.max(lw, 0.13)}" fill="none" stroke-linecap="round" stroke-linejoin="round"` +
-    (dashMap[lt] ? ` stroke-dasharray="${dashMap[lt]}"` : '');
+    (dashMap[lt] ? ` stroke-dasharray="${dashMap[lt]}"` : '') + opac();
 
   const emitShape = (s, col, lw, baseLt) => {
     const lt = s.lt || baseLt;
     const st = strokeOf(col, lw * (ROLE_W[s.role] || 1), lt);
     if (s.text != null) {
-      out.push(`<text x="${s.p[0]}" y="${-s.p[1]}" font-family="Inter,Helvetica,sans-serif" font-size="${s.h}" fill="${col}" text-anchor="${s.anchor === 'c' ? 'middle' : s.anchor === 'r' ? 'end' : 'start'}" transform="rotate(${-deg(s.rot || 0)} ${s.p[0]} ${-s.p[1]})">${esc(s.text)}</text>`);
+      out.push(`<text x="${s.p[0]}" y="${-s.p[1]}" font-family="Inter,Helvetica,sans-serif" font-size="${s.h}" fill="${col}"${SCR < 1 ? ` fill-opacity="${+SCR.toFixed(3)}"` : ''} text-anchor="${s.anchor === 'c' ? 'middle' : s.anchor === 'r' ? 'end' : 'start'}" transform="rotate(${-deg(s.rot || 0)} ${s.p[0]} ${-s.p[1]})">${esc(s.text)}</text>`);
     } else if (s.pts) {
       if (s.pts.length < 2) return;
       out.push(`<path d="M${s.pts.map(T2).join('L')}${s.closed ? 'Z' : ''}" ${st}${s.role === 'arrowhead' ? ` fill="${col}"` : ''}/>`);
@@ -37,6 +87,10 @@ function svgEntityBody(lwMul) {
   const ordered = [...DOC.ents.values()].filter(plottable);
   ordered.sort((a, x) => ((a.t === 'hatch' || a.t === 'room') ? 0 : 1) - ((x.t === 'hatch' || x.t === 'room') ? 0 : 1));
   for (const e of ordered) {
+    SCR = plotScreen(e);
+    /* 0% is no ink at all, which is what a plotter does with it and what
+       anyone who typed 0 meant */
+    if (SCR <= 0) continue;
     const col = ink(entColor(e));
     const lw = Math.max(entLw(e), 0.13) * K;
     const lt = entLt(e);
@@ -47,7 +101,7 @@ function svgEntityBody(lwMul) {
          hole was there to protect. The canvas has always clipped evenodd; the
          export did not, so the screen and the paper disagreed. */
       const d = (e.loops || []).map(L => 'M' + L.map(T2).join('L') + 'Z').join(' ');
-      if (d) out.push(`<path d="${d}" fill-rule="evenodd" fill="${e.solid ? col + '55' : 'none'}" stroke="${col}" stroke-width="${lw}"/>`);
+      if (d) out.push(`<path d="${d}" fill-rule="evenodd" fill="${e.solid ? col + '55' : 'none'}" stroke="${col}" stroke-width="${lw}"${SCR < 1 ? ` stroke-opacity="${+SCR.toFixed(3)}" fill-opacity="${+SCR.toFixed(3)}"` : ''}/>`);
       continue;
     }
     if (e.t === 'dim') {

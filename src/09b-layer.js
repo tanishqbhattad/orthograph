@@ -1071,6 +1071,58 @@ defvar('DIMTFAC', {
   type: 'real', desc: 'Tolerance text height, as a fraction of the dimension text',
   get: () => dimVarGet('tolH', 0.62), set(v) { dimVar('tolH', v > 0 ? v : 0.62); },
 });
+/* PLOTSTYLE: the policy in a word, and screening a layer without hunting for
+   a dialog. Typed the way the rest of this program is typed. */
+defc('plotstyle', {
+  key: 'plotstyle', group: 'view',
+  hint: '<em>Color</em> · <em>Mono</em> · <em>Grey</em> · <em>S</em> to screen a layer',
+  init(c) {
+    c.data = { step: 'mode' };
+    cliPrint('Plotting in ' + plotStyleName() + '. Colour, Mono, Grey, or S to screen a layer.');
+  },
+  text(c, s) {
+    const raw = String(s).trim(), k = raw.toLowerCase();
+    if (c.data.step === 'layer') {
+      const l = (DOC.layers || []).find(x => x.name.toLowerCase() === k);
+      if (!l) { cliPrint('There is no layer called ' + raw + '.', 'err'); return true; }
+      c.data.lay = l; c.data.step = 'pct';
+      cliPrint('Screening for ' + l.name + ', 0 to 100?');
+      return true;
+    }
+    if (c.data.step === 'pct') {
+      const v = parseFloat(raw);
+      if (!isFinite(v)) { cliPrint('A percentage between 0 and 100.', 'err'); return true; }
+      begin(); touchLayers();
+      c.data.lay.screen = clamp(Math.round(v), 0, 100);
+      commit(c.data.lay.name + ' plots at ' + c.data.lay.screen + '%');
+      cliPrint(c.data.lay.name + ' plots at ' + c.data.lay.screen + '%.');
+      draw(); syncUI(); endCmd(true); return true;
+    }
+    if (k === 's' || k === 'screen') {
+      c.data.step = 'layer'; hint('Layer to screen'); cliPrint('Which layer?'); return true;
+    }
+    const hit = PLOT_STYLES.find(x => x === k || x[0] === k[0]);
+    if (!hit) { cliPrint('Colour, Mono, Grey, or S to screen a layer.', 'err'); return true; }
+    begin(); DOC.plotStyle = hit; commit('Plot style');
+    cliPrint('Plots will be ' + (hit === 'color' ? 'in colour' : hit === 'mono' ? 'black on white' : 'greyscale') + '.');
+    draw(); syncUI(); endCmd(true); return true;
+  },
+});
+defvar('PLOTPREVIEW', {
+  type: 'bool', desc: 'Draw a sheet the way it will plot: screening and plot colours',
+  get: () => !!VS.plotPrev,
+  set(v) { VS.plotPrev = !!v; shapeCacheClear(); draw(); },
+});
+defvar('PLOTSTYLE', {
+  type: 'string', desc: 'How a plot is coloured: color, mono or grey',
+  get: () => plotStyleName(),
+  set(v) {
+    const k = String(v).trim().toLowerCase();
+    const hit = PLOT_STYLES.find(x => x === k);
+    if (!hit) return;
+    begin(); DOC.plotStyle = hit; commit(); draw();
+  },
+});
 defvar('WALLPAT', {
   desc: 'Hatch a cut wall by what each of its layers is made of',
   get: () => (VS.wallpat === 0 ? 0 : 1),

@@ -52,7 +52,7 @@ function makeCtx() {
       return (...args) => rec(k, args);
     },
     set: (t, k, v) => {
-      if (k === 'fillStyle' || k === 'strokeStyle' || k === 'lineWidth') trace.sets.push([k, v]);
+      if (k === 'fillStyle' || k === 'strokeStyle' || k === 'lineWidth' || k === 'globalAlpha') trace.sets.push([k, v]);
       t[k] = v; return true;
     },
     has: () => true,
