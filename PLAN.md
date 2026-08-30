@@ -170,3 +170,160 @@ Ordered so the most-used commands land first.
 - **Integration is a task, not an afterthought.** Wave 1's merge surfaced four breakages that no individual branch had, including one that stopped the bundle loading.
 - **Ask builders to name what they wired to nothing.** Every builder that did so saved a critic round.
 - **Commit in-flight work before anything else when a run is interrupted.** ~3,900 lines were once one crash away from being lost.
+
+---
+
+# Phases 7–10 — after the comparison study (28 Aug 2026)
+
+Five open-source CAD codebases were read against ours: FreeCAD, LibreCAD,
+OpenSCAD, OpenCADStudio and cadCAD. **cadCAD is not CAD software** — it is an
+economics simulation framework that shares the acronym — and is struck from the
+list. The other four produced the ordering below.
+
+**What the study actually established.** None of the four has an architecture
+layer: no walls, no hosted openings, no rooms, no schedules. Our snap
+arbitration, journalled undo with stable IDs, paper space and test discipline
+are ahead of all of them. We are not behind on the things this project is
+about. We are behind on **drafting furniture** — hatch patterns, linetypes,
+per-viewport layer state — and we had **five data-correctness bugs**, four of
+which were found only by comparing against how someone else had solved the same
+problem.
+
+**The ordering principle.** Bugs that misreport or destroy data come first, in
+every case, before any feature. Every one of the five found this round produced
+a *plausible wrong number* rather than a crash: a room area that disagreed with
+its own schedule, a `1200+225` that drew a 1200 wall, a hatch that counted its
+holes as floor. A crash gets fixed the day it ships; a confident wrong number
+gets built.
+
+**The pattern in our own defects, worth stating because it predicts the next
+one.** Four of the five were in the same two places: (a) state *derived from
+other entities*, where nothing told the dependent thing to update — rooms,
+schedules; and (b) the **interop boundary**, where our reader silently discards
+what it does not model. Both are places where the failure is invisible from
+inside the app. When looking for the next bug, look there first.
+
+---
+
+## Phase 7 — Correctness and interop
+
+Everything here is a verified bug, reproduced before being written down.
+
+| # | Task | Files | Effort | Risk |
+|---|---|---|---|---|
+| 7.1 | **DXF polyline bulges.** `10-dxf.js:142` reads `p.slice(0,2)`; group code 42 is never read, on `LWPOLYLINE` or `VERTEX`. A consultant's rounded polyline imports as straight chords with no warning, and `check_dxf.py` cannot catch it because it validates the writer, not the reader. **Stopgap first** (tessellate bulged spans at import and `echo` a note — converts silent corruption into visible-but-lossy in an hour), then the real representation: `e.bulges` sparse alongside `e.pts`, arc items out of `shapes()`, exact arc case in `prims()`, arc extrema in `bbox`, sign flip under mirror, tessellate on non-uniform scale, write code 42 back out | `10-dxf.js`, `02-geom.js`, `03-solve.js` | 3–5 d | Med |
+| 7.2 | **Door and window schedules never refresh.** `09b-layer.js:927` filters `kind === 'rooms'`, so a placed door schedule is stale from the moment the next door is drawn. Verified: 2 rows, add a door, still 2 rows. Fix as part of 9.1 if that lands first, otherwise on its own | `09b-layer.js` | 2 h | None |
+| 7.3 | **Hatch pattern round-trip is lossy both ways.** Import forces `pattern:'line'` and discards the name; export writes `ANSI31`/`ANSI37` regardless. We silently rewrite other people's hatch patterns. Preserve the name on read and write it back even before we can render it | `10-dxf.js:205,687` | 3 h | Low |
+| 7.4 | **Audit the rest of the interop boundary the same way.** 7.1 and 7.3 are the two found; the reader almost certainly discards more. Method: build a file in another package, import, export, diff. `check_dxf.py`'s fixture is ours, so it can only ever prove the writer self-consistent | `10-dxf.js`, `tools/` | 1–2 d | Low |
+
+**Exit:** a DXF from another package round-trips without silent loss, and we can
+say which entities are lossy and why, per entity.
+
+---
+
+## Phase 8 — Drawing production
+
+Cheap, visible on every drawing, and it retires the limits the README lists
+first. Nothing here is architecturally risky.
+
+| # | Task | Files | Effort | Risk |
+|---|---|---|---|---|
+| 8.1 | **Hatch pattern families.** Three of four agents put this top. A pattern is N line families of `{angle, origin, dx, dy, dashes[]}`, and `dashes` maps 1:1 onto `setLineDash`. **`drawHatch` already implements exactly one family, correctly** — going to N is a loop plus a per-row offset. Author ~16 patterns ourselves as a JS literal (~4 KB): ANSI31/32/37, AR-CONC, AR-BRSTD, AR-B816, AR-HBONE, AR-SAND, INSUL, PLAST, EARTH, GRAVEL, STEEL, NET, HONEY, TRIANG. Then wall poche picks a pattern by layer material rather than a tone weight | `05-view.js` (`drawHatch`), `08-modify.js`, `04a-wall.js`, `10-dxf.js` | 2–4 d | Low |
+| 8.2 | **`HULL`.** Andrew monotone chain over the pooled `poly(e, tol)` of a selection. Site boundary from survey points, extent of a furniture layout, escape-route catchment | `08-modify.js` | ~40 lines | None |
+| 8.3 | **Offset joins and a miter limit.** `offsetEnt` is miter-only with no limit and no self-intersection cleanup, so a near-reflex vertex produces an arbitrarily long spike — the wall code learned this separately (`MITRE_MAX`). Add round/bevel, a limit, and take OpenSCAD's API decision: the join style falls out of *how you asked* (radius → round, distance → miter), not a fourth prompt | `03-solve.js` | ~120 lines | Low |
+| 8.4 | **Per-viewport layer freeze (VPLAYER).** One model, several sheets: GA, setting-out and finishes are the same walls with different layers on. Without it you duplicate geometry. Our viewports already carry their own view state, so `vp.frozen` has a natural home | `07c-sheet.js`, `05-view.js`, `09b-layer.js`, `10-dxf.js` | 2–3 d | Low |
+| 8.5 | **Detail views.** A viewport with a parent, an anchor, a radius and an auto reference letter. Standard sheet furniture; our viewport is already `{x,y,w,h,centre,scale}` | `07c-sheet.js` | 2–3 d | Low |
+| 8.6 | **Dimension format spec.** Prefix/suffix, `±` tolerance, unit suppression. `dimStyle()` currently returns six numbers | `03-solve.js` | ~150 lines | None |
+| 8.7 | **Plot screening.** A per-layer print percentage so demolition and existing-building layers plot at 40% grey. All the machinery exists | `05-view.js`, `09b-layer.js`, `11-io.js` | ~100 lines | Low |
+| 8.8 | **"A"-type linetype alignment.** Patterns should begin and end on a full dash with the interior phased to fit; we stroke at `lineDashOffset = 0`, so every centreline ends on whatever fragment falls there. Sibling idea worth more: phase all layers of a compound wall against one reference length so dashes line up across parallel boundaries | `05-view.js`, `04a-wall.js` | ~150 lines | Low |
+
+**Exit:** a printed section distinguishes brick from blockwork from insulation by
+pattern, not by grey level — the first item in the README's known limits.
+
+---
+
+## Phase 9 — Model semantics
+
+| # | Task | Files | Effort | Risk |
+|---|---|---|---|---|
+| 9.1 | **Generic schedule engine.** Replace the hardcoded row builders with a spec `{label, prop, agg, filter, unit}` stored on the table entity and evaluated in `GEOM.table.shapes`, so a schedule is live rather than a snapshot. Subsumes 7.2 and makes any property schedulable | `09d-slab.js`, `09b-layer.js` | ~400 lines | Low |
+| 9.2 | **Room boundary provenance.** `roomBlockers` pushes bare `[a,b]` segments with no owner, so which wall bounds which room is thrown away. Thread `{owner, side}` through `roomSplit`/`roomGraph`/`roomWalkFace` and it unlocks per-room wall areas, finish take-off by wall, "select the walls bounding this room", and a perimeter that excludes column notches | `04c-components.js` | ~150 lines | Low |
+| 9.3 | **`StandardCode` and shared `Material`.** A NRM/Uniclass code on every element is what makes a schedule orderable; material as a shared record rather than a per-type string | `04a-wall.js`, `04b-openings.js` | ~1 d | None |
+| 9.4 | **Property-pulling labels.** A leader whose text is drawn from a named property of the object it points at, removing hand-typed `%<area:id>%`. Retires "no field browser, so they are typed by hand" | `02-geom.js`, `13-ui.js` | ~100 lines | None |
+| 9.5 | **Reason-carrying failures.** `####` is right; make it carry *why*, show it on hover, and list every unresolved field in one place. Then kill `'That did not work.'` (`07-cmd.js:710,1958`) — the catch-all on the hot path of every command — and replace it with the command, the live prompt and the rejected value | `02-geom.js`, `07-cmd.js` | ~150 lines | None |
+
+---
+
+## Phase 10 — Driving dimensions
+
+The one constrained interaction with universal value in plan drafting: **type a
+number into a dimension and the wall moves.** Built as the first slice of a real
+solver, not as a hack, so the rest can layer on without rework.
+
+Scope: Levenberg–Marquardt on a flat `Float64Array`, coincidence eliminated by
+union-find before any numerics, connected-component partitioning so a drag
+solves the cluster under the cursor rather than the drawing, and a **soft anchor**
+(`w·(pᵢ − pᵢ⁰)`, `w ≈ 1e-3`) on every parameter the user did not nominate —
+without which a distance constraint moves both walls by half and the tool feels
+like a poltergeist. Constraints for the first slice: `distance`, `distX`,
+`distY`, plus `fix` implemented as *absent parameters* rather than clamped ones.
+
+- **~700 lines** for the first slice; ~1,850 for the full set (12–15 constraint
+  types, diagnosis, glyphs, auto-capture from the snap engine).
+- Ship behind `DCLINEAR` with a sysvar to disable and a hard parameter cap, held
+  to the existing drag-latency budget. Above ~150 parameters in a component,
+  preview unsolved and solve on mouse-up.
+- **Hold until someone has drawn a real building in this.** AutoCAD has had
+  constraints since 2010 and architect adoption is near zero; the value is
+  concentrated almost entirely in the one interaction above.
+- The thing that will actually break it is not the maths. It is the interaction
+  between solver writes and `wallCacheTouch` / `_arrCache` / `SHPC` — the same
+  machinery that produced the stale-room bug. Driving one dimension surfaces
+  every coupling bug on a problem small enough to debug.
+
+---
+
+## Explicitly not doing
+
+- **A geometry scripting DSL.** Argued both ways and it loses. AutoLISP shipped
+  in 1986 and the people who used it wrote office standards, not geometry.
+  Script-first also loses at exactly what drafting is made of — inexact,
+  snapped, contextual decisions. If automation is wanted later, it is a **macro
+  recorder over `runInput`** (~120 lines, adds no new execution path) and
+  **parameters on blocks surfaced as sliders in the properties panel**, not a
+  language.
+- **General 2D region booleans**, until `AREA` on a real plan is demonstrably
+  wrong. Then generalise `09e-boundary.js` onto an integer grid — snap to
+  2⁻¹⁰ mm so "same point" is exactly representable, which deletes the entire
+  epsilon-tuning problem — rather than writing a sweep from scratch. 500–700
+  lines, medium-high risk.
+- **Minkowski.** The only 2D architectural use is `offset(r)` with a round join,
+  at a tenth of the code.
+- **A dependency graph / push recompute.** Ours is pull-based and that is the
+  better fit: no ordering problem, no cycles, no two-pass settling. FreeCAD
+  needs push because a recompute is an OCC boolean; ours is a repaint. Their own
+  source carries `"still touched after recompute"` and a commented-out
+  topological sort.
+- **A real UCS**, stroke fonts, isometric mode, NURBS splines. All real, all
+  documented as limits, none of them ahead of the above.
+- **3D.** Unchanged: not until the 2D base is excellent.
+
+---
+
+## Method notes from this round
+
+- **Reading someone else's solution to the same problem is the cheapest bug
+  detector we have used.** Five bugs, four of them found by comparison rather
+  than by testing, in code with 750 passing tests. The tests were not weak; they
+  encoded the same assumptions the code did.
+- **Verify every claim in a report before acting on it.** Of the findings
+  checked this round, several were stale or wrong in the other direction — a
+  "2.3 m mitre spike" measured 1 mm, and a repo briefed as a thin side project
+  turned out to be 300,000 lines of Rust.
+- **A negative result is a result.** The cadCAD agent's most useful output was
+  "this is not CAD software", and its second most useful was a *failure mode*
+  from an unrelated domain — a config field accepted, stored and never read —
+  which found thirteen unsaved settings in our own code.
+- **Watch for licence.** OpenCADStudio is GPL-3.0 with a QCAD-derived pattern
+  file; LibreCAD ships patterns as 3.6 MB of DXF. We are MIT and single-file:
+  ideas only, and the patterns get authored here.
