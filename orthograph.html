@@ -4107,14 +4107,44 @@ function roomSplit(segs) {
   const n = segs.length;
   const boxes = segs.map(([a, b]) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]),
     Math.max(a[0], b[0]), Math.max(a[1], b[1])]);
+  /* Every segment against every other is 920,000 pair tests on a sixty-room
+     plan — 77ms, which is a room re-trace per drag frame. The same spatial
+     hash the walls already use: a segment can only be cut by one whose box
+     overlaps its own, and two boxes that overlap must share a cell, so
+     gathering candidates from this loses nothing. The bbox reject below stays
+     as the exact test. */
+  const cellOf = (() => {
+    const lens = boxes.map(b => Math.max(b[2] - b[0], b[3] - b[1]));
+    lens.sort((x, y) => x - y);
+    return Math.max(lens.length ? lens[Math.floor(lens.length * 0.6)] : 1000, 1);
+  })();
+  const grid = new Map();
+  const cells = (bx, fn) => {
+    const i0 = Math.floor((bx[0] - ROOM_WELD) / cellOf), i1 = Math.floor((bx[2] + ROOM_WELD) / cellOf);
+    const j0 = Math.floor((bx[1] - ROOM_WELD) / cellOf), j1 = Math.floor((bx[3] + ROOM_WELD) / cellOf);
+    if (!isFinite(i0) || !isFinite(j0) || (i1 - i0 + 1) * (j1 - j0 + 1) > 4096) return fn('*');
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) fn(i + ':' + j);
+  };
+  for (let i = 0; i < n; i++) cells(boxes[i], k => {
+    let a = grid.get(k); if (!a) grid.set(k, a = []);
+    a.push(i);
+  });
+  /* stamped instead of a Set per segment: one array, no allocation per pass */
+  const seen = new Int32Array(n).fill(-1);
   const out = [];
   for (let i = 0; i < n; i++) {
     const [a, b] = segs[i];
     const L = dist(a, b);
     if (L < ROOM_WELD) continue;
     const ts = [0, 1];
-    for (let j = 0; j < n; j++) {
-      if (i === j) continue;
+    const cand = [];
+    cells(boxes[i], k => {
+      const bucket = grid.get(k);
+      if (!bucket) return;
+      for (const j of bucket) { if (j !== i && seen[j] !== i) { seen[j] = i; cand.push(j); } }
+    });
+    for (const j of (grid.get('*') || [])) if (j !== i && seen[j] !== i) { seen[j] = i; cand.push(j); }
+    for (const j of cand) {
       const B = boxes[j], A = boxes[i];
       if (B[0] > A[2] + ROOM_WELD || B[2] < A[0] - ROOM_WELD ||
         B[1] > A[3] + ROOM_WELD || B[3] < A[1] - ROOM_WELD) continue;
@@ -4877,20 +4907,51 @@ let SHPCh = null;
     replaced: the cache is keyed by entity id, and resetDoc() puts UID back to
     1, so without this the first entities of a newly opened drawing are drawn
     with the geometry of the ones they replaced. */
-function shapeCacheClear() { SHPC.clear(); DIRTY.clear(); }
+let ROOMS_PENDING = false;      /* rooms owed a re-trace once the drag ends */
+function shapeCacheClear() { SHPC.clear(); DIRTY.clear(); ROOMS_PENDING = false; }
+/** bounds of a shape list, without re-deriving the entity it came from */
+function shapeBox(sh) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const s of sh || []) {
+    const pts = s.pts || (s.p ? [s.p] : null);
+    if (!pts) continue;
+    for (const p of pts) {
+      if (!p || !isFinite(p[0]) || !isFinite(p[1])) continue;
+      if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+      if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+    }
+  }
+  return x0 === Infinity ? null : [x0, y0, x1, y1];
+}
 function shapeCacheSync() {
   if (SHPCh !== DOC.wallHatch) { SHPC.clear(); SHPCh = DOC.wallHatch; DIRTY.clear(); return; }
+  /* Above the empty-DIRTY guard on purpose: letting go of a grip dirties
+     nothing at all, and settling the rooms owed a re-trace is exactly what
+     has to happen on that frame. */
+  if (ROOMS_PENDING && !(ST && ST.dragGrip)) {
+    ROOMS_PENDING = false;
+    for (const e of DOC.ents.values()) if (e.t === 'room') SHPC.delete(e.id);
+  }
   if (!DIRTY.size) return;
   if (DIRTY.size > 400 || SHPC.size > 40000) { SHPC.clear(); DIRTY.clear(); return; }
   const ids = [...DIRTY];
   DIRTY.clear();
   const boxes = [];
+  /* A room is the one thing drawn from OTHER entities: roomBlockers walks
+     every wall outline and every column on the level, and roomBoundary
+     re-traces from the seed. The cache is keyed by entity id, so moving a wall
+     invalidated that wall and its neighbours and left every room holding the
+     outline and area it had before. The plan then showed one number and the
+     schedule — which calls the geometry directly — showed another. */
+  let roomsStale = false;
   for (const id of ids) {
     const prev = SHPC.get(id);
     if (prev && prev.box) boxes.push(prev.box);
     SHPC.delete(id);
     const e = DOC.ents.get(id);
-    if (!e) continue;
+    /* gone: we cannot ask what it was, and a deleted wall is exactly the case
+       that opens a room up, so assume the worst */
+    if (!e) { roomsStale = true; continue; }
     /* an opening is drawn by its host wall, so dirty the host too */
     if ((e.t === 'door' || e.t === 'window') && e.host != null) {
       SHPC.delete(e.host);
@@ -4898,6 +4959,43 @@ function shapeCacheSync() {
       if (host && host.t === 'wall' && typeof wallRawBox === 'function') boxes.push(wallRawBox(host));
     }
     if (e.t === 'wall' && typeof wallRawBox === 'function') boxes.push(wallRawBox(e));
+    if (e.t === 'wall' || e.t === 'column') {
+      roomsStale = true;
+      /* a column contributes its own bounds: a NEW one has no cached box to
+         fall back on, and it is the case that shrinks the room it lands in */
+      if (e.t === 'column') { try { const b = bbox(e); if (b) boxes.push(b); } catch (err) { roomsStale = true; } }
+    }
+  }
+  /* Only the rooms the change could have reached. `boxes` holds both the old
+     bounds of everything touched and the new bounds of every wall, and a wall
+     that changes a room must be against the boundary the room already had —
+     including the case that matters most, a wall deleted from between two
+     rooms, where the deleted wall's own former box abuts both of them.
+     Dropping every room instead is correct and costs 59ms a frame on a
+     sixty-room plan; this costs a box test each. */
+  /* While a grip is being dragged, a room's outline is transient: it will be
+     re-traced the instant the mouse comes up. Re-deriving the whole wall
+     arrangement on every frame of the drag costs 55ms against 19ms, and the
+     answer is thrown away 60 times a second. Deferred and settled on release —
+     which is a different thing entirely from the bug this replaced, where the
+     stale outline was permanent. */
+  if (roomsStale && ST && ST.dragGrip) { ROOMS_PENDING = true; roomsStale = false; }
+  if (roomsStale && boxes.length) {
+    const pad = 1200;
+    for (const e of DOC.ents.values()) {
+      if (e.t !== 'room') continue;
+      const hit = SHPC.get(e.id);
+      /* not cached, or cached without bounds: nothing to keep */
+      if (!hit) continue;
+      if (!hit.box) { SHPC.delete(e.id); continue; }
+      const r = hit.box;
+      for (const b of boxes) {
+        if (b[2] + pad < r[0] || b[0] - pad > r[2] ||
+            b[3] + pad < r[1] || b[1] - pad > r[3]) continue;
+        SHPC.delete(e.id);
+        break;
+      }
+    }
   }
   if (!boxes.length || typeof wallsInBox !== 'function') return;
   for (const b of boxes) {
@@ -4934,7 +5032,12 @@ function entShapes(e) {
   const hit = SHPC.get(e.id);
   if (hit !== undefined) return hit.shapes;
   const sh = shapes(e, SHAPE_TOL) || [];
-  const box = (e.t === 'wall' && typeof wallRawBox === 'function') ? wallRawBox(e) : null;
+  /* Rooms carry a box too. It is the bounds of the outline they were LAST
+     drawn with, which is exactly what has to be tested when a wall moves:
+     whatever changed a room must have been touching the boundary it had. */
+  let box = null;
+  if (e.t === 'wall' && typeof wallRawBox === 'function') box = wallRawBox(e);
+  else if (e.t === 'room') box = shapeBox(sh);
   SHPC.set(e.id, { shapes: sh, box });
   return sh;
 }

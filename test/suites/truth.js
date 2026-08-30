@@ -73,6 +73,98 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     close(r.area, 16 - 4, 0.001, 'four metres of void off sixteen');
   });
 
+  group('a room, on the plan and in the schedule');
+
+  /* A room is derived at draw time from the arrangement of the wall faces, so
+     it depends on entities other than itself. The shape cache is keyed by
+     entity id and only ever invalidated the thing that changed and its
+     neighbouring WALLS — nothing told the rooms. So the canvas kept drawing
+     the outline and area from before the wall moved, while the schedule and
+     the %<area>% field, which call the geometry directly, were right.
+
+     Two numbers for one room, on the same screen. */
+  const ROOM = `
+    resetDoc(); ensureLayer('A-WALL');
+    V.w = 1200; V.h = 800; V.z = 1; V.px = 0; V.py = 800; V.rot = 0;
+    const box = (top) => { begin();
+      const b = addEnt({t:'wall', a:[0,0], b:[4000,0], wt:'gen100', layer:'A-WALL'});
+      const r = addEnt({t:'wall', a:[4000,0], b:[4000,top], wt:'gen100', layer:'A-WALL'});
+      const t = addEnt({t:'wall', a:[4000,top], b:[0,top], wt:'gen100', layer:'A-WALL'});
+      const l = addEnt({t:'wall', a:[0,top], b:[0,0], wt:'gen100', layer:'A-WALL'});
+      const rm = addEnt({t:'room', auto:true, seed:[2000,top/2], name:'R1', layer:'A-AREA'});
+      commit('box'); return { b, r, t, l, rm }; };
+    const drawnArea = (rm) => (entShapes(rm).find(s => /m²/.test(String(s.text))) || {}).text;
+    const trueArea = (rm) => (shapes(rm, 32).find(s => /m²/.test(String(s.text))) || {}).text;
+  `;
+
+  t('the drawn area follows the walls when they move', () => {
+    const r = R(`${ROOM}
+      const w = box(3000);
+      fit(); paint();
+      const before = drawnArea(w.rm);
+      begin();
+      mut(w.r); w.r.b = [4000, 5000];
+      mut(w.t); w.t.a = [4000, 5000]; w.t.b = [0, 5000];
+      mut(w.l); w.l.a = [0, 5000];
+      commit('grow');
+      paint();
+      return { before, drawn: drawnArea(w.rm), fresh: trueArea(w.rm) };`);
+    ok(/11\.3/.test(r.before), 'a 4x3 box of 100mm walls starts at 11.31, got ' + r.before);
+    eq(r.drawn, r.fresh,
+      'the plan and the schedule agree: canvas ' + r.drawn + ' vs computed ' + r.fresh);
+    ok(/19\.1/.test(r.drawn), 'and it followed the wall out, got ' + r.drawn);
+  });
+
+  t('and when a wall is deleted out from under it', () => {
+    const r = R(`${ROOM}
+      const w = box(3000);
+      fit(); paint();
+      const before = drawnArea(w.rm);
+      begin(); eraseEnt(w.t.id); commit('open it');
+      paint();
+      return { before, drawn: drawnArea(w.rm), fresh: trueArea(w.rm) };`);
+    eq(r.drawn, r.fresh,
+      'an unenclosed room reads the same on the plan as in the schedule: ' +
+      r.drawn + ' vs ' + r.fresh);
+  });
+
+  t('a column dropped into the room changes the drawn area too', () => {
+    const r = R(`${ROOM}
+      const w = box(3000);
+      fit(); paint();
+      const before = drawnArea(w.rm);
+      begin(); addEnt({t:'column', p:[2000,1500], w:400, d:400, layer:'A-WALL'}); commit('col');
+      paint();
+      return { before, drawn: drawnArea(w.rm), fresh: trueArea(w.rm) };`);
+    eq(r.drawn, r.fresh,
+      'canvas ' + r.drawn + ' vs computed ' + r.fresh);
+  });
+
+  /* Deferring during a drag is only acceptable because it settles. If it did
+     not, this would be the original bug with extra steps. */
+  t('a live drag defers the re-trace, and releasing settles it', () => {
+    const r = R(`${ROOM}
+      const w = box(3000);
+      fit(); paint();
+      const before = drawnArea(w.rm);
+      /* pretend a grip is being dragged */
+      ST.dragGrip = { id: w.r.id, k: 'b', p: [4000, 5000] };
+      begin();
+      mut(w.r); w.r.b = [4000, 5000];
+      mut(w.t); w.t.a = [4000, 5000]; w.t.b = [0, 5000];
+      mut(w.l); w.l.a = [0, 5000];
+      commit('drag');
+      paint();
+      const during = drawnArea(w.rm);
+      ST.dragGrip = null;
+      paint();
+      const after = drawnArea(w.rm);
+      return { before, during, after, fresh: trueArea(w.rm) };`);
+    eq(r.during, r.before, 'mid-drag it keeps the outline it had, rather than re-tracing 60 times a second');
+    eq(r.after, r.fresh, 'and on release it agrees with the schedule again: ' + r.after);
+    ok(/19\.1/.test(r.after), 'having followed the wall, got ' + r.after);
+  });
+
   group('what a typed dimension means');
 
   /* parseFloat stops at the first thing it does not understand and returns

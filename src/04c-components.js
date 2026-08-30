@@ -337,14 +337,44 @@ function roomSplit(segs) {
   const n = segs.length;
   const boxes = segs.map(([a, b]) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]),
     Math.max(a[0], b[0]), Math.max(a[1], b[1])]);
+  /* Every segment against every other is 920,000 pair tests on a sixty-room
+     plan — 77ms, which is a room re-trace per drag frame. The same spatial
+     hash the walls already use: a segment can only be cut by one whose box
+     overlaps its own, and two boxes that overlap must share a cell, so
+     gathering candidates from this loses nothing. The bbox reject below stays
+     as the exact test. */
+  const cellOf = (() => {
+    const lens = boxes.map(b => Math.max(b[2] - b[0], b[3] - b[1]));
+    lens.sort((x, y) => x - y);
+    return Math.max(lens.length ? lens[Math.floor(lens.length * 0.6)] : 1000, 1);
+  })();
+  const grid = new Map();
+  const cells = (bx, fn) => {
+    const i0 = Math.floor((bx[0] - ROOM_WELD) / cellOf), i1 = Math.floor((bx[2] + ROOM_WELD) / cellOf);
+    const j0 = Math.floor((bx[1] - ROOM_WELD) / cellOf), j1 = Math.floor((bx[3] + ROOM_WELD) / cellOf);
+    if (!isFinite(i0) || !isFinite(j0) || (i1 - i0 + 1) * (j1 - j0 + 1) > 4096) return fn('*');
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) fn(i + ':' + j);
+  };
+  for (let i = 0; i < n; i++) cells(boxes[i], k => {
+    let a = grid.get(k); if (!a) grid.set(k, a = []);
+    a.push(i);
+  });
+  /* stamped instead of a Set per segment: one array, no allocation per pass */
+  const seen = new Int32Array(n).fill(-1);
   const out = [];
   for (let i = 0; i < n; i++) {
     const [a, b] = segs[i];
     const L = dist(a, b);
     if (L < ROOM_WELD) continue;
     const ts = [0, 1];
-    for (let j = 0; j < n; j++) {
-      if (i === j) continue;
+    const cand = [];
+    cells(boxes[i], k => {
+      const bucket = grid.get(k);
+      if (!bucket) return;
+      for (const j of bucket) { if (j !== i && seen[j] !== i) { seen[j] = i; cand.push(j); } }
+    });
+    for (const j of (grid.get('*') || [])) if (j !== i && seen[j] !== i) { seen[j] = i; cand.push(j); }
+    for (const j of cand) {
       const B = boxes[j], A = boxes[i];
       if (B[0] > A[2] + ROOM_WELD || B[2] < A[0] - ROOM_WELD ||
         B[1] > A[3] + ROOM_WELD || B[3] < A[1] - ROOM_WELD) continue;

@@ -4,7 +4,7 @@
 architecture layer on top. No build step required to *use* it — `orthograph.html` is a
 single self-contained file. Open it in any browser.
 
-111 commands, 93 acad.pgp aliases, 746 tests.
+111 commands, 93 acad.pgp aliases, 750 tests.
 
 ## Layout
 
@@ -63,7 +63,7 @@ node tools/serve.js            # → http://127.0.0.1:8017/
 
 ```
 node build.js                  # → orthograph.html
-node test/run.js               # 746 tests
+node test/run.js               # 750 tests
 node test/run.js wall          # run a subset by name
 node tools/verify.js           # behavioural checks + drag latency
 

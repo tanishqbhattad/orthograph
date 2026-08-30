@@ -582,20 +582,51 @@ let SHPCh = null;
     replaced: the cache is keyed by entity id, and resetDoc() puts UID back to
     1, so without this the first entities of a newly opened drawing are drawn
     with the geometry of the ones they replaced. */
-function shapeCacheClear() { SHPC.clear(); DIRTY.clear(); }
+let ROOMS_PENDING = false;      /* rooms owed a re-trace once the drag ends */
+function shapeCacheClear() { SHPC.clear(); DIRTY.clear(); ROOMS_PENDING = false; }
+/** bounds of a shape list, without re-deriving the entity it came from */
+function shapeBox(sh) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const s of sh || []) {
+    const pts = s.pts || (s.p ? [s.p] : null);
+    if (!pts) continue;
+    for (const p of pts) {
+      if (!p || !isFinite(p[0]) || !isFinite(p[1])) continue;
+      if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+      if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+    }
+  }
+  return x0 === Infinity ? null : [x0, y0, x1, y1];
+}
 function shapeCacheSync() {
   if (SHPCh !== DOC.wallHatch) { SHPC.clear(); SHPCh = DOC.wallHatch; DIRTY.clear(); return; }
+  /* Above the empty-DIRTY guard on purpose: letting go of a grip dirties
+     nothing at all, and settling the rooms owed a re-trace is exactly what
+     has to happen on that frame. */
+  if (ROOMS_PENDING && !(ST && ST.dragGrip)) {
+    ROOMS_PENDING = false;
+    for (const e of DOC.ents.values()) if (e.t === 'room') SHPC.delete(e.id);
+  }
   if (!DIRTY.size) return;
   if (DIRTY.size > 400 || SHPC.size > 40000) { SHPC.clear(); DIRTY.clear(); return; }
   const ids = [...DIRTY];
   DIRTY.clear();
   const boxes = [];
+  /* A room is the one thing drawn from OTHER entities: roomBlockers walks
+     every wall outline and every column on the level, and roomBoundary
+     re-traces from the seed. The cache is keyed by entity id, so moving a wall
+     invalidated that wall and its neighbours and left every room holding the
+     outline and area it had before. The plan then showed one number and the
+     schedule — which calls the geometry directly — showed another. */
+  let roomsStale = false;
   for (const id of ids) {
     const prev = SHPC.get(id);
     if (prev && prev.box) boxes.push(prev.box);
     SHPC.delete(id);
     const e = DOC.ents.get(id);
-    if (!e) continue;
+    /* gone: we cannot ask what it was, and a deleted wall is exactly the case
+       that opens a room up, so assume the worst */
+    if (!e) { roomsStale = true; continue; }
     /* an opening is drawn by its host wall, so dirty the host too */
     if ((e.t === 'door' || e.t === 'window') && e.host != null) {
       SHPC.delete(e.host);
@@ -603,6 +634,43 @@ function shapeCacheSync() {
       if (host && host.t === 'wall' && typeof wallRawBox === 'function') boxes.push(wallRawBox(host));
     }
     if (e.t === 'wall' && typeof wallRawBox === 'function') boxes.push(wallRawBox(e));
+    if (e.t === 'wall' || e.t === 'column') {
+      roomsStale = true;
+      /* a column contributes its own bounds: a NEW one has no cached box to
+         fall back on, and it is the case that shrinks the room it lands in */
+      if (e.t === 'column') { try { const b = bbox(e); if (b) boxes.push(b); } catch (err) { roomsStale = true; } }
+    }
+  }
+  /* Only the rooms the change could have reached. `boxes` holds both the old
+     bounds of everything touched and the new bounds of every wall, and a wall
+     that changes a room must be against the boundary the room already had —
+     including the case that matters most, a wall deleted from between two
+     rooms, where the deleted wall's own former box abuts both of them.
+     Dropping every room instead is correct and costs 59ms a frame on a
+     sixty-room plan; this costs a box test each. */
+  /* While a grip is being dragged, a room's outline is transient: it will be
+     re-traced the instant the mouse comes up. Re-deriving the whole wall
+     arrangement on every frame of the drag costs 55ms against 19ms, and the
+     answer is thrown away 60 times a second. Deferred and settled on release —
+     which is a different thing entirely from the bug this replaced, where the
+     stale outline was permanent. */
+  if (roomsStale && ST && ST.dragGrip) { ROOMS_PENDING = true; roomsStale = false; }
+  if (roomsStale && boxes.length) {
+    const pad = 1200;
+    for (const e of DOC.ents.values()) {
+      if (e.t !== 'room') continue;
+      const hit = SHPC.get(e.id);
+      /* not cached, or cached without bounds: nothing to keep */
+      if (!hit) continue;
+      if (!hit.box) { SHPC.delete(e.id); continue; }
+      const r = hit.box;
+      for (const b of boxes) {
+        if (b[2] + pad < r[0] || b[0] - pad > r[2] ||
+            b[3] + pad < r[1] || b[1] - pad > r[3]) continue;
+        SHPC.delete(e.id);
+        break;
+      }
+    }
   }
   if (!boxes.length || typeof wallsInBox !== 'function') return;
   for (const b of boxes) {
@@ -639,7 +707,12 @@ function entShapes(e) {
   const hit = SHPC.get(e.id);
   if (hit !== undefined) return hit.shapes;
   const sh = shapes(e, SHAPE_TOL) || [];
-  const box = (e.t === 'wall' && typeof wallRawBox === 'function') ? wallRawBox(e) : null;
+  /* Rooms carry a box too. It is the bounds of the outline they were LAST
+     drawn with, which is exactly what has to be tested when a wall moves:
+     whatever changed a room must have been touching the boundary it had. */
+  let box = null;
+  if (e.t === 'wall' && typeof wallRawBox === 'function') box = wallRawBox(e);
+  else if (e.t === 'room') box = shapeBox(sh);
   SHPC.set(e.id, { shapes: sh, box });
   return sh;
 }
