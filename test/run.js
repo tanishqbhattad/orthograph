@@ -1280,6 +1280,10 @@ const fixtures = R(`
   const fit=[[0,4000],[1000,5000],[2500,3500],[4000,4500]];
   addEnt({t:'spline',pts:fitSpline(fit,false),fit,deg:3});
   addEnt({t:'pline',pts:[[0,-1000],[2000,-1000],[2000,-2500]],closed:true});
+  /* a curved polyline: the reader dropped group 42 entirely, so the gate has
+     to carry one or it can only ever prove the writer self-consistent */
+  addEnt({t:'pline',pts:[[3000,-1000],[5000,-1000],[5000,-2500],[3000,-2500]],
+          bulges:[0,1,0,0],closed:true});
   addEnt({t:'text',p:[100,600],s:'ORTHOGRAPH',h:250,rot:0,anchor:'l',layer:'TEXT'});
   addEnt({t:'point',p:[500,500]});
   addEnt({t:'dim',k:'horizontal',p1:[0,0],p2:[5000,0],off:-900,layer:'DIMENSIONS'});

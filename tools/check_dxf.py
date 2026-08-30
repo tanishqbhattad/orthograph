@@ -104,6 +104,18 @@ want(kinds.get('DIMENSION', 0) >= 6, "dimensions missing")
 
 # An ordinate dimension is a real R2000 type and has to read back AS one.
 # Bit 6 of the 70 group is the ordinate flag; bit 64 says X rather than Y.
+# A curved polyline is the most common non-trivial entity in a real DWG, and
+# our reader dropped group 42 entirely until 28 Aug 2026. The gate carries one
+# so it cannot regress to chords silently again.
+lwp = [e for e in msp if e.dxftype() == 'LWPOLYLINE']
+bulged = [e for e in lwp
+          if any(p[2] for p in e.get_points('xyb'))]
+want(len(bulged) >= 1, "no LWPOLYLINE with a bulge survived the write")
+if bulged:
+    bs = [round(float(p[2]), 6) for p in bulged[0].get_points('xyb')]
+    want(any(abs(b - 1.0) < 1e-6 for b in bs),
+         f"the half-circle bulge came back as {bs}")
+
 ords = [d for d in dims if (d.dxf.dimtype & 7) == 6]
 want(len(ords) >= 1, "no ordinate dimension survived the read")
 if ords:

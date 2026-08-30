@@ -33,12 +33,91 @@ function arcPts(a, tol) {
    plus optional lt (linetype), col (explicit colour), lw, hatch.
    Core primitives have a trivial single-item shape list; architectural
    entities expand into many.                                            */
+/* ============================================================
+   Bulges — how every DXF stores a curved polyline
+
+   One number per vertex: tan(theta/4) of the included angle to the next one.
+   Positive bows to the left of the chord, negative to the right, zero is a
+   straight span. It is the representation a rounded rectangle, a slot, an
+   obround and a curved kerb all arrive in.
+
+   Kept as a sparse parallel array on the entity — absent when every span is
+   straight, so a plain polyline is byte-identical to what it always was.
+   ============================================================ */
+const BULGE_MIN = 1e-9;        /* below this an arc is not distinguishable */
+/** the arc a bulge describes, or null when the span is straight */
+function bulgeArc(p1, p2, b) {
+  const v = +b;
+  if (!isFinite(v) || Math.abs(v) < BULGE_MIN) return null;
+  const dx = p2[0] - p1[0], dy = p2[1] - p1[1];
+  const d = Math.hypot(dx, dy);
+  if (!(d > EPS)) return null;
+  /* half the included angle. b = tan(theta/4), so theta/2 = 2*atan(b) */
+  const half = 2 * Math.atan(v);
+  const sn = Math.sin(half);
+  if (!isFinite(sn) || Math.abs(sn) < 1e-12) return null;
+  const r = d / (2 * sn);                     /* signed: negative bows the other way */
+  const a = Math.atan2(dy, dx);
+  const cAng = a + (Math.PI / 2 - half);
+  const c = [p1[0] + r * Math.cos(cAng), p1[1] + r * Math.sin(cAng)];
+  const a0 = Math.atan2(p1[1] - c[1], p1[0] - c[0]);
+  const a1 = Math.atan2(p2[1] - c[1], p2[0] - c[0]);
+  return { c, r: Math.abs(r), a0, a1, ccw: v > 0 };
+}
+/** the bulge for span i of a polyline, or 0 */
+function bulgeAt(e, i) {
+  const b = e && e.bulges;
+  return (Array.isArray(b) && isFinite(b[i])) ? b[i] : 0;
+}
+/** does this polyline curve at all? */
+function hasBulge(e) {
+  const b = e && e.bulges;
+  if (!Array.isArray(b)) return false;
+  for (const v of b) if (isFinite(v) && Math.abs(v) >= BULGE_MIN) return true;
+  return false;
+}
+/** the spans of a polyline, each a straight run of points or an arc */
+function plineSpans(e) {
+  const pts = e.pts || [];
+  const out = [];
+  if (pts.length < 2) return out;
+  const n = e.closed ? pts.length : pts.length - 1;
+  let run = [pts[0]];
+  for (let i = 0; i < n; i++) {
+    const p1 = pts[i], p2 = pts[(i + 1) % pts.length];
+    const arc = bulgeArc(p1, p2, bulgeAt(e, i));
+    if (!arc) { run.push(p2); continue; }
+    if (run.length > 1) out.push({ pts: run });
+    out.push(arc);
+    run = [p2];
+  }
+  if (run.length > 1) out.push({ pts: run });
+  return out;
+}
+/** every point along a polyline, arcs tessellated — for length, area, hit tests */
+function plinePts(e, tol) {
+  if (!hasBulge(e)) return e.pts || [];
+  const out = [];
+  for (const s of plineSpans(e)) {
+    if (s.pts) { for (const p of s.pts) if (!out.length || dist(out[out.length - 1], p) > EPS) out.push(p); continue; }
+    const ap = arcPts(s, tol || 48);
+    for (const p of ap) if (!out.length || dist(out[out.length - 1], p) > EPS) out.push(p);
+  }
+  return out;
+}
+
 function shapes(e, tol) {
   const g = GEOM[e.t];
   if (g && g.shapes) return g.shapes(e, tol) || [];
   switch (e.t) {
     case 'line': return [{ pts: [e.a, e.b] }];
-    case 'pline': return [{ pts: e.pts, closed: !!e.closed }];
+    /* a curved polyline draws as a mixture of runs and arcs; shapes() already
+       speaks both, so nothing downstream needs a new vocabulary */
+    case 'pline':
+      if (!hasBulge(e)) return [{ pts: e.pts, closed: !!e.closed }];
+      return plineSpans(e).map(s => s.pts
+        ? { pts: s.pts }
+        : { c: s.c, r: s.r, a0: s.ccw ? s.a0 : s.a1, a1: s.ccw ? s.a1 : s.a0 });
     case 'spline': return [{ pts: e.pts, closed: !!e.closed }];
     case 'circle': return [{ c: e.c, r: e.r }];
     case 'arc': return [{ c: e.c, r: e.r, a0: e.a0, a1: e.a1 }];
@@ -111,7 +190,10 @@ function poly(e, tol) {
   }
   switch (e.t) {
     case 'line': return [e.a, e.b];
-    case 'pline': return e.closed ? [...e.pts, e.pts[0]] : e.pts.slice();
+    case 'pline': {
+      const p = plinePts(e, tol);
+      return e.closed && p.length ? [...p, p[0]] : p.slice();
+    }
     case 'circle': {
       const n = Math.max(24, tol * 3), o = [];
       for (let i = 0; i <= n; i++) { const a = i / n * TAU; o.push([e.c[0] + e.r * Math.cos(a), e.c[1] + e.r * Math.sin(a)]); }
@@ -483,6 +565,20 @@ function segInt(a, b, c, d) {
   return [a[0] + r[0] * t, a[1] + r[1] * t];
 }
 
+/* What a transform does to shape, judged by probing it rather than by being
+   told: 'rigid' keeps lengths and handedness, 'mirror' keeps lengths and
+   reverses handedness, 'skew' is anything that does not preserve a circle. */
+function xfKind(fn) {
+  const o = fn([0, 0]), x = fn([1, 0]), y = fn([0, 1]);
+  const ux = [x[0] - o[0], x[1] - o[1]], uy = [y[0] - o[0], y[1] - o[1]];
+  const lx = Math.hypot(ux[0], ux[1]), ly = Math.hypot(uy[0], uy[1]);
+  if (!(lx > 1e-12) || !(ly > 1e-12)) return 'skew';
+  if (Math.abs(lx - ly) > 1e-9 * Math.max(lx, ly)) return 'skew';
+  /* not square: a shear keeps both lengths and still ruins a circle */
+  if (Math.abs(ux[0] * uy[0] + ux[1] * uy[1]) > 1e-9 * lx * ly) return 'skew';
+  return (ux[0] * uy[1] - ux[1] * uy[0]) < 0 ? 'mirror' : 'rigid';
+}
+
 /* ---------------- transforms ---------------- */
 function xf(e, fn) {
   const E = e;
@@ -491,7 +587,22 @@ function xf(e, fn) {
   if (g && g.xf) { g.xf(E, fn); return E; }
   switch (E.t) {
     case 'line': E.a = fn(E.a); E.b = fn(E.b); break;
-    case 'pline': case 'spline': E.pts = E.pts.map(fn); break;
+    case 'pline': case 'spline': {
+      /* A bulge is an ANGLE, so it survives translation, rotation and uniform
+         scale untouched. A mirror reverses which side of the chord the arc
+         bows to, and keeping the sign would turn the shape inside out while
+         leaving every vertex right — which looks almost correct. A non-uniform
+         scale turns a circular arc into an elliptical one, which a bulge
+         cannot express, so it is tessellated and the bulges dropped rather
+         than kept as a lie. */
+      if (E.t === 'pline' && hasBulge(E)) {
+        const k = xfKind(fn);
+        if (k === 'skew') { E.pts = plinePts(E, 64).map(fn); delete E.bulges; break; }
+        if (k === 'mirror') E.bulges = E.bulges.map(b => (isFinite(b) && b ? -b : 0));
+      }
+      E.pts = E.pts.map(fn);
+      break;
+    }
     case 'point': E.p = fn(E.p); break;
     case 'leader': {
       /* measure the scale from the ORIGINAL point: mapping pts first and then
@@ -696,7 +807,7 @@ function entLength(e) {
   if (e.t === 'circle') return TAU * e.r;
   if (e.t === 'arc') return e.r * arcSweep(e);
   if (e.t === 'line') return dist(e.a, e.b);
-  if (e.t === 'pline' || e.t === 'spline') return polyLen(e.pts, e.closed);
+  if (e.t === 'pline' || e.t === 'spline') return polyLen(plinePts(e, 96), e.closed);
   /* A parametric object knows its own length. Without this the fallback
      measures the way round whatever it draws as, which for a compound wall is
      the perimeter of every layer line in it — a 5m cavity wall came back as
@@ -708,7 +819,7 @@ function entLength(e) {
 function entArea(e) {
   if (e.t === 'circle') return Math.PI * e.r * e.r;
   if (e.t === 'ellipse') return Math.PI * e.rx * e.ry;
-  if ((e.t === 'pline' || e.t === 'spline') && e.closed) return polyArea(e.pts);
+  if ((e.t === 'pline' || e.t === 'spline') && e.closed) return polyArea(plinePts(e, 96));
   if (GEOM[e.t] && GEOM[e.t].area) return GEOM[e.t].area(e);
   return 0;
 }

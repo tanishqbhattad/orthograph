@@ -31,6 +31,14 @@ function readOne(g, i) {
       else if (arr.length) arr[arr.length - 1][ax] = parseFloat(v);
       continue;
     }
+    /* A bulge belongs to the vertex it FOLLOWS, and writers emit one only for
+       the spans that curve — so the 42s cannot be lined up with the vertices
+       afterwards by position. Recorded here, against the vertex count at the
+       moment it was read, which is the only place that information exists. */
+    if (c === 42) {
+      const n = o.P[0] ? o.P[0].length : 0;
+      if (n) { (o.B || (o.B = []))[n - 1] = parseFloat(v); continue; }
+    }
     (o.g[c] || (o.g[c] = [])).push(v);
   }
   return { o, next: j };
@@ -141,13 +149,33 @@ function dxfToEnts(res, body, layerOverride, depth) {
       case 'LINE': { const a = PT(o, 0), b = PT(o, 1); if (a && b) e = { t: 'line', a, b }; break; }
       case 'LWPOLYLINE': {
         const pts = (o.P[0] || []).map(p => p.slice(0, 2));
-        if (pts.length > 1) e = { t: 'pline', pts, closed: !!(GI(o, 70, 0) & 1) };
+        if (pts.length > 1) {
+          e = { t: 'pline', pts, closed: !!(GI(o, 70, 0) & 1) };
+          /* Group 42 is the bulge of the span LEAVING each vertex. It used to
+             be dropped, so every rounded polyline in every incoming file
+             arrived as a chord chain, silently. */
+          const bl = dxfBulges(o, pts.length);
+          if (bl) e.bulges = bl;
+        }
         break;
       }
       case 'POLYLINE':
         pending = { t: 'pline', pts: [], closed: !!(GI(o, 70, 0) & 1), ...meta };
         continue;
-      case 'VERTEX': { const p = PT(o, 0); if (pending && p) pending.pts.push(p); continue; }
+      case 'VERTEX': {
+        const p = PT(o, 0);
+        if (pending && p) {
+          pending.pts.push(p);
+          const b = GN(o, 42, 0);
+          if (isFinite(b) && b) {
+            if (!pending.bulges) pending.bulges = [];
+            pending.bulges[pending.pts.length - 1] = b;
+          }
+        }
+        /* a POLYLINE's bulges arrive one VERTEX entity at a time, so the list
+           can be short; fill it out when the run closes */
+        continue;
+      }
       case 'SEQEND':
         if (pending) { if (pending.pts.length > 1) list.push(pending); pending = null; }
         continue;
@@ -370,6 +398,17 @@ function num(v) { return (Math.round(v * 1e9) / 1e9).toString(); }
     to the switch and forgetting this list is the only way to get it wrong,
     rather than adding an entity type anywhere in the program and silently
     losing it. */
+/** the bulges of an LWPOLYLINE against its vertices, or null if none curve */
+function dxfBulges(o, n) {
+  if (!o.B) return null;
+  const out = new Array(n).fill(0);
+  let any = false;
+  for (let i = 0; i < n; i++) {
+    const v = +o.B[i];
+    if (isFinite(v) && v) { out[i] = v; any = true; }
+  }
+  return any ? out : null;
+}
 const DXF_DIRECT = {
   line: 1, pline: 1, spline: 1, circle: 1, arc: 1, ellipse: 1, point: 1,
   ray: 1, xline: 1, text: 1, dim: 1, hatch: 1, insert: 1,
@@ -621,7 +660,14 @@ class DxfWriter {
       case 'pline': {
         this.head(o, e, 'LWPOLYLINE', owner, 'AcDbPolyline');
         P(o, 90, e.pts.length); P(o, 70, e.closed ? 1 : 0); P(o, 43, 0);
-        for (const p of e.pts) { P(o, 10, num(p[0])); P(o, 20, num(p[1])); }
+        /* 42 goes AFTER the vertex it leaves, and only when that span curves —
+           which is what every other package writes and what our own reader
+           now lines up by position */
+        e.pts.forEach((p, i) => {
+          P(o, 10, num(p[0])); P(o, 20, num(p[1]));
+          const b = (typeof bulgeAt === 'function') ? bulgeAt(e, i) : 0;
+          if (b) P(o, 42, num(b));
+        });
         break;
       }
       case 'spline': {
