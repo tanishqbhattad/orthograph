@@ -144,6 +144,90 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.solid, true, 'solidity survives');
   });
 
+  /* A HATCH carries an elevation point in group 10/20 BEFORE its boundary
+     vertices. The reader sliced the whole point list by the vertex counts
+     without accounting for it, so every loop was shifted by one: the
+     elevation point became the first vertex and the real last one fell off
+     the end. Our own 4x3 metre hatch came back as 6 square metres instead of
+     12, on a file we wrote ourselves. */
+  t('a hatch keeps its shape and its area through a DXF', () => {
+    const r = R(`${SETUP}
+      begin();
+      addEnt({t:'hatch', loops:[[[0,0],[4000,0],[4000,3000],[0,3000]]],
+              pattern:'line', sp:150, hatchAng:0, layer:'0'});
+      commit('h');
+      const before = { area: Math.round(entArea([...DOC.ents.values()][0])),
+                       pts: [...DOC.ents.values()][0].loops[0].length };
+      const dxf = exportDXF();
+      resetDoc(); importDXF(dxf);
+      const h = [...DOC.ents.values()].find(e => e.t === 'hatch');
+      return { before, after: { area: Math.round(entArea(h)), pts: h.loops[0].length },
+               loop: h.loops[0].map(q => q.map(Math.round)) };`);
+    eq(r.before.area, 12000000, 'a 4 by 3 metre hatch is 12 square metres');
+    eq(r.after.area, r.before.area,
+      'and still is after a round trip, got ' + r.after.area);
+    eq(r.after.pts, r.before.pts, 'with the same number of vertices');
+    ok(r.loop[0].join(',') !== r.loop[1].join(','),
+      'and no duplicated first vertex: ' + JSON.stringify(r.loop));
+  });
+
+  t('a hatch with a hole keeps both loops through a DXF', () => {
+    const r = R(`${SETUP}
+      begin();
+      addEnt({t:'hatch', loops:[
+        [[0,0],[4000,0],[4000,4000],[0,4000]],
+        [[1000,1000],[2000,1000],[2000,2000],[1000,2000]]],
+        pattern:'line', sp:150, hatchAng:0, layer:'0'});
+      commit('h');
+      const before = Math.round(entArea([...DOC.ents.values()][0]));
+      const dxf = exportDXF();
+      resetDoc(); importDXF(dxf);
+      const h = [...DOC.ents.values()].find(e => e.t === 'hatch');
+      return { before, after: Math.round(entArea(h)), loops: h.loops.length,
+               sizes: h.loops.map(L => L.length) };`);
+    eq(r.loops, 2, 'both loops came back');
+    eq(r.sizes.join(','), '4,4', 'with four vertices each');
+    eq(r.after, r.before, '16 square metres less the 1, got ' + r.after / 1e6);
+  });
+
+  /* Our own files put the outer loop first. A file from anywhere else need
+     not, and subtracting in file order then gives a negative area. */
+  t('the outer loop is found by size, not by being first in the file', () => {
+    const r = R(`${SETUP}
+      begin();
+      const a = addEnt({t:'hatch', loops:[
+        [[0,0],[4000,0],[4000,4000],[0,4000]],
+        [[1000,1000],[2000,1000],[2000,2000],[1000,2000]]], pattern:'line', layer:'0'});
+      /* the same thing with the loops the other way round */
+      const b = addEnt({t:'hatch', loops:[
+        [[1000,1000],[2000,1000],[2000,2000],[1000,2000]],
+        [[0,0],[4000,0],[4000,4000],[0,4000]]], pattern:'line', layer:'0'});
+      commit('h');
+      return { outerFirst: Math.round(entArea(a)), holeFirst: Math.round(entArea(b)) };`);
+    eq(r.outerFirst, 15000000, '16 square metres less 1');
+    eq(r.holeFirst, r.outerFirst,
+      'and the same when the file lists the hole first, got ' + r.holeFirst);
+  });
+
+  /* An old-style POLYLINE carries its bulge on each VERTEX entity. */
+  t('an old-style POLYLINE keeps its bulges too', () => {
+    const r = R(`${SETUP}
+      const NL = String.fromCharCode(10);
+      const dxf = ['0','SECTION','2','ENTITIES',
+        '0','POLYLINE','8','0','66','1','70','0',
+        '0','VERTEX','8','0','10','0','20','0',
+        '0','VERTEX','8','0','10','1000','20','0','42','0.5',
+        '0','VERTEX','8','0','10','1000','20','1000',
+        '0','SEQEND',
+        '0','ENDSEC','0','EOF'].join(NL);
+      importDXF(dxf);
+      const e = [...DOC.ents.values()].find(x => x.t === 'pline');
+      return { found: !!e, bulges: e && e.bulges, curved: e && hasBulge(e) };`);
+    eq(r.found, true, 'the polyline imported');
+    eq(r.curved, true, 'and it curves: ' + JSON.stringify(r.bulges));
+    close(r.bulges[1], 0.5, 1e-9, 'with the bulge on the middle vertex');
+  });
+
   group('a room, on the plan and in the schedule');
 
   /* A room is derived at draw time from the arrangement of the wall faces, so

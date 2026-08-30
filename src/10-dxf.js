@@ -166,7 +166,9 @@ function dxfToEnts(res, body, layerOverride, depth) {
         const p = PT(o, 0);
         if (pending && p) {
           pending.pts.push(p);
-          const b = GN(o, 42, 0);
+          /* the parser routes 42 into o.B against the vertex it followed, so a
+             VERTEX entity's own bulge is o.B[0], not o.g[42] */
+          const b = (o.B && isFinite(o.B[0])) ? o.B[0] : GN(o, 42, 0);
           if (isFinite(b) && b) {
             if (!pending.bulges) pending.bulges = [];
             pending.bulges[pending.pts.length - 1] = b;
@@ -306,9 +308,20 @@ function dimFromDxf(o, meta) {
 function hatchLoops(o) {
   /* Only polyline boundary loops are reconstructed; edge loops fall back to
      their vertex list, which is enough to shade the region. */
-  const pts = (o.P[0] || []).map(p => p.slice(0, 2));
+  let pts = (o.P[0] || []).map(p => p.slice(0, 2));
   if (pts.length < 3) return [];
   const counts = (o.g[93] || []).map(Number);
+  /* A HATCH carries an ELEVATION POINT in 10/20 before any boundary data, and
+     it lands in the same point family as the vertices. Slicing straight
+     through shifted every loop by one: the elevation point became the first
+     vertex and the real last one fell off the end. Our own four-by-three
+     metre hatch came back as six square metres, on a file we wrote. */
+  const want = counts.reduce((a, n) => a + (n > 0 ? n : 0), 0);
+  /* The boundary vertices are the ones BETWEEN the elevation point and the
+     seed points that follow group 98 — so trimming from the end is not enough
+     either. Take exactly as many as the counts ask for, one in from the
+     front, whenever there are more points than boundary vertices. */
+  if (want && pts.length > want) pts = pts.slice(1, 1 + want);
   const loops = [];
   let at = 0;
   if (counts.length) {

@@ -1069,8 +1069,14 @@ GEOM.hatch = {
   area(h) {
     const L = h.loops || [];
     if (!L.length) return 0;
-    let a = Math.abs(polyArea(L[0]));
-    for (let i = 1; i < L.length; i++) a -= Math.abs(polyArea(L[i]));
+    /* By size, not by position. Our own files put the outer loop first, and a
+       file from anywhere else need not — subtracting in file order then gives
+       a negative area, which clamps to zero and reads as "no area at all". */
+    const areas = L.map(x => Math.abs(polyArea(x)));
+    let outer = 0;
+    for (let i = 1; i < areas.length; i++) if (areas[i] > areas[outer]) outer = i;
+    let a = areas[outer];
+    for (let i = 0; i < areas.length; i++) if (i !== outer) a -= areas[i];
     return Math.max(0, a);
   },
   len: h => (h.loops || []).reduce((a, L) => a + polyLen(L, true), 0),
