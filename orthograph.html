@@ -2473,7 +2473,47 @@ function lengthenTo(e, click, opts) {
 }
 
 /* ---- OFFSET ---- */
-function offsetEnt(e, d, side) {
+/* How far a mitre may run before it is cut off, as a multiple of the offset
+   distance. Two nearly-parallel segments meeting at a shallow angle produce a
+   mitre of arbitrary length — the wall code learned this separately and caps
+   its own with MITRE_MAX, but ordinary offset threw the spike. AutoCAD's
+   MITERLIMIT default is 2; this matches it. */
+const OFFSET_MITER_MAX = 2;
+/** the vertices a join contributes between two offset segments */
+function offsetJoin(prev, next, corner, d, join) {
+  const x = xLineLine(prev[0], prev[1], next[0], next[1], true);
+  const a = prev[1], b = next[0];
+  /* parallel or collinear: nothing to join */
+  if (!x.length) return [b];
+  const m = x[0];
+  const miter = dist(m, corner);
+  const round = join === 'round', bevel = join === 'bevel';
+  /* a mitre that has run away is cut square, whatever was asked for */
+  const tooLong = miter > Math.abs(d) * OFFSET_MITER_MAX + EPS;
+  if (!round && !bevel && !tooLong) return [m];
+  if (round && !tooLong) {
+    /* an arc of radius |d| about the original corner, from one offset end to
+       the other — which is what a round join IS */
+    const a0 = Math.atan2(a[1] - corner[1], a[0] - corner[0]);
+    const a1 = Math.atan2(b[1] - corner[1], b[0] - corner[0]);
+    let sweep = wrap(a1 - a0);
+    if (sweep > Math.PI) sweep -= TAU;
+    const n = Math.max(2, Math.ceil(Math.abs(sweep) / 0.35));
+    const out = [];
+    for (let i = 1; i < n; i++) {
+      const t = a0 + sweep * (i / n);
+      out.push([corner[0] + Math.abs(d) * Math.cos(t), corner[1] + Math.abs(d) * Math.sin(t)]);
+    }
+    out.push(b);
+    return out;
+  }
+  /* A bevel is both ends, joined square across the corner — two points where
+     a mitre has one. Also where a runaway mitre lands: cutting it off is the
+     whole purpose of the limit. */
+  return [a, b];
+}
+function offsetEnt(e, d, side, opts) {
+  const join = (opts && opts.join) || 'miter';
   const n = clone(e); delete n.id;
   if (e.t === 'line') {
     const u = perp(norm(sub(e.b, e.a))), o = mul(u, d * side);
@@ -2493,11 +2533,13 @@ function offsetEnt(e, d, side) {
       segs.push([add(P[i - 1], o), add(P[i], o)]);
     }
     if (!segs.length) return null;
+    /* the original corner each join belongs to, so a round join can be an arc
+       about it and a mitre can be measured against it */
+    const corners = [];
+    for (let i = 1; i < P.length; i++) if (dist2(P[i], P[i - 1]) >= 1e-18) corners.push(P[i - 1]);
     const pts = [segs[0][0]];
-    for (let i = 1; i < segs.length; i++) {
-      const x = xLineLine(segs[i - 1][0], segs[i - 1][1], segs[i][0], segs[i][1], true);
-      pts.push(x.length ? x[0] : segs[i][0]);
-    }
+    for (let i = 1; i < segs.length; i++)
+      for (const q of offsetJoin(segs[i - 1], segs[i], corners[i] || segs[i][0], d, join)) pts.push(q);
     pts.push(segs[segs.length - 1][1]);
     if (e.closed) {
       const x = xLineLine(segs[segs.length - 1][0], segs[segs.length - 1][1], segs[0][0], segs[0][1], true);
@@ -12272,6 +12314,60 @@ defc('insert', {
 });
 
 /* ---------------- hatch ---------------- */
+/* ------------------------------------------------------------
+   HULL — the smallest convex ring around a selection.
+
+   Andrew's monotone chain over the flattened points of everything selected,
+   so a hull of two circles follows the arcs rather than their bounding boxes.
+   Site boundary from survey points, extent of a furniture layout, catchment
+   of an escape route, the swept envelope of a door and its approach.
+   ------------------------------------------------------------ */
+function convexHull(pts) {
+  const p = pts.filter(q => q && isFinite(q[0]) && isFinite(q[1]))
+    .map(q => [q[0], q[1]])
+    .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+  if (p.length < 3) return [];
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const half = (src) => {
+    const h = [];
+    for (const q of src) {
+      /* <= 0 drops collinear points, so a straight run does not become a ring
+         of coincident vertices */
+      while (h.length >= 2 && cross(h[h.length - 2], h[h.length - 1], q) <= 0) h.pop();
+      h.push(q);
+    }
+    h.pop();
+    return h;
+  };
+  const ring = half(p).concat(half(p.slice().reverse()));
+  return ring.length >= 3 ? ring : [];
+}
+defc('hull', {
+  key: 'hull', group: 'modify', needSel: true,
+  hint: 'The smallest convex outline around the selection',
+  init(c) {
+    const es = selEnts();
+    if (es.length < 1) { echo('Select something to wrap first'); return endCmd(); }
+    const pts = [];
+    for (const e of es) {
+      let p = [];
+      try { p = poly(e, 64) || []; } catch (err) { p = []; }
+      if (!p.length && e.p) p = [e.p];
+      for (const q of p) pts.push(q);
+    }
+    const ring = convexHull(pts);
+    if (ring.length < 3) { echo('Those points do not enclose anything'); return endCmd(); }
+    begin();
+    const n = addEnt({ t: 'pline', pts: ring.map(q => q.slice()), closed: true, layer: DOC.cur });
+    commit('Hull');
+    SEL.clear(); SEL.add(n.id);
+    cliPrint('Hull of ' + es.length + ' objects — ' + ring.length + ' points, ' +
+             fmtArea(Math.abs(polyArea(ring))) + '.');
+    syncUI(); draw();
+    endCmd();
+  },
+});
+
 defc('hatch', {
   group: 'draw', hint: 'Click inside a closed shape, or select shapes first then <em>Enter</em>',
   init(c) {

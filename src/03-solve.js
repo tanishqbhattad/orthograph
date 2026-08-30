@@ -201,7 +201,47 @@ function lengthenTo(e, click, opts) {
 }
 
 /* ---- OFFSET ---- */
-function offsetEnt(e, d, side) {
+/* How far a mitre may run before it is cut off, as a multiple of the offset
+   distance. Two nearly-parallel segments meeting at a shallow angle produce a
+   mitre of arbitrary length — the wall code learned this separately and caps
+   its own with MITRE_MAX, but ordinary offset threw the spike. AutoCAD's
+   MITERLIMIT default is 2; this matches it. */
+const OFFSET_MITER_MAX = 2;
+/** the vertices a join contributes between two offset segments */
+function offsetJoin(prev, next, corner, d, join) {
+  const x = xLineLine(prev[0], prev[1], next[0], next[1], true);
+  const a = prev[1], b = next[0];
+  /* parallel or collinear: nothing to join */
+  if (!x.length) return [b];
+  const m = x[0];
+  const miter = dist(m, corner);
+  const round = join === 'round', bevel = join === 'bevel';
+  /* a mitre that has run away is cut square, whatever was asked for */
+  const tooLong = miter > Math.abs(d) * OFFSET_MITER_MAX + EPS;
+  if (!round && !bevel && !tooLong) return [m];
+  if (round && !tooLong) {
+    /* an arc of radius |d| about the original corner, from one offset end to
+       the other — which is what a round join IS */
+    const a0 = Math.atan2(a[1] - corner[1], a[0] - corner[0]);
+    const a1 = Math.atan2(b[1] - corner[1], b[0] - corner[0]);
+    let sweep = wrap(a1 - a0);
+    if (sweep > Math.PI) sweep -= TAU;
+    const n = Math.max(2, Math.ceil(Math.abs(sweep) / 0.35));
+    const out = [];
+    for (let i = 1; i < n; i++) {
+      const t = a0 + sweep * (i / n);
+      out.push([corner[0] + Math.abs(d) * Math.cos(t), corner[1] + Math.abs(d) * Math.sin(t)]);
+    }
+    out.push(b);
+    return out;
+  }
+  /* A bevel is both ends, joined square across the corner — two points where
+     a mitre has one. Also where a runaway mitre lands: cutting it off is the
+     whole purpose of the limit. */
+  return [a, b];
+}
+function offsetEnt(e, d, side, opts) {
+  const join = (opts && opts.join) || 'miter';
   const n = clone(e); delete n.id;
   if (e.t === 'line') {
     const u = perp(norm(sub(e.b, e.a))), o = mul(u, d * side);
@@ -221,11 +261,13 @@ function offsetEnt(e, d, side) {
       segs.push([add(P[i - 1], o), add(P[i], o)]);
     }
     if (!segs.length) return null;
+    /* the original corner each join belongs to, so a round join can be an arc
+       about it and a mitre can be measured against it */
+    const corners = [];
+    for (let i = 1; i < P.length; i++) if (dist2(P[i], P[i - 1]) >= 1e-18) corners.push(P[i - 1]);
     const pts = [segs[0][0]];
-    for (let i = 1; i < segs.length; i++) {
-      const x = xLineLine(segs[i - 1][0], segs[i - 1][1], segs[i][0], segs[i][1], true);
-      pts.push(x.length ? x[0] : segs[i][0]);
-    }
+    for (let i = 1; i < segs.length; i++)
+      for (const q of offsetJoin(segs[i - 1], segs[i], corners[i] || segs[i][0], d, join)) pts.push(q);
     pts.push(segs[segs.length - 1][1]);
     if (e.closed) {
       const x = xLineLine(segs[segs.length - 1][0], segs[segs.length - 1][1], segs[0][0], segs[0][1], true);

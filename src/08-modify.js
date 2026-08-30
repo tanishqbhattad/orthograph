@@ -955,6 +955,60 @@ defc('insert', {
 });
 
 /* ---------------- hatch ---------------- */
+/* ------------------------------------------------------------
+   HULL — the smallest convex ring around a selection.
+
+   Andrew's monotone chain over the flattened points of everything selected,
+   so a hull of two circles follows the arcs rather than their bounding boxes.
+   Site boundary from survey points, extent of a furniture layout, catchment
+   of an escape route, the swept envelope of a door and its approach.
+   ------------------------------------------------------------ */
+function convexHull(pts) {
+  const p = pts.filter(q => q && isFinite(q[0]) && isFinite(q[1]))
+    .map(q => [q[0], q[1]])
+    .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+  if (p.length < 3) return [];
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const half = (src) => {
+    const h = [];
+    for (const q of src) {
+      /* <= 0 drops collinear points, so a straight run does not become a ring
+         of coincident vertices */
+      while (h.length >= 2 && cross(h[h.length - 2], h[h.length - 1], q) <= 0) h.pop();
+      h.push(q);
+    }
+    h.pop();
+    return h;
+  };
+  const ring = half(p).concat(half(p.slice().reverse()));
+  return ring.length >= 3 ? ring : [];
+}
+defc('hull', {
+  key: 'hull', group: 'modify', needSel: true,
+  hint: 'The smallest convex outline around the selection',
+  init(c) {
+    const es = selEnts();
+    if (es.length < 1) { echo('Select something to wrap first'); return endCmd(); }
+    const pts = [];
+    for (const e of es) {
+      let p = [];
+      try { p = poly(e, 64) || []; } catch (err) { p = []; }
+      if (!p.length && e.p) p = [e.p];
+      for (const q of p) pts.push(q);
+    }
+    const ring = convexHull(pts);
+    if (ring.length < 3) { echo('Those points do not enclose anything'); return endCmd(); }
+    begin();
+    const n = addEnt({ t: 'pline', pts: ring.map(q => q.slice()), closed: true, layer: DOC.cur });
+    commit('Hull');
+    SEL.clear(); SEL.add(n.id);
+    cliPrint('Hull of ' + es.length + ' objects — ' + ring.length + ' points, ' +
+             fmtArea(Math.abs(polyArea(ring))) + '.');
+    syncUI(); draw();
+    endCmd();
+  },
+});
+
 defc('hatch', {
   group: 'draw', hint: 'Click inside a closed shape, or select shapes first then <em>Enter</em>',
   init(c) {
