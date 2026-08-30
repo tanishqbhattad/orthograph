@@ -995,6 +995,82 @@ defvar('CANNOSCALE', {
     draw();
   },
 });
+/* ---------------- how a dimension reads ----------------
+   AutoCAD's names, front to back, so that anyone who knows the program can
+   type what they already know. Each one writes to the CURRENT dimension style,
+   which is where the setting lives; a dimension carrying its own override is
+   untouched by them, exactly as it should be. */
+function dimVar(key, val) {
+  const rec = curDimStyleRec();
+  begin(); rec[key] = val; commit();
+  draw(); if (typeof syncUI === 'function') syncUI();
+}
+function dimVarGet(key, dflt) {
+  const v = (curDimStyleRec() || {})[key];
+  return v == null ? dflt : v;
+}
+defvar('DIMDEC', {
+  type: 'int', desc: 'Decimal places on a dimension (-1 = automatic)',
+  get: () => { const p = dimVarGet('prec', null); return p == null ? -1 : p; },
+  set(v) { dimVar('prec', v < 0 ? null : clamp(Math.round(v), 0, 8)); },
+});
+defvar('DIMPOST', {
+  type: 'string', desc: 'Text added after a dimension, such as " mm"',
+  get: () => dimVarGet('suf', ''), set(v) { dimVar('suf', String(v)); },
+});
+defvar('DIMPRE', {
+  type: 'string', desc: 'Text put in front of a dimension',
+  get: () => dimVarGet('pre', ''), set(v) { dimVar('pre', String(v)); },
+});
+defvar('DIMLFAC', {
+  type: 'real', desc: 'What the measurement is multiplied by before it is printed',
+  get: () => dimVarGet('lfac', 1),
+  set(v) { dimVar('lfac', (isFinite(v) && v !== 0) ? v : 1); },
+});
+defvar('DIMRND', {
+  type: 'real', desc: 'Round every dimension to a multiple of this (0 = do not)',
+  get: () => dimVarGet('rnd', 0), set(v) { dimVar('rnd', v > 0 ? v : 0); },
+});
+defvar('DIMLUNIT', {
+  type: 'string', desc: 'How lengths are written: dec or arch (feet and inches)',
+  get: () => dimVarGet('lunit', 'dec'),
+  set(v) { const k = String(v).trim().toLowerCase(); dimVar('lunit', k === 'arch' || k === 'frac' ? 'arch' : 'dec'); },
+});
+defvar('DIMZIN', {
+  type: 'int', desc: 'Zero suppression: 0 keep both, 1 drop leading, 2 drop trailing, 3 both',
+  get: () => (dimVarGet('zsupL', false) ? 1 : 0) + (dimVarGet('zsupT', false) ? 2 : 0),
+  set(v) {
+    const n = clamp(Math.round(v), 0, 3);
+    const rec = curDimStyleRec();
+    begin(); rec.zsupL = !!(n & 1); rec.zsupT = !!(n & 2); commit();
+    draw(); if (typeof syncUI === 'function') syncUI();
+  },
+});
+defvar('DIMTOL', {
+  type: 'string', desc: 'Tolerance: none, sym, dev, lim or basic',
+  get: () => dimVarGet('tol', 'none'),
+  set(v) {
+    const k = String(v).trim().toLowerCase();
+    dimVar('tol', ['none', 'sym', 'dev', 'lim', 'basic'].indexOf(k) >= 0 ? k : 'none');
+  },
+});
+defvar('DIMTP', {
+  type: 'real', desc: 'Upper tolerance',
+  get: () => dimVarGet('tolUp', 0), set(v) { dimVar('tolUp', +v || 0); },
+});
+defvar('DIMTM', {
+  type: 'real', desc: 'Lower tolerance',
+  get: () => dimVarGet('tolLo', 0), set(v) { dimVar('tolLo', +v || 0); },
+});
+defvar('DIMTDEC', {
+  type: 'int', desc: 'Decimal places on the tolerance (-1 = as the dimension)',
+  get: () => { const p = dimVarGet('tolPrec', null); return p == null ? -1 : p; },
+  set(v) { dimVar('tolPrec', v < 0 ? null : clamp(Math.round(v), 0, 8)); },
+});
+defvar('DIMTFAC', {
+  type: 'real', desc: 'Tolerance text height, as a fraction of the dimension text',
+  get: () => dimVarGet('tolH', 0.62), set(v) { dimVar('tolH', v > 0 ? v : 0.62); },
+});
 defvar('WALLPAT', {
   desc: 'Hatch a cut wall by what each of its layers is made of',
   get: () => (VS.wallpat === 0 ? 0 : 1),

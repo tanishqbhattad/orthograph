@@ -1678,6 +1678,19 @@ function shapes(e, tol) {
       for (const ar of g.arrows)
         out.push({ pts: arrowPoly(ar.p, ar.a, g.S.arrow), closed: true, fill: true, role: 'arrowhead' });
       out.push({ text: g.txt, p: g.tp, h: g.S.txt, rot: g.tr || 0, anchor: 'c' });
+      /* the tolerance is part of what the dimension says, so it travels with
+         it into a flatten, an explode and a DXF block rather than living only
+         in the screen renderer */
+      const T = g.tol;
+      if (T && (T.up || T.lo)) {
+        const th = g.S.txt * (T.hK != null ? T.hK : 0.62);
+        const rot = g.tr || 0, cs = Math.cos(rot), sn = Math.sin(rot);
+        const x = String(g.txt || '').length * g.S.txt * MT_CHAR / 2 + th * 0.3;
+        const put = (str, dy) => out.push({ text: str, h: th, rot, anchor: 'l',
+          p: [g.tp[0] + cs * x - sn * dy, g.tp[1] + sn * x + cs * dy] });
+        if (T.stacked) { if (T.up) put(T.up, th * 0.35); if (T.lo) put(T.lo, -th * 0.85); }
+        else if (T.up) put(T.up, 0);
+      }
       return out;
     }
     default: return [];
@@ -2788,13 +2801,109 @@ function dimStyle(e) {
     extBey: (d.extBey != null ? d.extBey : h * 0.7) * k,   /* run past the dimension line */
     gap: (d.gap != null ? d.gap : h * 0.25) * k,
     prec: d.prec != null ? d.prec : null,
+    /* how the number is written. None of this is scaled by DIMSCALE: it is
+       about what the dimension SAYS, not how big it is drawn. */
+    pre: d.pre || '', suf: d.suf || '',
+    zsupL: !!d.zsupL, zsupT: !!d.zsupT,
+    lunit: d.lunit || 'dec',
+    lfac: (typeof d.lfac === 'number' && isFinite(d.lfac) && d.lfac !== 0) ? d.lfac : 1,
+    rnd: (typeof d.rnd === 'number' && d.rnd > 0) ? d.rnd : 0,
+    tol: d.tol || 'none',
+    tolUp: (typeof d.tolUp === 'number' && isFinite(d.tolUp)) ? d.tolUp : 0,
+    tolLo: (typeof d.tolLo === 'number' && isFinite(d.tolLo)) ? d.tolLo
+         : ((typeof d.tolUp === 'number' && isFinite(d.tolUp)) ? d.tolUp : 0),
+    tolPrec: d.tolPrec != null ? d.tolPrec : null,
+    tolH: (typeof d.tolH === 'number' && d.tolH > 0) ? d.tolH : 0.62,
   };
 }
+/* ============================================================
+   How a dimension reads
+   ------------------------------------------------------------
+   Everything about a dimension except the number it printed was already
+   adjustable. The number had one setting — decimal places — which is not
+   enough to say any of the things a drawing says: feet and inches on this
+   style, a suffix, no leading zero, round to the nearest 5, report at half
+   size because the view is at half size, or carry a tolerance.
+
+   The tolerance is the one that matters. A dimension with none on a
+   fabrication drawing is not a dimension that is exact; it is one nobody has
+   thought about. The four ways of writing one are four different things to
+   mean, and AutoCAD's names for them are the ones a fabricator reads:
+
+     sym    2500 ±2        it may be 2 either way
+     dev    2500 +2 / -1   more one way than the other
+     lim    2502 / 2499    the two sizes, and no nominal at all
+     basic  [2500]         exact by definition; the tolerance is elsewhere
+   ============================================================ */
+/** one length, written the way this style writes numbers */
+function dimNum(S, v, prec) {
+  if (S.rnd > 0) v = Math.round(v / S.rnd) * S.rnd;
+  /* a metric drawing can carry an imperial dimension and the other way round:
+     the drawing's units are what it is modelled in, not what it must read in */
+  if (S.lunit === 'arch' || S.lunit === 'frac' || DOC.units === 'ft') return fmt(v, 'ft');
+  const u = DOC.units;
+  const dp = prec != null ? prec : S.prec;
+  let s;
+  if (dp == null) s = fmt(v, u);                   /* what it has always done */
+  else s = (v / U[u]).toFixed(clamp(dp, 0, 8)) + (u === 'in' ? '"' : '');
+  if (S.zsupT && s.indexOf('.') >= 0) s = s.replace(/0+$/, '').replace(/\.$/, '');
+  if (S.zsupL) s = s.replace(/^(-?)0\./, '$1.');
+  return s;
+}
+/** The pieces of what a dimension prints: the number, and whatever tolerance
+    rides beside it. Typed text beats all of it, because somebody typed it. */
+function dimParts(e, val) {
+  const S = dimStyle(e);
+  const none = { main: '', up: '', lo: '', stacked: false, box: false, hK: S.tolH, S };
+  if (e && e.txt) return Object.assign({}, none, { main: String(e.txt) });
+  const v = val * S.lfac;
+  const wrap = (n) => S.pre + n + S.suf;
+  const tp = S.tolPrec;
+  if (S.tol === 'lim')
+    /* limits ARE the dimension — there is no nominal for them to annotate —
+       so they are set at full height rather than shrunk like a note */
+    return Object.assign({}, none, { main: '', stacked: true, hK: 1,
+      up: wrap(dimNum(S, v + S.tolUp)), lo: wrap(dimNum(S, v - S.tolLo)) });
+  const main = wrap(dimNum(S, v));
+  if (S.tol === 'sym')
+    return Object.assign({}, none, { main, up: '\u00b1' + dimNum(S, Math.abs(S.tolUp), tp) });
+  if (S.tol === 'dev')
+    return Object.assign({}, none, { main, stacked: true,
+      up: '+' + dimNum(S, Math.abs(S.tolUp), tp),
+      lo: '-' + dimNum(S, Math.abs(S.tolLo), tp) });
+  if (S.tol === 'basic') return Object.assign({}, none, { main, box: true });
+  return Object.assign({}, none, { main });
+}
+/** What a DXF has to carry as a forced text (group code 1). An empty string
+    means "use the measurement", which is the faithful thing to write for an
+    ordinary dimension — the receiving program computes it and can restyle it.
+    The moment the number is not simply the measurement, though, what we print
+    is the only truth there is, so it goes in the file verbatim. */
+function dimOverrideText(e, val) {
+  if (e && e.txt) return String(e.txt);
+  const S = dimStyle(e);
+  const plain = S.tol === 'none' && !S.pre && !S.suf && S.lfac === 1 && !S.rnd &&
+                S.lunit === 'dec' && !S.zsupL && !S.zsupT;
+  return plain ? '' : dimText(e, val);
+}
+/** What a DXF has to carry as a forced text (group code 1). An empty string
+    means "use the measurement", which is the faithful thing to write for an
+    ordinary dimension — the receiving program computes it and can restyle it.
+    The moment the number is not simply the measurement, though, what we print
+    is the only truth there is, so it goes in the file verbatim. */
+function dimOverrideText(e, val) {
+  if (e && e.txt) return String(e.txt);
+  const S = dimStyle(e);
+  const plain = S.tol === 'none' && !S.pre && !S.suf && S.lfac === 1 && !S.rnd &&
+                S.lunit === 'dec' && !S.zsupL && !S.zsupT;
+  return plain ? '' : dimText(e, val);
+}
+/** the whole thing on one line, for anything that wants a string */
 function dimText(e, val) {
-  if (e.txt) return e.txt;
-  const s = dimStyle(e);
-  if (s.prec != null && DOC.units !== 'ft') return (val / U[DOC.units]).toFixed(s.prec);
-  return fmt(val);
+  const p = dimParts(e, val);
+  if (!p.up && !p.lo) return p.main;
+  const tol = p.lo ? p.up + ' / ' + p.lo : p.up;
+  return p.main ? p.main + ' ' + tol : tol;
 }
 /* ---------------- associative dimensions ----------------
    A dimension that keeps a copy of two coordinates starts lying the moment the
@@ -2862,7 +2971,7 @@ function dimGeom(e0) {
     lines.push([a, p]); arrows.push({ p, a: ang(a, p) });
     if (e.k === 'diameter') arrows.push({ p: a, a: ang(p, a) });
     const val = (e.k === 'diameter' ? 2 : 1) * dist(c, p);
-    return { lines, arrows, tp: mid(a, p), tr: 0, txt: (e.k === 'diameter' ? 'Ø' : 'R') + dimText(e, val), val, S };
+    return { lines, arrows, tp: mid(a, p), tr: 0, txt: (e.k === 'diameter' ? 'Ø' : 'R') + dimParts(e, val).main, tol: dimParts(e, val), val, S };
   }
   /* ORDINATE — how a setting-out drawing is dimensioned. Not a chain of sizes
      between features, where one error walks down the whole run, but each
@@ -2886,7 +2995,7 @@ function dimGeom(e0) {
     const tp = axis === 'x'
       ? [tp0[0], tp0[1] + along * S.gap]
       : [tp0[0] + along * S.gap, tp0[1]];
-    return { lines, arrows: [], tp, tr: 0, txt: dimText(e, val), val, S,
+    return { lines, arrows: [], tp, tr: 0, txt: dimParts(e, val).main, tol: dimParts(e, val), val, S,
              anchor: axis === 'x' ? 'c' : (along > 0 ? 'l' : 'r') };
   }
   /* ARC LENGTH — measured ALONG the curve. An aligned dimension across the
@@ -2916,7 +3025,7 @@ function dimGeom(e0) {
     return {
       lines, arrows: [{ p: pts[0], a: a0 - Math.PI / 2 }, { p: pts[n], a: a1 + Math.PI / 2 }],
       tp: [c[0] + R * Math.cos(am), c[1] + R * Math.sin(am)], tr: 0,
-      txt: e.txt || '\u2312' + dimText(e, val), val, S, arcR: R, arcC: c, a0, a1,
+      txt: e.txt || '\u2312' + dimParts(e, val).main, tol: dimParts(e, val), val, S, arcR: R, arcC: c, a0, a1,
     };
   }
   if (e.k === 'angular') {
@@ -2957,7 +3066,7 @@ function dimGeom(e0) {
   let tr = Math.atan2(q2[1] - q1[1], q2[0] - q1[0]);
   if (tr > Math.PI / 2 + 1e-9 || tr < -Math.PI / 2 - 1e-9) tr += Math.PI;
   const tp = add(mid(q1, q2), mul(perp([Math.cos(tr), Math.sin(tr)]), S.gap + S.txt * 0.5));
-  return { lines, arrows, tp, tr, txt: dimText(e, val), val, S, q1, q2 };
+  return { lines, arrows, tp, tr, txt: dimParts(e, val).main, tol: dimParts(e, val), val, S, q1, q2 };
 }
 /** arrowhead outline as a closed polygon, in model space */
 function arrowPoly(p, a, sz) {
@@ -5739,10 +5848,36 @@ function drawDim(e, col, mode) {
     const tp = w2s(g.tp);
     ctx.save(); ctx.translate(tp[0], tp[1]); ctx.rotate(-(g.tr + V.rot));
     ctx.font = '500 ' + hp.toFixed(1) + "px 'JetBrains Mono',monospace";
+    const T = g.tol || {};
+    const th = hp * (T.hK != null ? T.hK : 0.62);
+    /* the tolerance sits to the right of the number, at about two thirds its
+       height: one line for a plus-minus, two stacked for a deviation or a
+       pair of limits */
+    let tw = 0;
+    if (T.up || T.lo) {
+      ctx.font = '500 ' + th.toFixed(1) + "px 'JetBrains Mono',monospace";
+      tw = Math.max(ctx.measureText(T.up || '').width, ctx.measureText(T.lo || '').width) + hp * 0.22;
+      ctx.font = '500 ' + hp.toFixed(1) + "px 'JetBrains Mono',monospace";
+    }
     const wpx = ctx.measureText(g.txt).width;
-    ctx.fillStyle = CO.bg; ctx.fillRect(-wpx / 2 - hp * .18, -hp * .82, wpx + hp * .36, hp * 1.05);
+    const all = wpx + tw;
+    ctx.fillStyle = CO.bg; ctx.fillRect(-all / 2 - hp * .18, -hp * .82, all + hp * .36, hp * 1.05);
     ctx.fillStyle = col; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-    ctx.fillText(g.txt, 0, 0);
+    ctx.fillText(g.txt, -tw / 2, 0);
+    /* basic: the box IS the meaning, so it is drawn even when it is small */
+    if (g.tol && g.tol.box) {
+      ctx.strokeStyle = col; ctx.lineWidth = Math.max(HAIR, 1); ctx.setLineDash(DASH_SOLID);
+      ctx.strokeRect(-tw / 2 - wpx / 2 - hp * .22, -hp * .86, wpx + hp * .44, hp * 1.12);
+    }
+    if (T.up || T.lo) {
+      ctx.font = '500 ' + th.toFixed(1) + "px 'JetBrains Mono',monospace";
+      ctx.textAlign = 'left';
+      const x = wpx / 2 - tw / 2 + hp * 0.16;
+      if (T.stacked) {
+        if (T.up) ctx.fillText(T.up, x, -th * 0.32);
+        if (T.lo) ctx.fillText(T.lo, x, th * 0.92);
+      } else if (T.up) ctx.fillText(T.up, x, 0);
+    }
     ctx.restore();
   }
 }
@@ -14517,6 +14652,82 @@ defvar('CANNOSCALE', {
     draw();
   },
 });
+/* ---------------- how a dimension reads ----------------
+   AutoCAD's names, front to back, so that anyone who knows the program can
+   type what they already know. Each one writes to the CURRENT dimension style,
+   which is where the setting lives; a dimension carrying its own override is
+   untouched by them, exactly as it should be. */
+function dimVar(key, val) {
+  const rec = curDimStyleRec();
+  begin(); rec[key] = val; commit();
+  draw(); if (typeof syncUI === 'function') syncUI();
+}
+function dimVarGet(key, dflt) {
+  const v = (curDimStyleRec() || {})[key];
+  return v == null ? dflt : v;
+}
+defvar('DIMDEC', {
+  type: 'int', desc: 'Decimal places on a dimension (-1 = automatic)',
+  get: () => { const p = dimVarGet('prec', null); return p == null ? -1 : p; },
+  set(v) { dimVar('prec', v < 0 ? null : clamp(Math.round(v), 0, 8)); },
+});
+defvar('DIMPOST', {
+  type: 'string', desc: 'Text added after a dimension, such as " mm"',
+  get: () => dimVarGet('suf', ''), set(v) { dimVar('suf', String(v)); },
+});
+defvar('DIMPRE', {
+  type: 'string', desc: 'Text put in front of a dimension',
+  get: () => dimVarGet('pre', ''), set(v) { dimVar('pre', String(v)); },
+});
+defvar('DIMLFAC', {
+  type: 'real', desc: 'What the measurement is multiplied by before it is printed',
+  get: () => dimVarGet('lfac', 1),
+  set(v) { dimVar('lfac', (isFinite(v) && v !== 0) ? v : 1); },
+});
+defvar('DIMRND', {
+  type: 'real', desc: 'Round every dimension to a multiple of this (0 = do not)',
+  get: () => dimVarGet('rnd', 0), set(v) { dimVar('rnd', v > 0 ? v : 0); },
+});
+defvar('DIMLUNIT', {
+  type: 'string', desc: 'How lengths are written: dec or arch (feet and inches)',
+  get: () => dimVarGet('lunit', 'dec'),
+  set(v) { const k = String(v).trim().toLowerCase(); dimVar('lunit', k === 'arch' || k === 'frac' ? 'arch' : 'dec'); },
+});
+defvar('DIMZIN', {
+  type: 'int', desc: 'Zero suppression: 0 keep both, 1 drop leading, 2 drop trailing, 3 both',
+  get: () => (dimVarGet('zsupL', false) ? 1 : 0) + (dimVarGet('zsupT', false) ? 2 : 0),
+  set(v) {
+    const n = clamp(Math.round(v), 0, 3);
+    const rec = curDimStyleRec();
+    begin(); rec.zsupL = !!(n & 1); rec.zsupT = !!(n & 2); commit();
+    draw(); if (typeof syncUI === 'function') syncUI();
+  },
+});
+defvar('DIMTOL', {
+  type: 'string', desc: 'Tolerance: none, sym, dev, lim or basic',
+  get: () => dimVarGet('tol', 'none'),
+  set(v) {
+    const k = String(v).trim().toLowerCase();
+    dimVar('tol', ['none', 'sym', 'dev', 'lim', 'basic'].indexOf(k) >= 0 ? k : 'none');
+  },
+});
+defvar('DIMTP', {
+  type: 'real', desc: 'Upper tolerance',
+  get: () => dimVarGet('tolUp', 0), set(v) { dimVar('tolUp', +v || 0); },
+});
+defvar('DIMTM', {
+  type: 'real', desc: 'Lower tolerance',
+  get: () => dimVarGet('tolLo', 0), set(v) { dimVar('tolLo', +v || 0); },
+});
+defvar('DIMTDEC', {
+  type: 'int', desc: 'Decimal places on the tolerance (-1 = as the dimension)',
+  get: () => { const p = dimVarGet('tolPrec', null); return p == null ? -1 : p; },
+  set(v) { dimVar('tolPrec', v < 0 ? null : clamp(Math.round(v), 0, 8)); },
+});
+defvar('DIMTFAC', {
+  type: 'real', desc: 'Tolerance text height, as a fraction of the dimension text',
+  get: () => dimVarGet('tolH', 0.62), set(v) { dimVar('tolH', v > 0 ? v : 0.62); },
+});
 defvar('WALLPAT', {
   desc: 'Hatch a cut wall by what each of its layers is made of',
   get: () => (VS.wallpat === 0 ? 0 : 1),
@@ -16837,7 +17048,7 @@ class DxfWriter {
       pt(o, 10, k === 'radius' ? e.p1 : e.p2);
       pt(o, 11, g.tp);
       P(o, 70, type + 32); P(o, 71, 5); P(o, 42, num(g.val));
-      P(o, 1, e.txt || ''); P(o, 3, 'ORTHO');
+      P(o, 1, dimOverrideText(e, g.val)); P(o, 3, 'ORTHO');
       P(o, 100, k === 'radius' ? 'AcDbRadialDimension' : 'AcDbDiametricDimension');
       /* radius: 10 is the centre and 15 the point on the circle.
          diameter: both are opposite points on the circle. */
@@ -16849,7 +17060,7 @@ class DxfWriter {
       pt(o, 10, g.tp);                             /* a point on the dimension arc */
       pt(o, 11, g.tp);
       P(o, 70, type + 32); P(o, 71, 5); P(o, 42, num(g.val));
-      P(o, 1, e.txt || ''); P(o, 3, 'ORTHO');
+      P(o, 1, dimOverrideText(e, g.val)); P(o, 3, 'ORTHO');
       P(o, 100, 'AcDb3PointAngularDimension');
       pt(o, 13, e.p1); pt(o, 14, e.p2);
       pt(o, 15, e.p3 || e.p1);                     /* vertex */
@@ -16865,7 +17076,7 @@ class DxfWriter {
       const xAxis = (g.anchor === 'c');             /* dimGeom resolved the axis */
       P(o, 70, 6 + 32 + (xAxis ? 64 : 0));
       P(o, 71, 5); P(o, 42, num(g.val));
-      P(o, 1, e.txt || ''); P(o, 3, 'ORTHO');
+      P(o, 1, dimOverrideText(e, g.val)); P(o, 3, 'ORTHO');
       P(o, 100, 'AcDbOrdinateDimension');
       pt(o, 13, e.p1); pt(o, 14, e.p2);
       return;
@@ -16874,7 +17085,7 @@ class DxfWriter {
     pt(o, 10, g.q2);
     pt(o, 11, g.tp);
     P(o, 70, type + 32); P(o, 71, 5); P(o, 42, num(g.val));
-    P(o, 1, e.txt || ''); P(o, 3, 'ORTHO');
+    P(o, 1, dimOverrideText(e, g.val)); P(o, 3, 'ORTHO');
     P(o, 100, 'AcDbAlignedDimension');
     pt(o, 13, e.p1); pt(o, 14, e.p2);
     const rotA = k === 'horizontal' ? 0 : k === 'vertical' ? 90 : deg(ang(e.p1, e.p2));
@@ -16995,7 +17206,27 @@ function svgEntityBody(lwMul) {
       const g = dimGeom(e);
       for (const [a, bb] of g.lines) out.push(`<line x1="${a[0]}" y1="${-a[1]}" x2="${bb[0]}" y2="${-bb[1]}" ${strokeOf(col, lw, '')}/>`);
       for (const ar of g.arrows) out.push(`<path d="M${arrowPoly(ar.p, ar.a, g.S.arrow).map(T2).join('L')}Z" fill="${col}" stroke="none"/>`);
-      out.push(`<text x="${g.tp[0]}" y="${-g.tp[1]}" font-family="Inter,sans-serif" font-size="${g.S.txt}" fill="${col}" text-anchor="middle" transform="rotate(${-deg(g.tr)} ${g.tp[0]} ${-g.tp[1]})">${esc(g.txt)}</text>`);
+      const T = g.tol || {};
+      const rot = `rotate(${-deg(g.tr)} ${g.tp[0]} ${-g.tp[1]})`;
+      const th = g.S.txt * (T.hK != null ? T.hK : 0.62);
+      /* the tolerance is set beside the number at about two thirds its height,
+         stacked when there are two of them */
+      const tw = (T.up || T.lo)
+        ? Math.max((T.up || '').length, (T.lo || '').length) * th * 0.62 + g.S.txt * 0.22 : 0;
+      const mw = String(g.txt || '').length * g.S.txt * 0.62;
+      out.push(`<text x="${g.tp[0] - tw / 2}" y="${-g.tp[1]}" font-family="Inter,sans-serif" ` +
+        `font-size="${g.S.txt}" fill="${col}" text-anchor="middle" transform="${rot}">${esc(g.txt)}</text>`);
+      if (T.box)
+        out.push(`<rect x="${g.tp[0] - tw / 2 - mw / 2 - g.S.txt * 0.22}" ` +
+          `y="${-g.tp[1] - g.S.txt * 0.86}" width="${mw + g.S.txt * 0.44}" ` +
+          `height="${g.S.txt * 1.12}" fill="none" ${strokeOf(col, lw, '')} transform="${rot}"/>`);
+      if (T.up || T.lo) {
+        const x = g.tp[0] + mw / 2 - tw / 2 + g.S.txt * 0.16;
+        const put = (s, dy) => out.push(`<text x="${x}" y="${-g.tp[1] + dy}" ` +
+          `font-family="Inter,sans-serif" font-size="${th}" fill="${col}" transform="${rot}">${esc(s)}</text>`);
+        if (T.stacked) { if (T.up) put(T.up, -th * 0.32); if (T.lo) put(T.lo, th * 0.92); }
+        else if (T.up) put(T.up, 0);
+      }
       continue;
     }
     if (e.t === 'text') { emitShape({ text: e.s, p: e.p, h: e.h, rot: e.rot, anchor: e.anchor }, col, lw, lt); continue; }
@@ -20817,14 +21048,61 @@ function openDimStyle() {
     <div class="row"><label>Arrow size</label><input class="f" id="dsA" value="${+(S.arrow / U[DOC.units]).toFixed(4)}"></div>
     <div class="row"><label>Ext offset</label><input class="f" id="dsO" value="${+(S.extOff / U[DOC.units]).toFixed(4)}"></div>
     <div class="row"><label>Ext beyond</label><input class="f" id="dsB" value="${+(S.extBey / U[DOC.units]).toFixed(4)}"></div>
-    <div class="row"><label>Decimals</label><input class="f" id="dsP" value="${S.prec == null ? '' : S.prec}" placeholder="auto"></div>`, () => {
+    <div class="row"><label>Decimals</label><input class="f" id="dsP" value="${S.prec == null ? '' : S.prec}" placeholder="auto"></div>
+    <h4>How the number reads</h4>
+    <div class="row"><label>Units</label><select class="f" id="dsU">
+      <option value="dec"${S.lunit !== 'arch' ? ' selected' : ''}>Decimal</option>
+      <option value="arch"${S.lunit === 'arch' ? ' selected' : ''}>Feet and inches</option>
+    </select></div>
+    <div class="row"><label>Prefix</label><input class="f" id="dsPre" value="${esc(S.pre)}" placeholder="none"></div>
+    <div class="row"><label>Suffix</label><input class="f" id="dsSuf" value="${esc(S.suf)}" placeholder="e.g. mm"></div>
+    <div class="row"><label>Drop zeros</label><select class="f" id="dsZ">
+      <option value="0">Keep them</option>
+      <option value="1"${S.zsupL && !S.zsupT ? ' selected' : ''}>Leading</option>
+      <option value="2"${S.zsupT && !S.zsupL ? ' selected' : ''}>Trailing</option>
+      <option value="3"${S.zsupL && S.zsupT ? ' selected' : ''}>Both</option>
+    </select></div>
+    <div class="row"><label>Measure &times;</label><input class="f" id="dsLF" value="${S.lfac}"></div>
+    <div class="row"><label>Round to</label><input class="f" id="dsR" value="${S.rnd || ''}" placeholder="not at all"></div>
+    <h4>Tolerance</h4>
+    <div class="row"><label>Kind</label><select class="f" id="dsTol">
+      <option value="none"${S.tol === 'none' ? ' selected' : ''}>None</option>
+      <option value="sym"${S.tol === 'sym' ? ' selected' : ''}>Symmetrical &plusmn;</option>
+      <option value="dev"${S.tol === 'dev' ? ' selected' : ''}>Deviation + / &minus;</option>
+      <option value="lim"${S.tol === 'lim' ? ' selected' : ''}>Limits</option>
+      <option value="basic"${S.tol === 'basic' ? ' selected' : ''}>Basic (boxed)</option>
+    </select></div>
+    <div class="row"><label>Upper</label><input class="f" id="dsTU" value="${S.tolUp || ''}" placeholder="0"></div>
+    <div class="row"><label>Lower</label><input class="f" id="dsTL" value="${S.tolLo || ''}" placeholder="same as upper"></div>
+    <div class="row"><label>Tol decimals</label><input class="f" id="dsTD" value="${S.tolPrec == null ? '' : S.tolPrec}" placeholder="as above"></div>`, () => {
+    /* the settings belong to the current dimension style, which is what
+       DIMSTYLE saves and restores; DOC.dimStyle is the pre-styles document
+       and is kept in step so an old file still opens the way it was left */
+    const rec = curDimStyleRec();
     DOC.dimStyle = DOC.dimStyle || {};
-    DOC.dimStyle.txt = parseLen($('#dsT').value) || S.txt;
-    DOC.dimStyle.arrow = parseLen($('#dsA').value) || S.arrow;
-    DOC.dimStyle.extOff = parseLen($('#dsO').value);
-    DOC.dimStyle.extBey = parseLen($('#dsB').value);
+    begin();
+    const put = (k, v) => { rec[k] = v; DOC.dimStyle[k] = v; };
+    put('txt', parseLen($('#dsT').value) || S.txt);
+    put('arrow', parseLen($('#dsA').value) || S.arrow);
+    put('extOff', parseLen($('#dsO').value));
+    put('extBey', parseLen($('#dsB').value));
     const p = $('#dsP').value.trim();
-    DOC.dimStyle.prec = p === '' ? null : clamp(parseInt(p) || 0, 0, 6);
+    put('prec', p === '' ? null : clamp(parseInt(p) || 0, 0, 6));
+    put('lunit', $('#dsU').value === 'arch' ? 'arch' : 'dec');
+    put('pre', $('#dsPre').value);
+    put('suf', $('#dsSuf').value);
+    const z = parseInt($('#dsZ').value) || 0;
+    put('zsupL', !!(z & 1)); put('zsupT', !!(z & 2));
+    const lf = parseFloat($('#dsLF').value);
+    put('lfac', isFinite(lf) && lf !== 0 ? lf : 1);
+    put('rnd', Math.max(0, parseLen($('#dsR').value) || 0));
+    put('tol', $('#dsTol').value);
+    put('tolUp', parseLen($('#dsTU').value) || 0);
+    const tl = $('#dsTL').value.trim();
+    put('tolLo', tl === '' ? (parseLen($('#dsTU').value) || 0) : (parseLen(tl) || 0));
+    const td = $('#dsTD').value.trim();
+    put('tolPrec', td === '' ? null : clamp(parseInt(td) || 0, 0, 8));
+    commit('Dimension style');
     draw(); syncUI();
   });
 }

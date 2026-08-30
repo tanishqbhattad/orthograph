@@ -1196,10 +1196,36 @@ function drawDim(e, col, mode) {
     const tp = w2s(g.tp);
     ctx.save(); ctx.translate(tp[0], tp[1]); ctx.rotate(-(g.tr + V.rot));
     ctx.font = '500 ' + hp.toFixed(1) + "px 'JetBrains Mono',monospace";
+    const T = g.tol || {};
+    const th = hp * (T.hK != null ? T.hK : 0.62);
+    /* the tolerance sits to the right of the number, at about two thirds its
+       height: one line for a plus-minus, two stacked for a deviation or a
+       pair of limits */
+    let tw = 0;
+    if (T.up || T.lo) {
+      ctx.font = '500 ' + th.toFixed(1) + "px 'JetBrains Mono',monospace";
+      tw = Math.max(ctx.measureText(T.up || '').width, ctx.measureText(T.lo || '').width) + hp * 0.22;
+      ctx.font = '500 ' + hp.toFixed(1) + "px 'JetBrains Mono',monospace";
+    }
     const wpx = ctx.measureText(g.txt).width;
-    ctx.fillStyle = CO.bg; ctx.fillRect(-wpx / 2 - hp * .18, -hp * .82, wpx + hp * .36, hp * 1.05);
+    const all = wpx + tw;
+    ctx.fillStyle = CO.bg; ctx.fillRect(-all / 2 - hp * .18, -hp * .82, all + hp * .36, hp * 1.05);
     ctx.fillStyle = col; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-    ctx.fillText(g.txt, 0, 0);
+    ctx.fillText(g.txt, -tw / 2, 0);
+    /* basic: the box IS the meaning, so it is drawn even when it is small */
+    if (g.tol && g.tol.box) {
+      ctx.strokeStyle = col; ctx.lineWidth = Math.max(HAIR, 1); ctx.setLineDash(DASH_SOLID);
+      ctx.strokeRect(-tw / 2 - wpx / 2 - hp * .22, -hp * .86, wpx + hp * .44, hp * 1.12);
+    }
+    if (T.up || T.lo) {
+      ctx.font = '500 ' + th.toFixed(1) + "px 'JetBrains Mono',monospace";
+      ctx.textAlign = 'left';
+      const x = wpx / 2 - tw / 2 + hp * 0.16;
+      if (T.stacked) {
+        if (T.up) ctx.fillText(T.up, x, -th * 0.32);
+        if (T.lo) ctx.fillText(T.lo, x, th * 0.92);
+      } else if (T.up) ctx.fillText(T.up, x, 0);
+    }
     ctx.restore();
   }
 }

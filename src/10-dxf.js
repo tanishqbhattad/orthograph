@@ -828,7 +828,7 @@ class DxfWriter {
       pt(o, 10, k === 'radius' ? e.p1 : e.p2);
       pt(o, 11, g.tp);
       P(o, 70, type + 32); P(o, 71, 5); P(o, 42, num(g.val));
-      P(o, 1, e.txt || ''); P(o, 3, 'ORTHO');
+      P(o, 1, dimOverrideText(e, g.val)); P(o, 3, 'ORTHO');
       P(o, 100, k === 'radius' ? 'AcDbRadialDimension' : 'AcDbDiametricDimension');
       /* radius: 10 is the centre and 15 the point on the circle.
          diameter: both are opposite points on the circle. */
@@ -840,7 +840,7 @@ class DxfWriter {
       pt(o, 10, g.tp);                             /* a point on the dimension arc */
       pt(o, 11, g.tp);
       P(o, 70, type + 32); P(o, 71, 5); P(o, 42, num(g.val));
-      P(o, 1, e.txt || ''); P(o, 3, 'ORTHO');
+      P(o, 1, dimOverrideText(e, g.val)); P(o, 3, 'ORTHO');
       P(o, 100, 'AcDb3PointAngularDimension');
       pt(o, 13, e.p1); pt(o, 14, e.p2);
       pt(o, 15, e.p3 || e.p1);                     /* vertex */
@@ -856,7 +856,7 @@ class DxfWriter {
       const xAxis = (g.anchor === 'c');             /* dimGeom resolved the axis */
       P(o, 70, 6 + 32 + (xAxis ? 64 : 0));
       P(o, 71, 5); P(o, 42, num(g.val));
-      P(o, 1, e.txt || ''); P(o, 3, 'ORTHO');
+      P(o, 1, dimOverrideText(e, g.val)); P(o, 3, 'ORTHO');
       P(o, 100, 'AcDbOrdinateDimension');
       pt(o, 13, e.p1); pt(o, 14, e.p2);
       return;
@@ -865,7 +865,7 @@ class DxfWriter {
     pt(o, 10, g.q2);
     pt(o, 11, g.tp);
     P(o, 70, type + 32); P(o, 71, 5); P(o, 42, num(g.val));
-    P(o, 1, e.txt || ''); P(o, 3, 'ORTHO');
+    P(o, 1, dimOverrideText(e, g.val)); P(o, 3, 'ORTHO');
     P(o, 100, 'AcDbAlignedDimension');
     pt(o, 13, e.p1); pt(o, 14, e.p2);
     const rotA = k === 'horizontal' ? 0 : k === 'vertical' ? 90 : deg(ang(e.p1, e.p2));

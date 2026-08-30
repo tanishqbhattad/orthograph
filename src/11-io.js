@@ -54,7 +54,27 @@ function svgEntityBody(lwMul) {
       const g = dimGeom(e);
       for (const [a, bb] of g.lines) out.push(`<line x1="${a[0]}" y1="${-a[1]}" x2="${bb[0]}" y2="${-bb[1]}" ${strokeOf(col, lw, '')}/>`);
       for (const ar of g.arrows) out.push(`<path d="M${arrowPoly(ar.p, ar.a, g.S.arrow).map(T2).join('L')}Z" fill="${col}" stroke="none"/>`);
-      out.push(`<text x="${g.tp[0]}" y="${-g.tp[1]}" font-family="Inter,sans-serif" font-size="${g.S.txt}" fill="${col}" text-anchor="middle" transform="rotate(${-deg(g.tr)} ${g.tp[0]} ${-g.tp[1]})">${esc(g.txt)}</text>`);
+      const T = g.tol || {};
+      const rot = `rotate(${-deg(g.tr)} ${g.tp[0]} ${-g.tp[1]})`;
+      const th = g.S.txt * (T.hK != null ? T.hK : 0.62);
+      /* the tolerance is set beside the number at about two thirds its height,
+         stacked when there are two of them */
+      const tw = (T.up || T.lo)
+        ? Math.max((T.up || '').length, (T.lo || '').length) * th * 0.62 + g.S.txt * 0.22 : 0;
+      const mw = String(g.txt || '').length * g.S.txt * 0.62;
+      out.push(`<text x="${g.tp[0] - tw / 2}" y="${-g.tp[1]}" font-family="Inter,sans-serif" ` +
+        `font-size="${g.S.txt}" fill="${col}" text-anchor="middle" transform="${rot}">${esc(g.txt)}</text>`);
+      if (T.box)
+        out.push(`<rect x="${g.tp[0] - tw / 2 - mw / 2 - g.S.txt * 0.22}" ` +
+          `y="${-g.tp[1] - g.S.txt * 0.86}" width="${mw + g.S.txt * 0.44}" ` +
+          `height="${g.S.txt * 1.12}" fill="none" ${strokeOf(col, lw, '')} transform="${rot}"/>`);
+      if (T.up || T.lo) {
+        const x = g.tp[0] + mw / 2 - tw / 2 + g.S.txt * 0.16;
+        const put = (s, dy) => out.push(`<text x="${x}" y="${-g.tp[1] + dy}" ` +
+          `font-family="Inter,sans-serif" font-size="${th}" fill="${col}" transform="${rot}">${esc(s)}</text>`);
+        if (T.stacked) { if (T.up) put(T.up, -th * 0.32); if (T.lo) put(T.lo, th * 0.92); }
+        else if (T.up) put(T.up, 0);
+      }
       continue;
     }
     if (e.t === 'text') { emitShape({ text: e.s, p: e.p, h: e.h, rot: e.rot, anchor: e.anchor }, col, lw, lt); continue; }

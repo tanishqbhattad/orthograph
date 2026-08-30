@@ -95,14 +95,61 @@ function openDimStyle() {
     <div class="row"><label>Arrow size</label><input class="f" id="dsA" value="${+(S.arrow / U[DOC.units]).toFixed(4)}"></div>
     <div class="row"><label>Ext offset</label><input class="f" id="dsO" value="${+(S.extOff / U[DOC.units]).toFixed(4)}"></div>
     <div class="row"><label>Ext beyond</label><input class="f" id="dsB" value="${+(S.extBey / U[DOC.units]).toFixed(4)}"></div>
-    <div class="row"><label>Decimals</label><input class="f" id="dsP" value="${S.prec == null ? '' : S.prec}" placeholder="auto"></div>`, () => {
+    <div class="row"><label>Decimals</label><input class="f" id="dsP" value="${S.prec == null ? '' : S.prec}" placeholder="auto"></div>
+    <h4>How the number reads</h4>
+    <div class="row"><label>Units</label><select class="f" id="dsU">
+      <option value="dec"${S.lunit !== 'arch' ? ' selected' : ''}>Decimal</option>
+      <option value="arch"${S.lunit === 'arch' ? ' selected' : ''}>Feet and inches</option>
+    </select></div>
+    <div class="row"><label>Prefix</label><input class="f" id="dsPre" value="${esc(S.pre)}" placeholder="none"></div>
+    <div class="row"><label>Suffix</label><input class="f" id="dsSuf" value="${esc(S.suf)}" placeholder="e.g. mm"></div>
+    <div class="row"><label>Drop zeros</label><select class="f" id="dsZ">
+      <option value="0">Keep them</option>
+      <option value="1"${S.zsupL && !S.zsupT ? ' selected' : ''}>Leading</option>
+      <option value="2"${S.zsupT && !S.zsupL ? ' selected' : ''}>Trailing</option>
+      <option value="3"${S.zsupL && S.zsupT ? ' selected' : ''}>Both</option>
+    </select></div>
+    <div class="row"><label>Measure &times;</label><input class="f" id="dsLF" value="${S.lfac}"></div>
+    <div class="row"><label>Round to</label><input class="f" id="dsR" value="${S.rnd || ''}" placeholder="not at all"></div>
+    <h4>Tolerance</h4>
+    <div class="row"><label>Kind</label><select class="f" id="dsTol">
+      <option value="none"${S.tol === 'none' ? ' selected' : ''}>None</option>
+      <option value="sym"${S.tol === 'sym' ? ' selected' : ''}>Symmetrical &plusmn;</option>
+      <option value="dev"${S.tol === 'dev' ? ' selected' : ''}>Deviation + / &minus;</option>
+      <option value="lim"${S.tol === 'lim' ? ' selected' : ''}>Limits</option>
+      <option value="basic"${S.tol === 'basic' ? ' selected' : ''}>Basic (boxed)</option>
+    </select></div>
+    <div class="row"><label>Upper</label><input class="f" id="dsTU" value="${S.tolUp || ''}" placeholder="0"></div>
+    <div class="row"><label>Lower</label><input class="f" id="dsTL" value="${S.tolLo || ''}" placeholder="same as upper"></div>
+    <div class="row"><label>Tol decimals</label><input class="f" id="dsTD" value="${S.tolPrec == null ? '' : S.tolPrec}" placeholder="as above"></div>`, () => {
+    /* the settings belong to the current dimension style, which is what
+       DIMSTYLE saves and restores; DOC.dimStyle is the pre-styles document
+       and is kept in step so an old file still opens the way it was left */
+    const rec = curDimStyleRec();
     DOC.dimStyle = DOC.dimStyle || {};
-    DOC.dimStyle.txt = parseLen($('#dsT').value) || S.txt;
-    DOC.dimStyle.arrow = parseLen($('#dsA').value) || S.arrow;
-    DOC.dimStyle.extOff = parseLen($('#dsO').value);
-    DOC.dimStyle.extBey = parseLen($('#dsB').value);
+    begin();
+    const put = (k, v) => { rec[k] = v; DOC.dimStyle[k] = v; };
+    put('txt', parseLen($('#dsT').value) || S.txt);
+    put('arrow', parseLen($('#dsA').value) || S.arrow);
+    put('extOff', parseLen($('#dsO').value));
+    put('extBey', parseLen($('#dsB').value));
     const p = $('#dsP').value.trim();
-    DOC.dimStyle.prec = p === '' ? null : clamp(parseInt(p) || 0, 0, 6);
+    put('prec', p === '' ? null : clamp(parseInt(p) || 0, 0, 6));
+    put('lunit', $('#dsU').value === 'arch' ? 'arch' : 'dec');
+    put('pre', $('#dsPre').value);
+    put('suf', $('#dsSuf').value);
+    const z = parseInt($('#dsZ').value) || 0;
+    put('zsupL', !!(z & 1)); put('zsupT', !!(z & 2));
+    const lf = parseFloat($('#dsLF').value);
+    put('lfac', isFinite(lf) && lf !== 0 ? lf : 1);
+    put('rnd', Math.max(0, parseLen($('#dsR').value) || 0));
+    put('tol', $('#dsTol').value);
+    put('tolUp', parseLen($('#dsTU').value) || 0);
+    const tl = $('#dsTL').value.trim();
+    put('tolLo', tl === '' ? (parseLen($('#dsTU').value) || 0) : (parseLen(tl) || 0));
+    const td = $('#dsTD').value.trim();
+    put('tolPrec', td === '' ? null : clamp(parseInt(td) || 0, 0, 8));
+    commit('Dimension style');
     draw(); syncUI();
   });
 }

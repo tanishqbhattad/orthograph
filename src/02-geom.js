@@ -168,6 +168,19 @@ function shapes(e, tol) {
       for (const ar of g.arrows)
         out.push({ pts: arrowPoly(ar.p, ar.a, g.S.arrow), closed: true, fill: true, role: 'arrowhead' });
       out.push({ text: g.txt, p: g.tp, h: g.S.txt, rot: g.tr || 0, anchor: 'c' });
+      /* the tolerance is part of what the dimension says, so it travels with
+         it into a flatten, an explode and a DXF block rather than living only
+         in the screen renderer */
+      const T = g.tol;
+      if (T && (T.up || T.lo)) {
+        const th = g.S.txt * (T.hK != null ? T.hK : 0.62);
+        const rot = g.tr || 0, cs = Math.cos(rot), sn = Math.sin(rot);
+        const x = String(g.txt || '').length * g.S.txt * MT_CHAR / 2 + th * 0.3;
+        const put = (str, dy) => out.push({ text: str, h: th, rot, anchor: 'l',
+          p: [g.tp[0] + cs * x - sn * dy, g.tp[1] + sn * x + cs * dy] });
+        if (T.stacked) { if (T.up) put(T.up, th * 0.35); if (T.lo) put(T.lo, -th * 0.85); }
+        else if (T.up) put(T.up, 0);
+      }
       return out;
     }
     default: return [];

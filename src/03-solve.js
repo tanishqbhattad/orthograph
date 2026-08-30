@@ -451,13 +451,109 @@ function dimStyle(e) {
     extBey: (d.extBey != null ? d.extBey : h * 0.7) * k,   /* run past the dimension line */
     gap: (d.gap != null ? d.gap : h * 0.25) * k,
     prec: d.prec != null ? d.prec : null,
+    /* how the number is written. None of this is scaled by DIMSCALE: it is
+       about what the dimension SAYS, not how big it is drawn. */
+    pre: d.pre || '', suf: d.suf || '',
+    zsupL: !!d.zsupL, zsupT: !!d.zsupT,
+    lunit: d.lunit || 'dec',
+    lfac: (typeof d.lfac === 'number' && isFinite(d.lfac) && d.lfac !== 0) ? d.lfac : 1,
+    rnd: (typeof d.rnd === 'number' && d.rnd > 0) ? d.rnd : 0,
+    tol: d.tol || 'none',
+    tolUp: (typeof d.tolUp === 'number' && isFinite(d.tolUp)) ? d.tolUp : 0,
+    tolLo: (typeof d.tolLo === 'number' && isFinite(d.tolLo)) ? d.tolLo
+         : ((typeof d.tolUp === 'number' && isFinite(d.tolUp)) ? d.tolUp : 0),
+    tolPrec: d.tolPrec != null ? d.tolPrec : null,
+    tolH: (typeof d.tolH === 'number' && d.tolH > 0) ? d.tolH : 0.62,
   };
 }
+/* ============================================================
+   How a dimension reads
+   ------------------------------------------------------------
+   Everything about a dimension except the number it printed was already
+   adjustable. The number had one setting — decimal places — which is not
+   enough to say any of the things a drawing says: feet and inches on this
+   style, a suffix, no leading zero, round to the nearest 5, report at half
+   size because the view is at half size, or carry a tolerance.
+
+   The tolerance is the one that matters. A dimension with none on a
+   fabrication drawing is not a dimension that is exact; it is one nobody has
+   thought about. The four ways of writing one are four different things to
+   mean, and AutoCAD's names for them are the ones a fabricator reads:
+
+     sym    2500 ±2        it may be 2 either way
+     dev    2500 +2 / -1   more one way than the other
+     lim    2502 / 2499    the two sizes, and no nominal at all
+     basic  [2500]         exact by definition; the tolerance is elsewhere
+   ============================================================ */
+/** one length, written the way this style writes numbers */
+function dimNum(S, v, prec) {
+  if (S.rnd > 0) v = Math.round(v / S.rnd) * S.rnd;
+  /* a metric drawing can carry an imperial dimension and the other way round:
+     the drawing's units are what it is modelled in, not what it must read in */
+  if (S.lunit === 'arch' || S.lunit === 'frac' || DOC.units === 'ft') return fmt(v, 'ft');
+  const u = DOC.units;
+  const dp = prec != null ? prec : S.prec;
+  let s;
+  if (dp == null) s = fmt(v, u);                   /* what it has always done */
+  else s = (v / U[u]).toFixed(clamp(dp, 0, 8)) + (u === 'in' ? '"' : '');
+  if (S.zsupT && s.indexOf('.') >= 0) s = s.replace(/0+$/, '').replace(/\.$/, '');
+  if (S.zsupL) s = s.replace(/^(-?)0\./, '$1.');
+  return s;
+}
+/** The pieces of what a dimension prints: the number, and whatever tolerance
+    rides beside it. Typed text beats all of it, because somebody typed it. */
+function dimParts(e, val) {
+  const S = dimStyle(e);
+  const none = { main: '', up: '', lo: '', stacked: false, box: false, hK: S.tolH, S };
+  if (e && e.txt) return Object.assign({}, none, { main: String(e.txt) });
+  const v = val * S.lfac;
+  const wrap = (n) => S.pre + n + S.suf;
+  const tp = S.tolPrec;
+  if (S.tol === 'lim')
+    /* limits ARE the dimension — there is no nominal for them to annotate —
+       so they are set at full height rather than shrunk like a note */
+    return Object.assign({}, none, { main: '', stacked: true, hK: 1,
+      up: wrap(dimNum(S, v + S.tolUp)), lo: wrap(dimNum(S, v - S.tolLo)) });
+  const main = wrap(dimNum(S, v));
+  if (S.tol === 'sym')
+    return Object.assign({}, none, { main, up: '\u00b1' + dimNum(S, Math.abs(S.tolUp), tp) });
+  if (S.tol === 'dev')
+    return Object.assign({}, none, { main, stacked: true,
+      up: '+' + dimNum(S, Math.abs(S.tolUp), tp),
+      lo: '-' + dimNum(S, Math.abs(S.tolLo), tp) });
+  if (S.tol === 'basic') return Object.assign({}, none, { main, box: true });
+  return Object.assign({}, none, { main });
+}
+/** What a DXF has to carry as a forced text (group code 1). An empty string
+    means "use the measurement", which is the faithful thing to write for an
+    ordinary dimension — the receiving program computes it and can restyle it.
+    The moment the number is not simply the measurement, though, what we print
+    is the only truth there is, so it goes in the file verbatim. */
+function dimOverrideText(e, val) {
+  if (e && e.txt) return String(e.txt);
+  const S = dimStyle(e);
+  const plain = S.tol === 'none' && !S.pre && !S.suf && S.lfac === 1 && !S.rnd &&
+                S.lunit === 'dec' && !S.zsupL && !S.zsupT;
+  return plain ? '' : dimText(e, val);
+}
+/** What a DXF has to carry as a forced text (group code 1). An empty string
+    means "use the measurement", which is the faithful thing to write for an
+    ordinary dimension — the receiving program computes it and can restyle it.
+    The moment the number is not simply the measurement, though, what we print
+    is the only truth there is, so it goes in the file verbatim. */
+function dimOverrideText(e, val) {
+  if (e && e.txt) return String(e.txt);
+  const S = dimStyle(e);
+  const plain = S.tol === 'none' && !S.pre && !S.suf && S.lfac === 1 && !S.rnd &&
+                S.lunit === 'dec' && !S.zsupL && !S.zsupT;
+  return plain ? '' : dimText(e, val);
+}
+/** the whole thing on one line, for anything that wants a string */
 function dimText(e, val) {
-  if (e.txt) return e.txt;
-  const s = dimStyle(e);
-  if (s.prec != null && DOC.units !== 'ft') return (val / U[DOC.units]).toFixed(s.prec);
-  return fmt(val);
+  const p = dimParts(e, val);
+  if (!p.up && !p.lo) return p.main;
+  const tol = p.lo ? p.up + ' / ' + p.lo : p.up;
+  return p.main ? p.main + ' ' + tol : tol;
 }
 /* ---------------- associative dimensions ----------------
    A dimension that keeps a copy of two coordinates starts lying the moment the
@@ -525,7 +621,7 @@ function dimGeom(e0) {
     lines.push([a, p]); arrows.push({ p, a: ang(a, p) });
     if (e.k === 'diameter') arrows.push({ p: a, a: ang(p, a) });
     const val = (e.k === 'diameter' ? 2 : 1) * dist(c, p);
-    return { lines, arrows, tp: mid(a, p), tr: 0, txt: (e.k === 'diameter' ? 'Ø' : 'R') + dimText(e, val), val, S };
+    return { lines, arrows, tp: mid(a, p), tr: 0, txt: (e.k === 'diameter' ? 'Ø' : 'R') + dimParts(e, val).main, tol: dimParts(e, val), val, S };
   }
   /* ORDINATE — how a setting-out drawing is dimensioned. Not a chain of sizes
      between features, where one error walks down the whole run, but each
@@ -549,7 +645,7 @@ function dimGeom(e0) {
     const tp = axis === 'x'
       ? [tp0[0], tp0[1] + along * S.gap]
       : [tp0[0] + along * S.gap, tp0[1]];
-    return { lines, arrows: [], tp, tr: 0, txt: dimText(e, val), val, S,
+    return { lines, arrows: [], tp, tr: 0, txt: dimParts(e, val).main, tol: dimParts(e, val), val, S,
              anchor: axis === 'x' ? 'c' : (along > 0 ? 'l' : 'r') };
   }
   /* ARC LENGTH — measured ALONG the curve. An aligned dimension across the
@@ -579,7 +675,7 @@ function dimGeom(e0) {
     return {
       lines, arrows: [{ p: pts[0], a: a0 - Math.PI / 2 }, { p: pts[n], a: a1 + Math.PI / 2 }],
       tp: [c[0] + R * Math.cos(am), c[1] + R * Math.sin(am)], tr: 0,
-      txt: e.txt || '\u2312' + dimText(e, val), val, S, arcR: R, arcC: c, a0, a1,
+      txt: e.txt || '\u2312' + dimParts(e, val).main, tol: dimParts(e, val), val, S, arcR: R, arcC: c, a0, a1,
     };
   }
   if (e.k === 'angular') {
@@ -620,7 +716,7 @@ function dimGeom(e0) {
   let tr = Math.atan2(q2[1] - q1[1], q2[0] - q1[0]);
   if (tr > Math.PI / 2 + 1e-9 || tr < -Math.PI / 2 - 1e-9) tr += Math.PI;
   const tp = add(mid(q1, q2), mul(perp([Math.cos(tr), Math.sin(tr)]), S.gap + S.txt * 0.5));
-  return { lines, arrows, tp, tr, txt: dimText(e, val), val, S, q1, q2 };
+  return { lines, arrows, tp, tr, txt: dimParts(e, val).main, tol: dimParts(e, val), val, S, q1, q2 };
 }
 /** arrowhead outline as a closed polygon, in model space */
 function arrowPoly(p, a, sz) {
