@@ -20166,14 +20166,13 @@ function wrapSentinel(a, body, b) {
 function doSaveDWG() {
   modal(`<h3>Export DWG — experimental</h3>
     <p>DWG is a closed binary format. This writer follows the published specification and round-trips
-    cleanly through Orthograph's own reader, but it has <b>not</b> been verified against AutoCAD, so the
-    file may be rejected there.</p>
-    <p>For anything that matters, use <b>DXF R2000</b> — that path is checked against a reference
-    implementation and imports cleanly.</p>`, () => {
+    cleanly through Orthograph's own reader — and <b>AutoCAD rejects it</b>, at the file header,
+    with "Drawing was created by an incompatible version". It has been reported and not yet fixed.</p>
+    <p>Use <b>DXF R2000</b>. That path is checked two ways and opens in AutoCAD.</p>`, () => {
     try {
       const buf = exportDWG();
       download('drawing.dwg', new Blob([buf], { type: 'application/acad' }));
-      toast('Wrote drawing.dwg — experimental, check it opens before relying on it');
+      toast('Wrote drawing.dwg — AutoCAD is known to refuse it; use DXF');
     } catch (e) { console.error(e); toast('DWG export failed: ' + e.message); }
   });
   $('#mo').textContent = 'Write it anyway';
