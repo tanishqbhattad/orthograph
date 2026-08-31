@@ -1108,6 +1108,11 @@ defc('plotstyle', {
     draw(); syncUI(); endCmd(true); return true;
   },
 });
+defvar('PLINEGEN', {
+  type: 'bool', desc: 'Run one linetype pattern round a whole polyline, rather than one per segment',
+  get: () => !!VS.plinegen,
+  set(v) { VS.plinegen = !!v; draw(); },
+});
 defvar('PLOTPREVIEW', {
   type: 'bool', desc: 'Draw a sheet the way it will plot: screening and plot colours',
   get: () => !!VS.plotPrev,

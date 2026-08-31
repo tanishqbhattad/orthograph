@@ -27,12 +27,17 @@ function makeCtx() {
      whether anything was. Without it a test can see four fills and not that
      they were four different tones, which is the whole claim in a drawing
      that poches a wall by what each layer is made of. */
-  const trace = { calls: [], pts: [], counts: {}, sets: [] };
+  const trace = { calls: [], pts: [], counts: {}, sets: [], dashes: [] };
   const rec = (name, args) => {
     trace.counts[name] = (trace.counts[name] || 0) + 1;
     if (name === 'moveTo' || name === 'lineTo') trace.pts.push([args[0], args[1]]);
     if (name === 'arc' || name === 'ellipse') trace.pts.push([args[0], args[1]]);
     if (name === 'fillText' || name === 'strokeText') trace.calls.push([name, args[0]]);
+    /* the dash patterns, in their own list: an aligned linetype is a claim
+       about the NUMBERS and cannot be checked without them, but a dash is
+       state rather than a mark, and putting it in `calls` would break every
+       test that asks what was drawn last */
+    if (name === 'setLineDash') trace.dashes.push((args[0] || []).slice());
     /* a fill takes the fill style standing at that moment: pair them up here,
        or the order they were set in has to be reconstructed by the reader */
     if (name === 'fill' || name === 'stroke')

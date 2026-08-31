@@ -59,19 +59,51 @@ function svgEntityBody(lwMul) {
   const K = lwMul || 1;
   const out = [];
   const T2 = p => `${(+p[0].toFixed(4))},${(+(-p[1]).toFixed(4))}`;
-  const dashMap = { dashed: '4,2.5', hidden: '2.5,1.8', center: '8,2,2,2', dashdot: '6,2,1,2' };
+  /* The pattern the PLOT lays down has to be the pattern on the screen, or a
+     drawing that reads correctly on a monitor comes off the plotter looking
+     like a different drawing. Both now come from LTDEF and LTSCALE and are
+     fitted to the run they are on; this used to be a third, unrelated table of
+     numbers in units nobody had reconciled. */
+  const dashPat = (lt, lenMm, closed) => {
+    const def = (typeof LTDEF === 'object' && LTDEF[lt]) || null;
+    if (!def || !(lenMm > 0)) return '';
+    const k = (typeof ltScale === 'function' ? ltScale() : 1);
+    const dot = 0.35;
+    const base = def.map(v => (v === 0 ? dot : v * k));
+    const per = base.reduce((a, b) => a + b, 0);
+    if (!(per > 0) || lenMm < per) return '';       /* too short: plot it solid */
+    const n = closed ? Math.max(1, Math.round(lenMm / per))
+                     : Math.max(1, Math.round((lenMm - base[0]) / per));
+    const s = closed ? lenMm / (n * per) : lenMm / (n * per + base[0]);
+    return base.map(v => +(v * s).toFixed(4)).join(',');
+  };
+  const runLen = (pts, closed) => {
+    let L = 0;
+    for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i][0] - pts[i-1][0], pts[i][1] - pts[i-1][1]);
+    if (closed && pts.length > 2) L += Math.hypot(pts[0][0] - pts[pts.length-1][0], pts[0][1] - pts[pts.length-1][1]);
+    return L;
+  };
   const ink = c => plotColor((c.toLowerCase() === '#ffffff' || c.toLowerCase() === '#d7dee8' || c.toLowerCase() === '#e8e8e8') ? '#111111' : c);
   /* the screening of whatever is being emitted right now, the same way the
      viewport freeze is set for the length of one window's paint */
   let SCR = 1;
   const opac = () => SCR < 1 ? ` stroke-opacity="${+SCR.toFixed(3)}"` : '';
-  const strokeOf = (col, lw, lt) =>
-    `stroke="${col}" stroke-width="${Math.max(lw, 0.13)}" fill="none" stroke-linecap="round" stroke-linejoin="round"` +
-    (dashMap[lt] ? ` stroke-dasharray="${dashMap[lt]}"` : '') + opac();
+  /* lenMm is the run the pattern is being fitted to; without one the linetype
+     is dropped rather than laid down unfitted */
+  const strokeOf = (col, lw, lt, lenMm, closed) => {
+    const pat = lt ? dashPat(lt, lenMm, closed) : '';
+    return `stroke="${col}" stroke-width="${Math.max(lw, 0.13)}" fill="none" stroke-linecap="round" stroke-linejoin="round"` +
+      (pat ? ` stroke-dasharray="${pat}"` : '') + opac();
+  };
 
   const emitShape = (s, col, lw, baseLt) => {
     const lt = s.lt || baseLt;
-    const st = strokeOf(col, lw * (ROLE_W[s.role] || 1), lt);
+    const w = lw * (ROLE_W[s.role] || 1);
+    const st = s.pts ? strokeOf(col, w, lt, runLen(s.pts, s.closed), s.closed)
+             : s.r != null ? strokeOf(col, w, lt,
+                 Math.abs(s.r) * (s.a0 != null ? Math.abs(wrap(s.a1 - s.a0) || TAU) : TAU),
+                 s.a0 == null || Math.abs(Math.abs(wrap(s.a1 - s.a0) || TAU) - TAU) < 1e-9)
+             : strokeOf(col, w, lt, 0, false);
     if (s.text != null) {
       out.push(`<text x="${s.p[0]}" y="${-s.p[1]}" font-family="Inter,Helvetica,sans-serif" font-size="${s.h}" fill="${col}"${SCR < 1 ? ` fill-opacity="${+SCR.toFixed(3)}"` : ''} text-anchor="${s.anchor === 'c' ? 'middle' : s.anchor === 'r' ? 'end' : 'start'}" transform="rotate(${-deg(s.rot || 0)} ${s.p[0]} ${-s.p[1]})">${esc(s.text)}</text>`);
     } else if (s.pts) {

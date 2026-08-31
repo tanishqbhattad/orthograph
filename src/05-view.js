@@ -28,6 +28,7 @@ const VS = {
   vtDuration: 260,        /* VTDURATION — animated view transitions, ms        */
   coords: 1,              /* COORDS — 0 off, 1 absolute, 2 relative            */
   plotPrev: false,        /* PLOTPREVIEW — draw a sheet the way it will plot   */
+  plinegen: false,        /* PLINEGEN — one pattern round a whole polyline     */
 };
 const CO = {
   /* AutoCAD's dark model space, RGB 33/40/48 — light enough that a 1px grey
@@ -517,6 +518,81 @@ function dashFor(lt) {
   return c.solid ? DASH_SOLID : c.arr;
 }
 
+/* ============================================================
+   A-type linetypes: the pattern is fitted to the line
+   ------------------------------------------------------------
+   Every linetype in every CAD program is an "A"-type, and the A stands for
+   aligned: the pattern is stretched a little so the line BEGINS and ENDS with
+   a dash. It is not decoration. A centre line whose ends are gaps does not
+   read as a centre line, a hidden line that stops mid-gap looks like two
+   hidden lines, and a run shorter than one period lands in a gap and draws
+   nothing at all — a line you have drawn, saved, and cannot see.
+
+   The fit is n whole periods plus the closing dash, with n chosen to be the
+   nearest whole number, so the stretch is never more than half a period and in
+   practice is a few percent.
+   ============================================================ */
+function dashPeriod(arr) { let p = 0; for (let i = 0; i < arr.length; i++) p += arr[i]; return p; }
+function dashScaled(arr, s) {
+  const out = new Array(arr.length);
+  for (let i = 0; i < arr.length; i++) out[i] = arr[i] * s;
+  return out;
+}
+/** the pattern for an OPEN run of this length: a dash at each end */
+function dashFitFor(lt, lenPx) {
+  const base = dashFor(lt);
+  if (!base.length || !(lenPx > 0)) return base;
+  const per = dashPeriod(base);
+  if (!(per > 0)) return base;
+  /* too short to carry even one period: solid reads better than a fragment
+     that may land entirely inside a gap and show nothing */
+  if (lenPx < per) return DASH_SOLID;
+  const n = Math.max(1, Math.round((lenPx - base[0]) / per));
+  return dashScaled(base, lenPx / (n * per + base[0]));
+}
+/** the pattern for a CLOSED run: a whole number of periods, so it meets
+    itself at the join instead of leaving a stub there */
+function dashFitClosed(lt, lenPx) {
+  const base = dashFor(lt);
+  if (!base.length || !(lenPx > 0)) return base;
+  const per = dashPeriod(base);
+  if (!(per > 0) || lenPx < per) return base.length ? (lenPx < per ? DASH_SOLID : base) : base;
+  const n = Math.max(1, Math.round(lenPx / per));
+  return dashScaled(base, lenPx / (n * per));
+}
+/** screen length of a run of world points */
+function runPx(pts, closed) {
+  let L = 0;
+  for (let i = 1; i < pts.length; i++) L += dist(pts[i - 1], pts[i]);
+  if (closed && pts.length > 2) L += dist(pts[pts.length - 1], pts[0]);
+  return L * V.z;
+}
+/** Stroke a run with its pattern fitted. PLINEGEN decides whether a polyline
+    is one run or a run per segment — off, which is how AutoCAD ships, every
+    segment starts and ends with a dash. */
+function strokeRunFitted(pts, closed, col, lw, lt) {
+  if (!pts || pts.length < 2) return;
+  if (!VS.plinegen && (pts.length > 2 || closed)) {
+    const n = closed ? pts.length : pts.length - 1;
+    for (let i = 0; i < n; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      ctx.beginPath(); pathPts([a, b], false);
+      strokeAs(col, lw, dashFitFor(lt, dist(a, b) * V.z));
+    }
+    return;
+  }
+  ctx.beginPath(); pathPts(pts, closed);
+  strokeAs(col, lw, closed ? dashFitClosed(lt, runPx(pts, true)) : dashFitFor(lt, runPx(pts, false)));
+}
+/** the same for an arc or a circle, fitted along its own length */
+function strokeArcFitted(s, col, lw, lt) {
+  const sweep = (s.a0 != null && s.a1 != null) ? Math.abs(wrap(s.a1 - s.a0) || TAU) : TAU;
+  const whole = Math.abs(sweep - TAU) < 1e-9;
+  const L = Math.abs(s.r) * V.z * sweep;
+  ctx.beginPath(); pathArc(s);
+  strokeAs(col, lw, whole ? dashFitClosed(lt, L) : dashFitFor(lt, L));
+}
+
 /* LW_LADDER, LW_DEFAULT, PX_PER_MM and lwSnap live in 00-core.js — the
    document model needs LW_DEFAULT for its fallback layer, and 01-doc.js is
    evaluated four modules before this one. Only the renderer-facing part,
@@ -946,6 +1022,24 @@ function spanPx(pts) {
   return Math.max(x1 - x0, y1 - y0) * V.z;
 }
 const SUBPIX = 0.4;                               /* below this a stroke cannot show */
+/** Stroke one of the plain entity types with its pattern fitted to it.
+    Returns false for anything it does not know how to measure, which then
+    takes the ordinary path. */
+function strokeEntFitted(e, col, lw, lt) {
+  switch (e.t) {
+    case 'line': strokeRunFitted([e.a, e.b], false, col, lw, lt); return true;
+    case 'pline': case 'spline':
+      if (!Array.isArray(e.pts) || e.pts.length < 2) return false;
+      /* a polyline with curved spans is drawn from its flattened outline, so
+         the pattern follows the curve rather than the chords */
+      strokeRunFitted(typeof hasBulge === 'function' && hasBulge(e) ? plinePts(e, SHAPE_TOL) : e.pts,
+                      !!e.closed, col, lw, lt);
+      return true;
+    case 'circle': strokeArcFitted({ c: e.c, r: e.r, a0: 0, a1: TAU }, col, lw, lt); return true;
+    case 'arc': strokeArcFitted({ c: e.c, r: e.r, a0: e.a0, a1: e.a1 }, col, lw, lt); return true;
+    default: return false;
+  }
+}
 function pathEnt(e) {
   ctx.beginPath();
   switch (e.t) {
@@ -1162,12 +1256,22 @@ function drawShapes(e, col, mode) {
        of the things inside it instead of coming out monochrome */
     const own = s.col || col;
     const scol = role === 'faceGhost' ? own + GHOST_FACE_A : own;
+    /* A dashed shape carries a pattern fitted to its own length, so like a
+       filled one it needs a path of its own — the fit is what makes a centre
+       line end with a dash instead of wherever the pattern happened to be. */
+    const fitLt = lt === 'solid' ? '' : lt;
+    const dashy = !HALO && !s.fill && dashFor(fitLt).length > 0;
+    if (dashy) {
+      if (s.pts) strokeRunFitted(s.pts, !!s.closed, scol, lw, fitLt);
+      else strokeArcFitted(s, scol, lw, fitLt);
+      continue;
+    }
     /* filled shapes cannot be batched — they need their own path */
     if (!batch || s.fill || (s.closed && role === 'arrowhead')) {
       ctx.beginPath();
       if (s.pts) pathPts(s.pts, s.closed); else pathArc(s);
       if (!HALO && (s.fill || (s.closed && role === 'arrowhead'))) { ctx.fillStyle = scol; ctx.fill(); }
-      strokeAs(scol, lw, dashFor(lt === 'solid' ? '' : lt));
+      strokeAs(scol, lw, dashFor(fitLt));
       continue;
     }
     const b = bucketFor(scol + '|' + lw.toFixed(2) + '|' + lt);
@@ -1309,9 +1413,17 @@ function drawEntBody(e, mode) {
   if (e.t === 'hatch') return drawHatch(e, col, mode);
   if (GEOM[e.t]) return drawShapes(e, col, mode);
   const lw = lwPx(flw(e)) + (S ? S.core : 0);
+  const elt = flt(e);
+  /* A dashed object is stroked with a pattern fitted to it, which means the
+     path has to be built per run rather than all at once. A halo is drawn
+     solid anyway, and a fill needs the whole path, so both take the old way. */
+  if (!HALO && !e.fill && dashFor(elt).length && strokeEntFitted(e, col, lw, elt)) {
+    ctx.setLineDash(DASH_SOLID);
+    return;
+  }
   pathEnt(e);
   if (e.fill && !HALO) { ctx.fillStyle = col + (S ? S.fillA : '22'); ctx.fill(); }
-  strokeAs(col, lw, dashFor(flt(e)));
+  strokeAs(col, lw, dashFor(elt));
   ctx.setLineDash(DASH_SOLID);
 }
 /** highlight pass: translucent halo underneath, crisp core on top */
