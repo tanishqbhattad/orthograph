@@ -124,17 +124,66 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
 
   group('what colour a wall is');
 
-  t('a wall with nothing said about it is the wall ink, not pure black', () => {
+  /* Asked for, then unasked: the linework is plain ink again — black on paper,
+     white on the dark canvas — and the grey moved to the fill instead, where
+     it does the job the grey was wanted for. */
+  t('the wall linework is plain ink, as everything else is', () => {
     const r = R(`${SETUP}
       const w = wallOf();
-      setTheme('light');
-      const light = fcol(w);
-      setTheme('dark');
-      const dark = fcol(w);
+      setTheme('light'); const light = fcol(w);
+      setTheme('dark');  const dark = fcol(w);
       setTheme('light');
       return { light, dark };`);
-    eq(r.light, '#525252', 'grey on paper, so a wall does not read as a border');
-    eq(r.dark, '#ffffff', 'and white on the dark canvas');
+    eq(r.light, '#000000', 'black on paper');
+    eq(r.dark, '#ffffff', 'white on the dark canvas');
+  });
+
+  t('the poche is a solid grey, not a wash', () => {
+    const r = R(`${SETUP}
+      const w = wallOf();
+      return { col: pocheCol(w), len: pocheCol(w).length };`);
+    eq(r.col, '#525252', 'the fill colour asked for');
+    eq(r.len, 7, 'and no alpha appended to it');
+  });
+
+  t('a wall someone has coloured is poched in that colour', () => {
+    const r = R(`${SETUP}
+      const w = wallOf();
+      begin(); mut(w); w.color = '#c0392b'; commit('c');
+      const own = pocheCol(w);
+      begin(); mut(w); w.color = null; commit('c');
+      layer('A-WALL').color = '#2f6fd0';
+      const byLayer = pocheCol(w);
+      return { own, byLayer };`);
+    eq(r.own, '#c0392b', 'the object wins');
+    eq(r.byLayer, '#2f6fd0', 'and so does a layer colour someone chose');
+  });
+
+  t('the fill is actually laid down solid, with no alpha in the call', () => {
+    const r = R(`${SETUP}
+      const c = document.getElementById('cv').getContext('2d');
+      wallOf(); fit();
+      SEL.clear(); shapeCacheClear();
+      c.__trace.calls.length = 0; paint();
+      const fills = c.__trace.calls.filter(x => x[0] === 'fill').map(x => String(x[1]));
+      return { fills, grey: fills.filter(x => /^#525252$/i.test(x)).length,
+               washed: fills.filter(x => /^#[0-9a-f]{6}[0-9a-f]{2}$/i.test(x)).length };`);
+    ok(r.grey >= 1, 'the wall body is filled solid grey: ' + r.fills.join(', '));
+    eq(r.washed, 0, 'and nothing is filled through an alpha');
+  });
+
+  /* Screen and paper have to agree. The plot was drawing the poche bands as
+     stroked outlines and filling nothing at all, which was invisible while the
+     fill was a faint wash and would be glaring now it is solid. */
+  t('the plot fills the wall body too', () => {
+    const r = R(`${SETUP}
+      wallOf();
+      const sh = newSheet('A-101', 'A3', true);
+      sh.viewports.push(newViewport(sh, [3000, 0], 1/100));
+      DOC.sheets.push(sh); DOC.curSheet = sh.id;
+      const svg = sheetSVG(sh);
+      return { filled: /fill="#525252"/i.test(svg) };`);
+    eq(r.filled, true, 'the paper gets the same grey the screen does');
   });
 
   t('a colour chosen for the wall is the colour it is drawn in', () => {

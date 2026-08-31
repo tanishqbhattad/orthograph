@@ -187,17 +187,15 @@ const INK_LIGHT = 190;       /* this bright and grey: the default light ink */
 const INK_DARK = 70;         /* this dark and grey: the default dark ink */
 const INK_ON_LIGHT = '#000000';
 const INK_ON_DARK = '#ffffff';
-/* A wall drawn in the default colour is drawn in the wall ink rather than in
-   plain ink. On paper a wall in pure black reads as a border round the drawing
-   and swamps everything inside it; the grey sits back and lets the doors,
-   dimensions and notes come forward, which is the weight a plan is drawn at by
-   hand. On the dark canvas it is white, for the same reason AutoCAD's colour 7
-   is. Both are opaque: this is the subject of the drawing, not a background
-   note. A colour anybody has actually chosen — on the object or on its layer —
-   is used exactly as chosen. */
-const WALL_INK_LIGHT = '#525252';
-const WALL_INK_DARK = '#ffffff';
-function wallInk() { return THEME === 'light' ? WALL_INK_LIGHT : WALL_INK_DARK; }
+/* The wall's BODY is filled solid in this grey, on both themes — the poche a
+   plan is drawn with, rather than the faint wash it used to be. The linework
+   stays plain ink, black on paper and white on the dark canvas, like every
+   other line in the drawing.
+
+   A colour anybody has actually chosen — on the object or on its layer — is
+   used for the fill exactly as chosen. This grey is only what a wall gets when
+   nobody has said anything about it. */
+const POCHE_INK = '#525252';
 /** true when this colour is the shipped default rather than one somebody
     picked — the same "achromatic and near an end of the scale" test the ink
     inversion uses, because they are answering the same question */
@@ -667,11 +665,16 @@ let PLOTPREV = false;
 let PLOTSCR = false;            /* inside one screened object, so it is not screened twice */
 const fcol = e => {
   const c = e.color || flay(e.layer).color;
-  if (PLOTPREV) return plotColor(c === '#ffffff' || c === '#d7dee8' ? '#111111' : c);
-  /* a wall nobody has given a colour is drawn in the wall ink */
-  if (e.t === 'wall' && !e.color && isDefaultInk(c)) return wallInk();
-  return inkFor(c);
+  return PLOTPREV ? plotColor(c === '#ffffff' || c === '#d7dee8' ? '#111111' : c) : inkFor(c);
 };
+/** What the body of a wall is filled with: the colour it has been given, or
+    the poche grey when it has not been given one. Never the ink — a wall
+    filled with its own linework colour is a solid black block. */
+function pocheCol(e) {
+  const c = (e && e.color) || flay(e && e.layer).color;
+  if (PLOTPREV) return plotColor(isDefaultInk(c) ? POCHE_INK : c);
+  return isDefaultInk(c) ? POCHE_INK : inkFor(c);
+}
 const flt = e => e.lt || flay(e.layer).lt || 'solid';
 const flw = e => (e.lw != null ? e.lw : flay(e.layer).lw);
 
@@ -1177,6 +1180,14 @@ const POCHE_TONE = {
   finish: 0.8,
   timber: 0.95,
 };
+/** the band colour for one material: the poche grey, taken towards the ink for
+    something heavy and towards the background for something light. Opaque at
+    both ends — this is a shade, not a veil. */
+function pocheBandCol(base, tone) {
+  if (!(tone > 0) || tone === 1) return base;
+  if (tone > 1) return mixHex(base, '#000000', Math.min((tone - 1) * 0.55, 0.6));
+  return mixHex(base, CO.bg, Math.min((1 - tone) * 0.95, 0.85));
+}
 function pocheTone(mat) {
   if (!mat) return 1;
   const v = POCHE_TONE[String(mat).toLowerCase()];
@@ -1247,25 +1258,36 @@ function drawShapes(e, col, mode) {
     if (role === 'poche' || role === 'pocheGhost') {
       if (HALO || !poche || !s.pts || s.pts.length < 3) continue;
       if (spanPx(s.pts) < 1) continue;            /* thinner than a pixel: the face lines say it all */
-      let a = S ? S.pocheA : '2e';
-      if (role === 'pocheGhost') a = alphaMul(a, GHOST_POCHE_MUL);
-      /* a band that says what it is made of is drawn with that weight */
-      if (s.mat) a = alphaMul(a, pocheTone(s.mat));
-      /* And with the material's own hatch over the top of it, which is the
-         difference between a section that reads as brick, cavity, block and
-         plaster and one that reads as four shades of grey. The tone stays
-         underneath: it still separates the layers when the pattern is too fine
-         to resolve at the zoom you are at. */
-      if (s.mat && VS.wallpat !== 0 && role === 'poche') {
-        const pat = materialPattern(s.mat);
-        if (pat) hatchBands(s.pts, pat, col, e);
-      }
+      /* Solid. A wall is the subject of a plan, and the poche is what says
+         so — the faint wash it used to be read as a wall you could see
+         through. Two things stay translucent, for reasons that are about what
+         they mean rather than about taste: a ghosted storey below, which stops
+         being a ghost the moment it is solid, and a selected wall, which is
+         tinted rather than repainted so the selection colour does not swallow
+         the drawing. */
+      const ghost = role === 'pocheGhost';
+      /* Each layer of a compound wall still reads as its own material — brick
+         heavier than blockwork, a cavity barely there — but as a SHADE of the
+         poche now rather than as a thinner version of it. Same information,
+         nothing see-through. */
+      let fillCol = pocheBandCol(pocheCol(e), s.mat ? pocheTone(s.mat) : 1);
+      if (ghost) fillCol = col + alphaMul(S ? S.pocheA : '2e', GHOST_POCHE_MUL);
+      else if (S) fillCol = col + S.pocheA;
       ctx.beginPath(); pathPts(s.pts, true);
       /* a shape may carry voids — a slab with a stairwell in it. Even-odd so
          the inner rings subtract rather than paint over. */
       let odd = false;
       if (s.holes) for (const h of s.holes) if (h && h.length > 2) { pathPts(h, true); odd = true; }
-      ctx.fillStyle = col + a; ctx.fill(odd ? 'evenodd' : 'nonzero');
+      ctx.fillStyle = fillCol; ctx.fill(odd ? 'evenodd' : 'nonzero');
+      /* The material hatch goes ON TOP now rather than underneath: under a
+         solid fill it would be painted straight over and WALLPAT would quietly
+         mean nothing. Over it the pattern is quiet — which is the honest
+         result of asking for a solid poche and a material pattern at once.
+         WALLPAT 0 turns it off. */
+      if (s.mat && VS.wallpat !== 0 && role === 'poche') {
+        const pat = materialPattern(s.mat);
+        if (pat) hatchBands(s.pts, pat, col, e);
+      }
       continue;
     }
     if (s.pts) {

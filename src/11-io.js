@@ -183,7 +183,19 @@ function svgEntityBody(lwMul) {
       out.push(`<path d="M${e.p[0] - r},${-e.p[1]}L${e.p[0] + r},${-e.p[1]}M${e.p[0]},${-e.p[1] - r}L${e.p[0]},${-e.p[1] + r}" ${strokeOf(col, lw, '')}/>`);
       continue;
     }
-    for (const s of shapes(e, 96)) emitShape(s, ink(s.col || entColor(e)), lw, lt);
+    for (const s of shapes(e, 96)) {
+      /* The body of a wall is a FILL, and the plot was stroking its outline
+         and filling nothing — invisible while the fill was a faint wash on
+         screen, and a plain contradiction now that it is solid. */
+      if (s.role === 'poche' && s.pts && s.pts.length > 2) {
+        const d = 'M' + s.pts.map(T2).join('L') + 'Z';
+        const band = pocheBandCol(pocheCol(e), s.mat ? pocheTone(s.mat) : 1);
+        out.push(`<path d="${d}" fill="${band}" stroke="none"${SCR < 1 ? ` fill-opacity="${+SCR.toFixed(3)}"` : ''}/>`);
+        continue;
+      }
+      if (s.role === 'pocheGhost') continue;
+      emitShape(s, ink(s.col || entColor(e)), lw, lt);
+    }
   }
   return out;
 }

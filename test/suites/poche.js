@@ -109,11 +109,14 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       paint();
       /* the style standing at each fill, which is what the wall was painted in */
       const fills = c.__trace.calls.filter(x => x[0] === 'fill').map(x => String(x[1]));
-      const alpha = (s) => s.length > 7 ? s.slice(-2) : 'ff';
-      return { fills: fills.length, tones: [...new Set(fills.map(alpha))].length,
-               sample: [...new Set(fills.map(alpha))].join(',') };`);
+      /* The weight of a band is its SHADE now, not its transparency: the fill
+         is solid, so brick and insulation differ by colour. */
+      return { fills: fills.length, tones: [...new Set(fills)].length,
+               sample: [...new Set(fills)].join(','),
+               washed: fills.filter(x => x.length > 7).length };`);
     ok(r.fills >= 4, 'four bands are four fills, got ' + r.fills);
     ok(r.tones >= 3,
       'and painted at different weights, got ' + r.tones + ' distinct: ' + r.sample);
+    eq(r.washed, 0, 'none of them see-through: ' + r.sample);
   });
 };
