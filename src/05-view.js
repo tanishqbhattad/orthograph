@@ -187,6 +187,28 @@ const INK_LIGHT = 190;       /* this bright and grey: the default light ink */
 const INK_DARK = 70;         /* this dark and grey: the default dark ink */
 const INK_ON_LIGHT = '#000000';
 const INK_ON_DARK = '#ffffff';
+/* A wall drawn in the default colour is drawn in the wall ink rather than in
+   plain ink. On paper a wall in pure black reads as a border round the drawing
+   and swamps everything inside it; the grey sits back and lets the doors,
+   dimensions and notes come forward, which is the weight a plan is drawn at by
+   hand. On the dark canvas it is white, for the same reason AutoCAD's colour 7
+   is. Both are opaque: this is the subject of the drawing, not a background
+   note. A colour anybody has actually chosen — on the object or on its layer —
+   is used exactly as chosen. */
+const WALL_INK_LIGHT = '#525252';
+const WALL_INK_DARK = '#ffffff';
+function wallInk() { return THEME === 'light' ? WALL_INK_LIGHT : WALL_INK_DARK; }
+/** true when this colour is the shipped default rather than one somebody
+    picked — the same "achromatic and near an end of the scale" test the ink
+    inversion uses, because they are answering the same question */
+function isDefaultInk(hex) {
+  const c = String(hex || '');
+  if (c.charCodeAt(0) !== 35 || c.length !== 7) return false;
+  const r = parseInt(c.slice(1, 3), 16), g = parseInt(c.slice(3, 5), 16), b = parseInt(c.slice(5, 7), 16);
+  if (!isFinite(r) || !isFinite(g) || !isFinite(b)) return false;
+  const hi = Math.max(r, g, b), lo = Math.min(r, g, b);
+  return (hi - lo) <= INK_SAT && (hi >= INK_LIGHT || hi <= INK_DARK);
+}
 
 /* The palette starts as the default theme rather than waiting for boot: CO is
    read by anything that draws, and a module that loaded dark and was corrected
@@ -645,7 +667,10 @@ let PLOTPREV = false;
 let PLOTSCR = false;            /* inside one screened object, so it is not screened twice */
 const fcol = e => {
   const c = e.color || flay(e.layer).color;
-  return PLOTPREV ? plotColor(c === '#ffffff' || c === '#d7dee8' ? '#111111' : c) : inkFor(c);
+  if (PLOTPREV) return plotColor(c === '#ffffff' || c === '#d7dee8' ? '#111111' : c);
+  /* a wall nobody has given a colour is drawn in the wall ink */
+  if (e.t === 'wall' && !e.color && isDefaultInk(c)) return wallInk();
+  return inkFor(c);
 };
 const flt = e => e.lt || flay(e.layer).lt || 'solid';
 const flw = e => (e.lw != null ? e.lw : flay(e.layer).lw);

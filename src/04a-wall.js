@@ -71,7 +71,15 @@ function wallCacheStructural(e) {
     the only moment its existing cache entries can be found to lift out. */
 function wallCacheTouch(e) {
   if (!e) return;
-  if (e.t === 'door' || e.t === 'window') return openIndexTouch(e);
+  if (e.t === 'door' || e.t === 'window') {
+    /* The wall is what CHANGED SHAPE. Its own cache entry was never touched by
+       any of this, so the first version drawn was the version that stayed: a
+       door added to a wall already on screen did not cut it, and a door erased
+       from a wall left the hole behind. That is what "the wall should join
+       back up" was describing — the wall was never split, only stale. */
+    if (e.host != null) markDirty(e.host);
+    return openIndexTouch(e);
+  }
   if (e.t !== 'wall') return;
   wallIndexTouch(e);
   wallNodeTouch(e);

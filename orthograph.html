@@ -24,6 +24,12 @@
      The rail is a fixed 3-column grid and never scrolls: see railMetrics(). */
   --tool:26px; --tgap:3px; --rpad:6px; --rhead:14px; --rgap:4px;
   --rail:96px;                     /* 3*26 + 2*3 + 2*6 */
+  /* Anything that floats OVER the drawing — the tooltip, the dynamic input,
+     the prompt — needs a ground of its own. These were hard-coded near-black,
+     which on the light theme meant dark text on a dark box: the dynamic input
+     was two black rectangles with invisible numbers in them. */
+  --pop:#0b0e13ee; --popbd:#394453; --poptx:#dbe2ea;
+  --scroll:#39434f;                /* the scrollbar thumb */
 }
 /* Light is the default and dark is the variant, because a drawing ends up on
    paper and is usually made in a lit room. The canvas palette in 05-view.js is
@@ -35,6 +41,8 @@
   --bd:#d6d3cb; --bd2:#bcb8ad;
   --tx0:#1e2228; --tx1:#5a6270; --tx2:#8b93a0;
   --amber:#a9761a; --mint:#00845c; --steel:#2f6fd0; --rose:#c0392b;
+  --pop:#ffffffee; --popbd:#bcb8ad; --poptx:#1e2228;
+  --scroll:#b9b5aa;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden;background:var(--bg0);color:var(--tx0);
@@ -43,6 +51,17 @@ html,body{height:100%;overflow:hidden;background:var(--bg0);color:var(--tx0);
 button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 input,select,textarea{font:inherit;color:inherit;background:none;border:none;outline:none}
 :focus-visible{outline:2px solid var(--amber);outline-offset:1px}
+
+/* A slim scrollbar of our own. The system one is a wide light-grey slab that
+   belongs to a different program; this is a track you can barely see and a
+   rounded thumb, so a scrolling panel reads as part of the drawing board. */
+*{scrollbar-width:thin;scrollbar-color:var(--scroll) transparent}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--scroll);border-radius:99px;
+  border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--bd2);background-clip:content-box}
+::-webkit-scrollbar-corner{background:transparent}
 
 /* The bottom row is sized by what is IN it, not by a number. It was 60px
    against contents that measure 84 — tabs 24, command line 32, status 28 — so
@@ -105,9 +124,10 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
    pieces of 6.5px type competing with the glyphs they were labelling. It is
    still on the tooltip, the accessible name and the ? sheet, which is where a
    shortcut is looked up rather than read. */
-.tip{position:fixed;background:#05070a;border:1px solid var(--bd2);border-radius:5px;
+.tip{position:fixed;background:var(--pop);color:var(--poptx);
+  border:1px solid var(--popbd);border-radius:5px;
   padding:5px 9px;font-size:11.5px;pointer-events:none;opacity:0;z-index:400;
-  transition:opacity .1s;white-space:nowrap;box-shadow:0 6px 18px #0009}
+  transition:opacity .1s;white-space:nowrap;box-shadow:0 6px 18px #0006}
 .tip b{font-family:var(--mono);color:var(--amber);font-weight:500;margin-left:8px}
 
 /* ---------------- stage ---------------- */
@@ -121,7 +141,7 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 #hud{position:absolute;inset:0;pointer-events:none}
 .dyn{position:absolute;display:flex;gap:4px;transform:translate(14px,14px);pointer-events:auto}
 .dyn input{font-family:var(--mono);font-size:11.5px;width:78px;padding:4px 6px;
-  background:#0b0e13ee;border:1px solid var(--bd2);border-radius:4px;color:var(--tx0)}
+  background:var(--pop);border:1px solid var(--popbd);border-radius:4px;color:var(--poptx)}
 .dyn input.act{border-color:var(--amber);color:var(--amber)}
 .dyn label{position:absolute;top:-13px;font-family:var(--mono);font-size:8.5px;
   color:var(--tx2);letter-spacing:.1em}
@@ -129,7 +149,7 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
    must never eat a pick — but the keywords inside it are buttons, so they take
    their events back. That pair is the whole trick. */
 #hint{position:absolute;left:12px;top:10px;font-family:var(--mono);font-size:11px;
-  color:var(--tx1);background:#0b0e13cc;border:1px solid var(--bd);border-radius:5px;
+  color:var(--poptx);background:var(--pop);border:1px solid var(--popbd);border-radius:5px;
   padding:5px 10px;pointer-events:none;max-width:58%}
 #hint em{color:var(--amber);font-style:normal}
 #hint .kw{pointer-events:auto;cursor:pointer;font:inherit;color:inherit;
@@ -143,36 +163,39 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 #nav{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;
   align-items:center;gap:6px;pointer-events:auto;user-select:none}
 .navbtn{width:32px;height:26px;display:grid;place-items:center;color:var(--tx1);
-  background:#0b0e13cc;border:1px solid var(--bd);border-radius:5px}
+  background:var(--pop);border:1px solid var(--popbd);border-radius:5px}
 .navbtn svg{width:15px;height:15px;stroke:currentColor;fill:none;
   stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .navbtn:hover{color:var(--amber);border-color:var(--bd2)}
 .navbtn.off{opacity:.35}
 .navbtn.off:hover{color:var(--tx1);border-color:var(--bd)}
 #dialWrap{position:relative;width:60px;height:60px;border-radius:50%;
-  background:#0b0e13d9;border:1px solid var(--bd);display:grid;place-items:center;
+  background:var(--pop);border:1px solid var(--popbd);display:grid;place-items:center;
   cursor:grab;touch-action:none}
 #dialWrap:hover{border-color:var(--bd2)}
 #dialWrap:active{cursor:grabbing;border-color:var(--amber)}
 #dial{width:56px;height:56px;overflow:visible;display:block}
-#dial .ring{stroke:var(--bd2);fill:none;stroke-width:1}
-#dial .tick{stroke:var(--tx2);stroke-width:1}
-#dial .tick.maj{stroke:var(--tx1)}
-#dial .idx{fill:var(--tx1)}
-#dial .n{fill:var(--amber)}
-#dial .s{fill:var(--tx2)}
-#dial .bar{stroke:var(--bd2);stroke-width:1}
-#dial .lbl{fill:var(--tx2);font-family:var(--mono);font-size:6px;letter-spacing:.06em}
 #dialRose{transform-origin:28px 28px;transform-box:view-box}
+/* the ring, its ticks and the four letters: a compass, not a dial face */
+#dial .ring{fill:none;stroke:var(--bd);stroke-width:1}
+#dial .ticks{fill:none;stroke:var(--bd2);stroke-width:2.4;
+  stroke-dasharray:0.9 3.6;stroke-linecap:round;opacity:.9}
+#dial .lbl{font-family:var(--ui);font-size:8.5px;font-weight:600;
+  fill:var(--tx1);letter-spacing:.02em}
+#dial .lbl.n{fill:var(--amber)}
+/* the page: square, because a drawing is not a portrait page */
+#dial .page{fill:var(--bg3);stroke:var(--tx1);stroke-width:1.3;
+  filter:drop-shadow(0 0 2px rgba(0,0,0,.25))}
+#dialWrap:hover #dial .page{stroke:var(--amber)}
 #navAng{font-family:var(--mono);font-size:10px;font-weight:500;color:var(--amber);
-  background:#0b0e13cc;border:1px solid var(--bd);border-radius:4px;
+  background:var(--pop);border:1px solid var(--popbd);border-radius:4px;
   padding:2px 0;width:52px;text-align:center;letter-spacing:.01em}
 #vlegacy{display:none}
 
 #touchbar{position:absolute;right:12px;bottom:12px;display:none;gap:6px;z-index:30}
 #touchbar.show{display:flex}
 #touchbar button{font-family:var(--mono);font-size:11px;padding:9px 13px;border-radius:6px;
-  background:#0b0e13ee;border:1px solid var(--bd2);color:var(--tx0)}
+  background:var(--pop);border:1px solid var(--popbd);color:var(--poptx)}
 #touchbar button.pri{background:var(--amber);border-color:var(--amber);color:#141821}
 #drop{position:absolute;inset:0;display:none;place-items:center;background:#0e1116e0;
   border:2px dashed var(--amber);z-index:50;font-family:var(--mono);
@@ -181,8 +204,8 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 
 /* ---- floating quick properties ---- */
 .qp{position:absolute;width:198px;pointer-events:auto;z-index:40;
-  background:#0f141bf5;border:1px solid var(--bd2);border-radius:7px;
-  box-shadow:0 10px 28px #000a;overflow:hidden}
+  background:var(--pop);color:var(--poptx);border:1px solid var(--popbd);border-radius:7px;
+  box-shadow:0 10px 28px #0007;overflow:hidden}
 .qp .qph{display:flex;align-items:center;gap:6px;padding:5px 5px 5px 8px;
   background:var(--bg2);border-bottom:1px solid var(--bd)}
 .qp .qph b{flex:1;font-size:11px;font-weight:600;letter-spacing:.01em;
@@ -462,7 +485,8 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
   border-radius:3px;font-size:11px;color:var(--tx0)}
 .gripmenu .gmi:hover{background:var(--bg3);color:var(--amber)}
 .gripmenu .gmi.on{background:var(--bg3);color:var(--amber)}#toast{position:fixed;bottom:74px;left:50%;transform:translateX(-50%) translateY(8px);
-  background:#000;border:1px solid var(--bd2);border-radius:6px;padding:8px 14px;
+  background:var(--pop);color:var(--poptx);border:1px solid var(--popbd);
+  border-radius:6px;padding:8px 14px;
   font-size:12px;opacity:0;pointer-events:none;transition:.18s;z-index:250}
 #toast.show{opacity:1;transform:translateX(-50%)}
 
@@ -522,16 +546,19 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
         <button class="navbtn" id="vFit" title="Zoom to fit the drawing">FIT</button>
         <div id="dialWrap" title="Drag to rotate the view · double-click for north up">
           <svg id="dial" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg">
-            <circle class="ring" cx="28" cy="28" r="24"/>
-            <path class="idx" d="M28 0.5l3 5h-6z"/>
+            <!-- The compass turns with the view and the page in the middle
+                 stays square to the screen, which is what the two of them
+                 mean: the letters say where north has gone, the square says
+                 this is your sheet. -->
             <g id="dialRose">
-              <path class="tick maj" d="M28 6v4M28 46v4M6 28h4M46 28h4"/>
-              <path class="tick" d="M39.6 8.1l-2 3.5M16.4 47.9l2-3.5M47.9 39.6l-3.5-2M8.1 16.4l3.5 2M47.9 16.4l-3.5 2M8.1 39.6l3.5-2M39.6 47.9l-2-3.5M16.4 8.1l2 3.5"/>
-              <path class="bar" d="M28 13v30M13 28h30"/>
-              <path class="n" d="M28 10l4.6 12L28 19.4 23.4 22z"/>
-              <path class="s" d="M28 46l-4.6-12L28 36.6l4.6-2.6z"/>
-              <text class="lbl" x="28" y="31.6" text-anchor="middle">N</text>
+              <circle class="ring" cx="28" cy="28" r="25.2"/>
+              <circle class="ticks" cx="28" cy="28" r="22.4"/>
+              <text class="lbl n" x="28" y="9.4" text-anchor="middle">N</text>
+              <text class="lbl" x="46.8" y="31.2" text-anchor="middle">E</text>
+              <text class="lbl" x="28" y="52.4" text-anchor="middle">S</text>
+              <text class="lbl" x="9.2" y="31.2" text-anchor="middle">W</text>
             </g>
+            <rect id="dialSquare" class="page" x="18" y="18" width="20" height="20" rx="1.2"/>
           </svg>
         </div>
         <div id="navAng">0.0°</div>
@@ -565,6 +592,9 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
     </div>
     <div id="status">
       <span id="coord"></span>
+      <!-- the gap comes first: the readout stays at the left edge and
+           everything that is a control sits together on the right -->
+      <div class="grow"></div>
       <div class="tgs">
         <button class="tg" data-tg="osnap" data-key="F3" data-set="osnap">OSNAP</button>
         <button class="tg" data-tg="grid" data-key="F7">GRID</button>
@@ -575,7 +605,6 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
         <button class="tg" data-tg="dyn" data-key="F12">DYN</button>
         <button class="tg" data-tg="lwt" title="Show lineweights at their true plotted width">LWT</button>
         <button class="tg" data-tg="selCycling" title="Selection cycling — offer a list when objects overlap under the pick box">CYCLE</button>      </div>
-      <div class="grow"></div>
       <button id="vscale" title="View scale on screen">1:1</button>
       <div id="dset"></div>
       <button class="gear" id="dsMore">⚙</button>
@@ -1310,11 +1339,17 @@ function addEnt(e) {
      here rather than in idxInsert, which only runs when the spatial index
      happens to exist already. */
   if (typeof wallCacheStructural === 'function' && wallCacheStructural(e)) wallCacheInvalidate();
+  /* An opening changes the shape of the wall it is cut into, and that wall is
+     cached under its own id — so adding one has to mark the HOST as changed,
+     not just the opening. */
+  if ((e.t === 'door' || e.t === 'window') && e.host != null) markDirty(e.host);
   return e;
 }
 function delEnt(id) {
   const e = DOC.ents.get(id); if (!e) return;
   if (typeof wallCacheStructural === 'function' && wallCacheStructural(e)) wallCacheInvalidate();
+  /* and taking one away closes the wall up again — same reason */
+  if ((e.t === 'door' || e.t === 'window') && e.host != null) markDirty(e.host);
   if (JN.on) {
     if (JN.added.has(id)) JN.added.delete(id);    /* created and killed in one op */
     else JN.removed.set(id, JN.before.get(id) || clone(e));
@@ -3286,7 +3321,15 @@ function wallCacheStructural(e) {
     the only moment its existing cache entries can be found to lift out. */
 function wallCacheTouch(e) {
   if (!e) return;
-  if (e.t === 'door' || e.t === 'window') return openIndexTouch(e);
+  if (e.t === 'door' || e.t === 'window') {
+    /* The wall is what CHANGED SHAPE. Its own cache entry was never touched by
+       any of this, so the first version drawn was the version that stayed: a
+       door added to a wall already on screen did not cut it, and a door erased
+       from a wall left the hole behind. That is what "the wall should join
+       back up" was describing — the wall was never split, only stale. */
+    if (e.host != null) markDirty(e.host);
+    return openIndexTouch(e);
+  }
   if (e.t !== 'wall') return;
   wallIndexTouch(e);
   wallNodeTouch(e);
@@ -5096,6 +5139,28 @@ const INK_LIGHT = 190;       /* this bright and grey: the default light ink */
 const INK_DARK = 70;         /* this dark and grey: the default dark ink */
 const INK_ON_LIGHT = '#000000';
 const INK_ON_DARK = '#ffffff';
+/* A wall drawn in the default colour is drawn in the wall ink rather than in
+   plain ink. On paper a wall in pure black reads as a border round the drawing
+   and swamps everything inside it; the grey sits back and lets the doors,
+   dimensions and notes come forward, which is the weight a plan is drawn at by
+   hand. On the dark canvas it is white, for the same reason AutoCAD's colour 7
+   is. Both are opaque: this is the subject of the drawing, not a background
+   note. A colour anybody has actually chosen — on the object or on its layer —
+   is used exactly as chosen. */
+const WALL_INK_LIGHT = '#525252';
+const WALL_INK_DARK = '#ffffff';
+function wallInk() { return THEME === 'light' ? WALL_INK_LIGHT : WALL_INK_DARK; }
+/** true when this colour is the shipped default rather than one somebody
+    picked — the same "achromatic and near an end of the scale" test the ink
+    inversion uses, because they are answering the same question */
+function isDefaultInk(hex) {
+  const c = String(hex || '');
+  if (c.charCodeAt(0) !== 35 || c.length !== 7) return false;
+  const r = parseInt(c.slice(1, 3), 16), g = parseInt(c.slice(3, 5), 16), b = parseInt(c.slice(5, 7), 16);
+  if (!isFinite(r) || !isFinite(g) || !isFinite(b)) return false;
+  const hi = Math.max(r, g, b), lo = Math.min(r, g, b);
+  return (hi - lo) <= INK_SAT && (hi >= INK_LIGHT || hi <= INK_DARK);
+}
 
 /* The palette starts as the default theme rather than waiting for boot: CO is
    read by anything that draws, and a module that loaded dark and was corrected
@@ -5554,7 +5619,10 @@ let PLOTPREV = false;
 let PLOTSCR = false;            /* inside one screened object, so it is not screened twice */
 const fcol = e => {
   const c = e.color || flay(e.layer).color;
-  return PLOTPREV ? plotColor(c === '#ffffff' || c === '#d7dee8' ? '#111111' : c) : inkFor(c);
+  if (PLOTPREV) return plotColor(c === '#ffffff' || c === '#d7dee8' ? '#111111' : c);
+  /* a wall nobody has given a colour is drawn in the wall ink */
+  if (e.t === 'wall' && !e.color && isDefaultInk(c)) return wallInk();
+  return inkFor(c);
 };
 const flt = e => e.lt || flay(e.layer).lt || 'solid';
 const flw = e => (e.lw != null ? e.lw : flay(e.layer).lw);
@@ -7254,7 +7322,12 @@ const ST = {
   gripsOn: 1,             /* GRIPS      — 0 hides grips entirely               */
   gripObjLimit: 100,      /* GRIPOBJLIMIT — grips suppressed past this many    */
   selCycling: 2,          /* SELECTIONCYCLING — 0 off, 1 badge, 2 badge+list   */
-  lassoOn: 1,             /* PICKAUTO bit 4 — press-drag makes a lasso         */
+  /* Off. Press-drag rubber-bands a window, which is the gesture forty years
+     of drafting muscle memory expects. With the lasso on, a quick straight
+     flick — exactly how a fast draughtsman selects — traces a sliver that
+     encloses nothing, so the selection appears not to work at all unless you
+     move slowly. PICKAUTO 1 puts the lasso back. */
+  lassoOn: 0,             /* PICKAUTO bit 4 — press-drag makes a lasso         */
   pickAdd: 2,             /* PICKADD    — 2 = picks accumulate, Shift removes  */
   selAreaOpacity: 25,     /* SELECTIONAREAOPACITY, per cent                    */
   /* live interaction state */

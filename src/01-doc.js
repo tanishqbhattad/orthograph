@@ -441,11 +441,17 @@ function addEnt(e) {
      here rather than in idxInsert, which only runs when the spatial index
      happens to exist already. */
   if (typeof wallCacheStructural === 'function' && wallCacheStructural(e)) wallCacheInvalidate();
+  /* An opening changes the shape of the wall it is cut into, and that wall is
+     cached under its own id — so adding one has to mark the HOST as changed,
+     not just the opening. */
+  if ((e.t === 'door' || e.t === 'window') && e.host != null) markDirty(e.host);
   return e;
 }
 function delEnt(id) {
   const e = DOC.ents.get(id); if (!e) return;
   if (typeof wallCacheStructural === 'function' && wallCacheStructural(e)) wallCacheInvalidate();
+  /* and taking one away closes the wall up again — same reason */
+  if ((e.t === 'door' || e.t === 'window') && e.host != null) markDirty(e.host);
   if (JN.on) {
     if (JN.added.has(id)) JN.added.delete(id);    /* created and killed in one op */
     else JN.removed.set(id, JN.before.get(id) || clone(e));

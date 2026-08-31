@@ -64,7 +64,12 @@ const ST = {
   gripsOn: 1,             /* GRIPS      — 0 hides grips entirely               */
   gripObjLimit: 100,      /* GRIPOBJLIMIT — grips suppressed past this many    */
   selCycling: 2,          /* SELECTIONCYCLING — 0 off, 1 badge, 2 badge+list   */
-  lassoOn: 1,             /* PICKAUTO bit 4 — press-drag makes a lasso         */
+  /* Off. Press-drag rubber-bands a window, which is the gesture forty years
+     of drafting muscle memory expects. With the lasso on, a quick straight
+     flick — exactly how a fast draughtsman selects — traces a sliver that
+     encloses nothing, so the selection appears not to work at all unless you
+     move slowly. PICKAUTO 1 puts the lasso back. */
+  lassoOn: 0,             /* PICKAUTO bit 4 — press-drag makes a lasso         */
   pickAdd: 2,             /* PICKADD    — 2 = picks accumulate, Shift removes  */
   selAreaOpacity: 25,     /* SELECTIONAREAOPACITY, per cent                    */
   /* live interaction state */
