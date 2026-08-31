@@ -21,6 +21,12 @@ function build(out) {
   const js = "'use strict';\n" + bundle();
   const html = shell.replace('/*__ORTHOGRAPH_BUNDLE__*/', () => js);
   fs.writeFileSync(out, html);
+  /* The same bytes again as index.html, so a static host — GitHub Pages, or
+     anything else — serves the app from the bare URL, with no redirect and no
+     server of its own. Identical content hashes to the same git object, so the
+     second copy costs nothing in the repository. */
+  const idx = path.join(path.dirname(out), 'index.html');
+  if (path.basename(out) !== 'index.html') fs.writeFileSync(idx, html);
   const kb = (Buffer.byteLength(html) / 1024).toFixed(0);
   console.log(`built ${path.relative(process.cwd(), out)} — ${kb} KB, ${html.split('\n').length} lines`);
   return html;

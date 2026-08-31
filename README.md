@@ -1,5 +1,8 @@
 # Orthograph
 
+**Use it: <https://tanishqbhattad.github.io/orthograph/>** — nothing to install, no server.
+The whole program is one HTML file; that page IS the file.
+
 2D CAD in the browser: an AutoCAD-style drafting board with a Revit-style parametric
 architecture layer on top. No build step required to *use* it — `orthograph.html` is a
 single self-contained file. Open it in any browser.
