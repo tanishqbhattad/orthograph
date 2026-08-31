@@ -703,12 +703,45 @@ function cancelCmd() {
   draw();
   return had;
 }
+/* ============================================================
+   Failures that say why
+   ------------------------------------------------------------
+   Two lines here caught every error a command could throw and printed four
+   words to the effect that it had not worked. That is the least useful thing
+   a program can say: it confirms what the person already knows and withholds
+   the only thing they need, which is what to do next.
+
+   An expected failure — one the code decided on and can explain — says its own
+   sentence. Anything else names the command and repeats the actual error,
+   because a person who can see "WALL could not finish: b is undefined" can
+   report something useful, and one who is told only that it failed cannot.
+   ============================================================ */
+/** an error a command raised on purpose, carrying the sentence to show */
+function fail(msg) {
+  const e = new Error(msg);
+  e.expected = true;
+  return e;
+}
+function cmdFail(err, what) {
+  if (typeof console !== 'undefined' && console.error) console.error(err);
+  const msg = (err && err.message) || String(err);
+  if (err && err.expected) { cliPrint(msg, 'err'); return; }
+  const name = String(what || (CMD && CMD.key) || 'That command').toUpperCase();
+  cliPrint(name + ' could not finish: ' + msg, 'err');
+}
+/** A failure the person has to be able to read a moment later. echo() writes
+    to the HUD, which the next mouse move wipes; a reason that has scrolled off
+    the screen before it was read is a reason nobody gave. So both. */
+function whyFail(msg) {
+  if (typeof echo === 'function') echo(msg);
+  cliPrint(msg, 'err');
+}
 /** `quiet` is set when the caller already echoed the typed answer */
 function cmdPoint(p, quiet) {
   const c = CMD; if (!c) return;
   if (c.phase === 'sel') return;
   if (!quiet) cliAnswer('');
-  try { c.def.point(c, p); } catch (e) { console.error(e); cliPrint('That did not work.', 'err'); }
+  try { c.def.point(c, p); } catch (e) { cmdFail(e, c.key || c.def.key); }
   ST.lastPt = p;
   ST.angOverride = null;
   draw();
@@ -1956,7 +1989,7 @@ function dispatch(s) {
   if (r.kind === 'var') return setVarFromWords(r, words);
   if (r.kind === 'meta') {
     cliRemember(r.name);
-    try { META[r.key].fn(); } catch (e) { console.error(e); cliPrint('That did not work.', 'err'); }
+    try { META[r.key].fn(); } catch (e) { cmdFail(e, r.name || r.key); }
     return true;
   }
   if (CMDS[r.key].group === 'arch' && typeof MODE !== 'undefined' && MODE !== 'arch') setMode('arch');

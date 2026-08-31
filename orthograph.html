@@ -4774,21 +4774,28 @@ function roomDropCollinear(pts) {
    expensive thing an edit can provoke, and the only way to know whether the
    work is being avoided is to be able to count it. */
 let ROOM_TRACES = 0;
+/* The room tracer has its own walk, and had one silence for all of its ways
+   of failing. Each one is a different thing to go and do about it. */
+let ROOM_WHY = null;
+function roomTraceWhy() { return ROOM_WHY; }
+function roomFail(why) { ROOM_WHY = why; return null; }
 function roomTrace(seed, lvl) {
+  ROOM_WHY = null;
   const nodes = roomArrangement(lvl);
-  if (!nodes || !nodes.length) return null;
+  if (!nodes || !nodes.length)
+    return roomFail('There are no walls on this storey to enclose a room.');
   const start = roomStartEdge(seed, nodes);
-  if (!start) return null;
+  if (!start) return roomFail('That point is outside the walls — there is nothing beside it to walk round.');
   const raw = roomWalkFace(nodes, start);
-  if (!raw) return null;
+  if (!raw) return roomFail('The walls do not close around that point — there is a gap in them.');
   const pts = roomDropCollinear(raw);
   if (!pts) return null;
   pts.src = raw.src || [];
   /* a negative signed area means we walked the outside, not a room */
   let a2 = 0;
   for (let i = 0; i < pts.length; i++) a2 += cross(pts[i], pts[(i + 1) % pts.length]);
-  if (a2 <= 0) return null;
-  if (!pointInPoly(seed, pts)) return null;
+  if (a2 <= 0) return roomFail('The walls do not close around that point — the walk went round the outside.');
+  if (!pointInPoly(seed, pts)) return roomFail('The walls do not close around that point.');
   ROOM_TRACES++;
   return pts;
 }
@@ -4834,7 +4841,10 @@ function roomBoundary(r) {
      a materialised polygon is the .ocad writer, and it materialises its own
      copy at write time — see roomForSave() in 11-io.js. */
   const src = (pts && pts.src) || (hit && hit.src) || [];
-  _roomCache.set(r.id, { v: DOCV, rv: ROOMV, pts, open, good, src });
+  /* what the tracer said about the failure, kept beside the room so the panel
+     can pass it on rather than inventing a reason of its own */
+  const why = open ? (typeof roomTraceWhy === 'function' ? roomTraceWhy() : null) : null;
+  _roomCache.set(r.id, { v: DOCV, rv: ROOMV, pts, open, good, src, why });
   return pts;
 }
 /** What the walk followed to get this room's shape: the ids of the walls and
@@ -4849,6 +4859,16 @@ function roomSources(r) {
   const src = (hit && hit.src) || [];
   /* an id that has since been erased bounds nothing */
   return src.filter(id => DOC.ents.has(id));
+}
+/** Why this room is not the shape it should be, in the tracer's own words.
+    An automatic room that cannot close keeps its last good outline so it does
+    not vanish while a wall is being dragged — which means the drawing has to
+    say out loud that the number beside it is no longer a measurement. */
+function roomWhy(r) {
+  if (!r || !r.auto) return null;
+  const hit = _roomCache.get(r.id);
+  if (hit && !hit.open) return null;
+  return (hit && hit.why) || 'The walls no longer close around this room.';
 }
 /** the same, in words, for the properties panel and LIST */
 function roomSourceText(r) {
@@ -9992,12 +10012,45 @@ function cancelCmd() {
   draw();
   return had;
 }
+/* ============================================================
+   Failures that say why
+   ------------------------------------------------------------
+   Two lines here caught every error a command could throw and printed four
+   words to the effect that it had not worked. That is the least useful thing
+   a program can say: it confirms what the person already knows and withholds
+   the only thing they need, which is what to do next.
+
+   An expected failure — one the code decided on and can explain — says its own
+   sentence. Anything else names the command and repeats the actual error,
+   because a person who can see "WALL could not finish: b is undefined" can
+   report something useful, and one who is told only that it failed cannot.
+   ============================================================ */
+/** an error a command raised on purpose, carrying the sentence to show */
+function fail(msg) {
+  const e = new Error(msg);
+  e.expected = true;
+  return e;
+}
+function cmdFail(err, what) {
+  if (typeof console !== 'undefined' && console.error) console.error(err);
+  const msg = (err && err.message) || String(err);
+  if (err && err.expected) { cliPrint(msg, 'err'); return; }
+  const name = String(what || (CMD && CMD.key) || 'That command').toUpperCase();
+  cliPrint(name + ' could not finish: ' + msg, 'err');
+}
+/** A failure the person has to be able to read a moment later. echo() writes
+    to the HUD, which the next mouse move wipes; a reason that has scrolled off
+    the screen before it was read is a reason nobody gave. So both. */
+function whyFail(msg) {
+  if (typeof echo === 'function') echo(msg);
+  cliPrint(msg, 'err');
+}
 /** `quiet` is set when the caller already echoed the typed answer */
 function cmdPoint(p, quiet) {
   const c = CMD; if (!c) return;
   if (c.phase === 'sel') return;
   if (!quiet) cliAnswer('');
-  try { c.def.point(c, p); } catch (e) { console.error(e); cliPrint('That did not work.', 'err'); }
+  try { c.def.point(c, p); } catch (e) { cmdFail(e, c.key || c.def.key); }
   ST.lastPt = p;
   ST.angOverride = null;
   draw();
@@ -11245,7 +11298,7 @@ function dispatch(s) {
   if (r.kind === 'var') return setVarFromWords(r, words);
   if (r.kind === 'meta') {
     cliRemember(r.name);
-    try { META[r.key].fn(); } catch (e) { console.error(e); cliPrint('That did not work.', 'err'); }
+    try { META[r.key].fn(); } catch (e) { cmdFail(e, r.name || r.key); }
     return true;
   }
   if (CMDS[r.key].group === 'arch' && typeof MODE !== 'undefined' && MODE !== 'arch') setMode('arch');
@@ -13038,7 +13091,9 @@ defc('hatch', {
        perfectly well, and that is most of how a drawing actually gets made. */
     const traced = (typeof traceBoundary === 'function') ? traceBoundary(p) : null;
     if (traced) return hatchRings([traced]);
-    echo('Nothing encloses that point');
+    /* the tracer knows which of its four ways it failed; passing that on is
+       the difference between "go and close the gap" and "try again" */
+    whyFail((typeof traceWhy === 'function' && traceWhy()) || 'Nothing encloses that point.');
   },
 });
 /** the closed ring an entity encloses, or null if it does not enclose one */
@@ -16345,13 +16400,21 @@ function splitSegments(segs, tol) {
     it crosses. That edge is on the boundary of the face the point is in, which
     is what makes the result the room you clicked in rather than the outside of
     the building. */
+/* The tracer had four distinct ways to fail and one answer for all of them.
+   "Nothing encloses that point" is true whether the walls have a gap in them,
+   the pick is outside the building, or nothing is drawn at all — and each of
+   those is a different thing to go and do about it. */
+let TRACE_WHY = null;
+function traceWhy() { return TRACE_WHY; }
+function traceFail(why) { TRACE_WHY = why; return null; }
 function traceBoundary(p, opts) {
+  TRACE_WHY = null;
   const o = opts || {};
   const tol = o.tol || Math.max(px(2), BND_TOL);
   const reach = o.reach || 1e7;
   const box = [p[0] - reach, p[1] - reach, p[0] + reach, p[1] + reach];
   const segs = splitSegments(boundarySegments(box, tol), tol);
-  if (!segs.length) return null;
+  if (!segs.length) return traceFail('Nothing is drawn near there to enclose anything.');
 
   /* directed edges, both ways round, indexed by the node they leave */
   const outAt = new Map();
@@ -16373,7 +16436,7 @@ function traceBoundary(p, opts) {
     if (y <= p[1] + tol) continue;                      /* below the pick */
     if (y < bestY) { bestY = y; best = [a, b]; }
   }
-  if (!best) return null;
+  if (!best) return traceFail('That point is outside everything — there is nothing above it to walk round.');
 
   /* walk leftwards along that edge so the face stays on our right */
   let cur = best[0][0] < best[1][0] ? { a: best[1], b: best[0] } : { a: best[0], b: best[1] };
@@ -16383,7 +16446,7 @@ function traceBoundary(p, opts) {
   for (let step = 0; step < guard; step++) {
     ring.push(cur.b.slice());
     const here = outAt.get(bndKey(cur.b, tol)) || [];
-    if (!here.length) return null;
+    if (!here.length) return traceFail('The boundary runs off an open end — there is a gap in it.');
     const back = Math.atan2(cur.a[1] - cur.b[1], cur.a[0] - cur.b[0]);
     /* the sharpest right turn from the way we came in: the next edge
        clockwise, which is what keeps the walk hugging this one face */
@@ -16395,18 +16458,22 @@ function traceBoundary(p, opts) {
       while (turn > Math.PI * 2) turn -= Math.PI * 2;
       if (turn < bestTurn) { bestTurn = turn; pick = d; }
     }
-    if (!pick) return null;
+    if (!pick) return traceFail('The boundary runs off an open end — there is a gap in it.');
     cur = pick;
     if (dist(cur.a, start.a) < tol && ring.length > 2) {
       /* closed. It only counts if it actually encloses the pick — a walk that
          escaped round the outside comes back closed too. */
       const ring2 = ring.slice(0, -1);
-      if (ring2.length < 3) return null;
-      if (!pointInPoly(p, ring2)) return null;
+      if (ring2.length < 3) return traceFail('What closes round there is too small to be a region.');
+      if (!pointInPoly(p, ring2))
+        /* Two causes, and from here they look identical: the pick really is
+           outside, or the boundary has a gap the walk escaped through and
+           came back round the outside of. Say both rather than pick one. */
+        return traceFail('That did not close round the point — the boundary is open somewhere, or the point is outside it.');
       return ring2;
     }
   }
-  return null;
+  return traceFail('That boundary is too complicated to follow — it never came back to where it started.');
 }
 
 /** BOUNDARY — AutoCAD's, and the reason it exists: make the traced loop into a
@@ -16420,7 +16487,7 @@ defc('boundary', {
        polyline would replace it with a worse copy of itself */
     const b = (typeof findBoundary === 'function') ? findBoundary(p) : null;
     const ring = b ? b.outer : traceBoundary(p);
-    if (!ring) return echo('Nothing encloses that point');
+    if (!ring) return whyFail(traceWhy() || 'Nothing encloses that point.');
     begin();
     const n = addEnt({ t: 'pline', pts: ring.map(q => q.slice()), closed: true,
                        layer: DOC.cur });

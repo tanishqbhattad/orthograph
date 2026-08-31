@@ -1022,7 +1022,9 @@ defc('hatch', {
        perfectly well, and that is most of how a drawing actually gets made. */
     const traced = (typeof traceBoundary === 'function') ? traceBoundary(p) : null;
     if (traced) return hatchRings([traced]);
-    echo('Nothing encloses that point');
+    /* the tracer knows which of its four ways it failed; passing that on is
+       the difference between "go and close the gap" and "try again" */
+    whyFail((typeof traceWhy === 'function' && traceWhy()) || 'Nothing encloses that point.');
   },
 });
 /** the closed ring an entity encloses, or null if it does not enclose one */

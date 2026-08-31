@@ -82,13 +82,21 @@ function splitSegments(segs, tol) {
     it crosses. That edge is on the boundary of the face the point is in, which
     is what makes the result the room you clicked in rather than the outside of
     the building. */
+/* The tracer had four distinct ways to fail and one answer for all of them.
+   "Nothing encloses that point" is true whether the walls have a gap in them,
+   the pick is outside the building, or nothing is drawn at all — and each of
+   those is a different thing to go and do about it. */
+let TRACE_WHY = null;
+function traceWhy() { return TRACE_WHY; }
+function traceFail(why) { TRACE_WHY = why; return null; }
 function traceBoundary(p, opts) {
+  TRACE_WHY = null;
   const o = opts || {};
   const tol = o.tol || Math.max(px(2), BND_TOL);
   const reach = o.reach || 1e7;
   const box = [p[0] - reach, p[1] - reach, p[0] + reach, p[1] + reach];
   const segs = splitSegments(boundarySegments(box, tol), tol);
-  if (!segs.length) return null;
+  if (!segs.length) return traceFail('Nothing is drawn near there to enclose anything.');
 
   /* directed edges, both ways round, indexed by the node they leave */
   const outAt = new Map();
@@ -110,7 +118,7 @@ function traceBoundary(p, opts) {
     if (y <= p[1] + tol) continue;                      /* below the pick */
     if (y < bestY) { bestY = y; best = [a, b]; }
   }
-  if (!best) return null;
+  if (!best) return traceFail('That point is outside everything — there is nothing above it to walk round.');
 
   /* walk leftwards along that edge so the face stays on our right */
   let cur = best[0][0] < best[1][0] ? { a: best[1], b: best[0] } : { a: best[0], b: best[1] };
@@ -120,7 +128,7 @@ function traceBoundary(p, opts) {
   for (let step = 0; step < guard; step++) {
     ring.push(cur.b.slice());
     const here = outAt.get(bndKey(cur.b, tol)) || [];
-    if (!here.length) return null;
+    if (!here.length) return traceFail('The boundary runs off an open end — there is a gap in it.');
     const back = Math.atan2(cur.a[1] - cur.b[1], cur.a[0] - cur.b[0]);
     /* the sharpest right turn from the way we came in: the next edge
        clockwise, which is what keeps the walk hugging this one face */
@@ -132,18 +140,22 @@ function traceBoundary(p, opts) {
       while (turn > Math.PI * 2) turn -= Math.PI * 2;
       if (turn < bestTurn) { bestTurn = turn; pick = d; }
     }
-    if (!pick) return null;
+    if (!pick) return traceFail('The boundary runs off an open end — there is a gap in it.');
     cur = pick;
     if (dist(cur.a, start.a) < tol && ring.length > 2) {
       /* closed. It only counts if it actually encloses the pick — a walk that
          escaped round the outside comes back closed too. */
       const ring2 = ring.slice(0, -1);
-      if (ring2.length < 3) return null;
-      if (!pointInPoly(p, ring2)) return null;
+      if (ring2.length < 3) return traceFail('What closes round there is too small to be a region.');
+      if (!pointInPoly(p, ring2))
+        /* Two causes, and from here they look identical: the pick really is
+           outside, or the boundary has a gap the walk escaped through and
+           came back round the outside of. Say both rather than pick one. */
+        return traceFail('That did not close round the point — the boundary is open somewhere, or the point is outside it.');
       return ring2;
     }
   }
-  return null;
+  return traceFail('That boundary is too complicated to follow — it never came back to where it started.');
 }
 
 /** BOUNDARY — AutoCAD's, and the reason it exists: make the traced loop into a
@@ -157,7 +169,7 @@ defc('boundary', {
        polyline would replace it with a worse copy of itself */
     const b = (typeof findBoundary === 'function') ? findBoundary(p) : null;
     const ring = b ? b.outer : traceBoundary(p);
-    if (!ring) return echo('Nothing encloses that point');
+    if (!ring) return whyFail(traceWhy() || 'Nothing encloses that point.');
     begin();
     const n = addEnt({ t: 'pline', pts: ring.map(q => q.slice()), closed: true,
                        layer: DOC.cur });

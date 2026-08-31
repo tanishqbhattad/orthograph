@@ -621,21 +621,28 @@ function roomDropCollinear(pts) {
    expensive thing an edit can provoke, and the only way to know whether the
    work is being avoided is to be able to count it. */
 let ROOM_TRACES = 0;
+/* The room tracer has its own walk, and had one silence for all of its ways
+   of failing. Each one is a different thing to go and do about it. */
+let ROOM_WHY = null;
+function roomTraceWhy() { return ROOM_WHY; }
+function roomFail(why) { ROOM_WHY = why; return null; }
 function roomTrace(seed, lvl) {
+  ROOM_WHY = null;
   const nodes = roomArrangement(lvl);
-  if (!nodes || !nodes.length) return null;
+  if (!nodes || !nodes.length)
+    return roomFail('There are no walls on this storey to enclose a room.');
   const start = roomStartEdge(seed, nodes);
-  if (!start) return null;
+  if (!start) return roomFail('That point is outside the walls — there is nothing beside it to walk round.');
   const raw = roomWalkFace(nodes, start);
-  if (!raw) return null;
+  if (!raw) return roomFail('The walls do not close around that point — there is a gap in them.');
   const pts = roomDropCollinear(raw);
   if (!pts) return null;
   pts.src = raw.src || [];
   /* a negative signed area means we walked the outside, not a room */
   let a2 = 0;
   for (let i = 0; i < pts.length; i++) a2 += cross(pts[i], pts[(i + 1) % pts.length]);
-  if (a2 <= 0) return null;
-  if (!pointInPoly(seed, pts)) return null;
+  if (a2 <= 0) return roomFail('The walls do not close around that point — the walk went round the outside.');
+  if (!pointInPoly(seed, pts)) return roomFail('The walls do not close around that point.');
   ROOM_TRACES++;
   return pts;
 }
@@ -681,7 +688,10 @@ function roomBoundary(r) {
      a materialised polygon is the .ocad writer, and it materialises its own
      copy at write time — see roomForSave() in 11-io.js. */
   const src = (pts && pts.src) || (hit && hit.src) || [];
-  _roomCache.set(r.id, { v: DOCV, rv: ROOMV, pts, open, good, src });
+  /* what the tracer said about the failure, kept beside the room so the panel
+     can pass it on rather than inventing a reason of its own */
+  const why = open ? (typeof roomTraceWhy === 'function' ? roomTraceWhy() : null) : null;
+  _roomCache.set(r.id, { v: DOCV, rv: ROOMV, pts, open, good, src, why });
   return pts;
 }
 /** What the walk followed to get this room's shape: the ids of the walls and
@@ -696,6 +706,16 @@ function roomSources(r) {
   const src = (hit && hit.src) || [];
   /* an id that has since been erased bounds nothing */
   return src.filter(id => DOC.ents.has(id));
+}
+/** Why this room is not the shape it should be, in the tracer's own words.
+    An automatic room that cannot close keeps its last good outline so it does
+    not vanish while a wall is being dragged — which means the drawing has to
+    say out loud that the number beside it is no longer a measurement. */
+function roomWhy(r) {
+  if (!r || !r.auto) return null;
+  const hit = _roomCache.get(r.id);
+  if (hit && !hit.open) return null;
+  return (hit && hit.why) || 'The walls no longer close around this room.';
 }
 /** the same, in words, for the properties panel and LIST */
 function roomSourceText(r) {
