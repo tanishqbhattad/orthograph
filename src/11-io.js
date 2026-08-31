@@ -190,7 +190,11 @@ function svgEntityBody(lwMul) {
       if (s.role === 'poche' && s.pts && s.pts.length > 2) {
         const d = 'M' + s.pts.map(T2).join('L') + 'Z';
         const band = pocheBandCol(pocheCol(e), s.mat ? pocheTone(s.mat) : 1);
-        out.push(`<path d="${d}" fill="${band}" stroke="none"${SCR < 1 ? ` fill-opacity="${+SCR.toFixed(3)}"` : ''}/>`);
+        /* stroked in its own colour, thinly, for the same reason the screen
+           is: two filled paths that share an edge leave an antialiased
+           hairline of background between them, and a wall should not have a
+           crease down every mitre on paper either */
+        out.push(`<path d="${d}" fill="${band}" stroke="${band}" stroke-width="${+Math.max(lw * 0.5, 0.05).toFixed(4)}"${SCR < 1 ? ` fill-opacity="${+SCR.toFixed(3)}" stroke-opacity="${+SCR.toFixed(3)}"` : ''}/>`);
         continue;
       }
       if (s.role === 'pocheGhost') continue;

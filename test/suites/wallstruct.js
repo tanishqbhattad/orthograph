@@ -135,4 +135,70 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(r.worst < 1e-6,
       'and each one meets its opposite number at the corner, worst gap ' + r.worst);
   });
+  group('where three or more walls meet');
+
+  /* Each wall's body stops at its own mitre, so with three ends or more the
+     patch between them belonged to nobody and the background showed through:
+     a white triangle at a T, a white star in the middle of a junction. It was
+     always there — a faint wash hid it, and a solid poche does not. */
+  t('a T-junction has no hole in the middle of it', () => {
+    const r = R(`${SETUP}
+      const a = addEnt({t:'wall', a:[0,0], b:[-4000,0], wt:'gen100', layer:'A-WALL'});
+      const b = addEnt({t:'wall', a:[0,0], b:[4000,0], wt:'gen100', layer:'A-WALL'});
+      const c = addEnt({t:'wall', a:[0,0], b:[0,-4000], wt:'gen100', layer:'A-WALL'});
+      const poche = [];
+      for (const w of [a, b, c])
+        for (const s of shapes(w, 32)) if (s.role === 'poche') poche.push(s.pts);
+      return { covered: poche.some(p => pointInPoly([0,0], p)), n: poche.length };`);
+    eq(r.covered, true, 'the node itself is inside the poche');
+  });
+
+  t('so does a six-way junction', () => {
+    const r = R(`${SETUP}
+      const ws = [];
+      for (let i = 0; i < 6; i++) {
+        const a = i * Math.PI / 3;
+        ws.push(addEnt({t:'wall', a:[0,0], b:[Math.cos(a)*4000, Math.sin(a)*4000],
+                        wt:'gen100', layer:'A-WALL'}));
+      }
+      const poche = [];
+      for (const w of ws) for (const s of shapes(w, 32)) if (s.role === 'poche') poche.push(s.pts);
+      /* a point just off the node, where the star used to show through */
+      return { node: poche.some(p => pointInPoly([0,0], p)),
+               near: poche.some(p => pointInPoly([12,7], p)) };`);
+    eq(r.node, true, 'the middle is filled');
+    eq(r.near, true, 'and so is the rest of the patch');
+  });
+
+  t('the patch is drawn once, not once per wall', () => {
+    const r = R(`${SETUP}
+      const ws = [];
+      ws.push(addEnt({t:'wall', a:[0,0], b:[-4000,0], wt:'gen100', layer:'A-WALL'}));
+      ws.push(addEnt({t:'wall', a:[0,0], b:[4000,0], wt:'gen100', layer:'A-WALL'}));
+      ws.push(addEnt({t:'wall', a:[0,0], b:[0,-4000], wt:'gen100', layer:'A-WALL'}));
+      let n = 0;
+      for (const w of ws) for (const s of shapes(w, 32)) if (s.node) n++;
+      return { n };`);
+    eq(r.n, 1, 'one wall owns it');
+  });
+
+  t('a plain corner grows nothing extra, because it has no hole', () => {
+    const r = R(`${SETUP}
+      const a = addEnt({t:'wall', a:[0,0], b:[4000,0], wt:'gen100', layer:'A-WALL'});
+      const b = addEnt({t:'wall', a:[0,0], b:[0,4000], wt:'gen100', layer:'A-WALL'});
+      let n = 0;
+      for (const w of [a, b]) for (const s of shapes(w, 32)) if (s.node) n++;
+      return { n };`);
+    eq(r.n, 0, 'a mitred corner already closes itself');
+  });
+
+  t('an end that meets nothing is still capped', () => {
+    const r = R(`${SETUP}
+      const a = addEnt({t:'wall', a:[0,0], b:[4000,0], wt:'gen100', layer:'A-WALL'});
+      let n = 0;
+      for (const s of shapes(a, 32)) if (s.node) n++;
+      return { n, capped: wallEndPoints(a, 1).capped };`);
+    eq(r.n, 0);
+    eq(r.capped, true, 'a free end is unchanged by any of this');
+  });
 };

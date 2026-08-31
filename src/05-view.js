@@ -1279,6 +1279,20 @@ function drawShapes(e, col, mode) {
       let odd = false;
       if (s.holes) for (const h of s.holes) if (h && h.length > 2) { pathPts(h, true); odd = true; }
       ctx.fillStyle = fillCol; ctx.fill(odd ? 'evenodd' : 'nonzero');
+      /* Two filled polygons that share an edge do not join: the canvas
+         antialiases both sides of the seam and the two half-coverages do not
+         add up to one, so a hairline of background shows through. On a wall it
+         reads as a crease down every mitre and a V across every junction —
+         which is what was left after the junction patch itself was filled.
+         Stroking the same path in the same colour closes it. Only when the
+         fill is opaque: doing it to a ghost or a selection tint would darken
+         every edge instead. */
+      if (fillCol.length === 7) {
+        ctx.strokeStyle = fillCol;
+        ctx.lineWidth = 1;
+        ctx.setLineDash(DASH_SOLID);
+        ctx.stroke();
+      }
       /* The material hatch goes ON TOP now rather than underneath: under a
          solid fill it would be painted straight over and WALLPAT would quietly
          mean nothing. Over it the pattern is quiet — which is the honest

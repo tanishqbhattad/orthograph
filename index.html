@@ -3605,6 +3605,54 @@ function nodeRing(p, lvl) {
     .sort((m, n) => m.a - n.a);
 }
 
+/* ============================================================
+   The patch where three or more walls meet
+   ------------------------------------------------------------
+   Every wall's body stops at its own mitre. With two walls that closes the
+   corner exactly, because they share both mitre points. With three or more it
+   does not: the patch between their cut ends belongs to no wall, so the
+   background shows through it — a white triangle at a T, a white star in the
+   middle of a six-way junction. It was always there; a faint wash hid it and a
+   solid poche does not.
+
+   The patch is the ring walked in order, taking each end's two corners. Two
+   walls that mitre share a corner, so those points collapse; two walls whose
+   faces are parallel — a straight run passing through a junction — have no
+   mitre between them, and their two square corners become an edge of the patch
+   on their own. That is why this is built from the solved ends rather than
+   from the mitre points: the mitre is missing in exactly the case the corners
+   are needed.
+   ============================================================ */
+function nodePatch(P, lvl) {
+  const ring = nodeRing(P, lvl);
+  if (ring.length < 3) return null;                /* a corner closes itself */
+  const pts = [];
+  for (const r of ring) {
+    const e = wallEndPoints(r.w, r.end);
+    if (!e || !e.minus || !e.plus) return null;
+    pts.push(e.minus, e.plus);
+  }
+  /* drop the shared mitres, and the seam where the walk comes back round */
+  const ring2 = [];
+  for (const p of pts) {
+    const last = ring2[ring2.length - 1];
+    if (!last || dist(last, p) > 1e-6) ring2.push(p.slice());
+  }
+  while (ring2.length > 1 && dist(ring2[0], ring2[ring2.length - 1]) <= 1e-6) ring2.pop();
+  if (ring2.length < 3) return null;
+  return Math.abs(polyArea(ring2)) > 1e-9 ? ring2 : null;
+}
+/** Which wall draws the patch. One of them has to, or it is drawn once per
+    wall on the node — harmless while the fill is opaque and wrong the moment
+    anything is drawn through it. The lowest id is a stable answer that every
+    wall on the node agrees on without being told. */
+function nodePatchOwner(P, lvl) {
+  const ring = nodeRing(P, lvl);
+  if (ring.length < 3) return null;
+  let best = null;
+  for (const r of ring) if (best == null || r.w.id < best) best = r.w.id;
+  return best;
+}
 function wallEndPoints(w, end) {
   const u = wallU(w);
   const P = end ? w.b : w.a;
@@ -3769,6 +3817,17 @@ function wallShapes(w) {
     }
   } else {
     out.push({ pts: outline, closed: true, role: 'poche', hatch: wallHatchOn(w) });
+  }
+  /* and the patch in the middle of a junction, from whichever wall owns it */
+  for (const end of [0, 1]) {
+    const P = end ? w.b : w.a;
+    if (nodePatchOwner(P, w.lvl || 0) !== w.id) continue;
+    const patch = nodePatch(P, w.lvl || 0);
+    /* poche, so it is filled, plotted and screened exactly as a wall body is —
+       and flagged, because it belongs to a junction rather than to a layer of
+       one wall and must not be given a material's pattern */
+    if (patch) out.push({ pts: patch, closed: true, role: 'poche', node: true,
+                          hatch: wallHatchOn(w) });
   }
 
   /* the wall body across each window, ghosted */
@@ -6231,6 +6290,20 @@ function drawShapes(e, col, mode) {
       let odd = false;
       if (s.holes) for (const h of s.holes) if (h && h.length > 2) { pathPts(h, true); odd = true; }
       ctx.fillStyle = fillCol; ctx.fill(odd ? 'evenodd' : 'nonzero');
+      /* Two filled polygons that share an edge do not join: the canvas
+         antialiases both sides of the seam and the two half-coverages do not
+         add up to one, so a hairline of background shows through. On a wall it
+         reads as a crease down every mitre and a V across every junction —
+         which is what was left after the junction patch itself was filled.
+         Stroking the same path in the same colour closes it. Only when the
+         fill is opaque: doing it to a ghost or a selection tint would darken
+         every edge instead. */
+      if (fillCol.length === 7) {
+        ctx.strokeStyle = fillCol;
+        ctx.lineWidth = 1;
+        ctx.setLineDash(DASH_SOLID);
+        ctx.stroke();
+      }
       /* The material hatch goes ON TOP now rather than underneath: under a
          solid fill it would be painted straight over and WALLPAT would quietly
          mean nothing. Over it the pattern is quiet — which is the honest
@@ -18756,7 +18829,11 @@ function svgEntityBody(lwMul) {
       if (s.role === 'poche' && s.pts && s.pts.length > 2) {
         const d = 'M' + s.pts.map(T2).join('L') + 'Z';
         const band = pocheBandCol(pocheCol(e), s.mat ? pocheTone(s.mat) : 1);
-        out.push(`<path d="${d}" fill="${band}" stroke="none"${SCR < 1 ? ` fill-opacity="${+SCR.toFixed(3)}"` : ''}/>`);
+        /* stroked in its own colour, thinly, for the same reason the screen
+           is: two filled paths that share an edge leave an antialiased
+           hairline of background between them, and a wall should not have a
+           crease down every mitre on paper either */
+        out.push(`<path d="${d}" fill="${band}" stroke="${band}" stroke-width="${+Math.max(lw * 0.5, 0.05).toFixed(4)}"${SCR < 1 ? ` fill-opacity="${+SCR.toFixed(3)}" stroke-opacity="${+SCR.toFixed(3)}"` : ''}/>`);
         continue;
       }
       if (s.role === 'pocheGhost') continue;
