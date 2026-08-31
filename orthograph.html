@@ -18143,6 +18143,17 @@ class DxfWriter {
     const tbl = (name, handle, count, body) => {
       P(o, 0, 'TABLE'); P(o, 2, name); P(o, 5, handle); P(o, 330, 0);
       P(o, 100, 'AcDbSymbolTable'); P(o, 70, count);
+      /* DIMSTYLE is the one symbol table whose header carries a SECOND
+         subclass marker, with its own count after it. Every other table stops
+         at AcDbSymbolTable. Without it AutoCAD reaches the first record where
+         it expected the marker and discards the whole drawing:
+
+           Class separator for class AcDbDimStyleTable expected on line 828.
+           Invalid or incomplete DXF input -- drawing discarded.
+
+         ezdxf reads the file happily either way, which is why every check
+         here passed while AutoCAD would not open it at all. */
+      if (name === 'DIMSTYLE') { P(o, 100, 'AcDbDimStyleTable'); P(o, 71, count); }
       body(); P(o, 0, 'ENDTAB');
     };
     const rec = (type, handle, owner, sub) => {
@@ -18180,8 +18191,28 @@ class DxfWriter {
       }
     });
     this.layerHandles = {};
-    tbl('LAYER', K.tLayer, DOC.layers.length, () => {
-      for (const l of DOC.layers) {
+    /* Every layer any exported object NAMES, whether or not the document has a
+       record for it. A drawing can hold an object on a layer nobody made —
+       AUDIT exists to find exactly that — and a file that references a layer
+       it does not define loses it: AutoCAD drops those objects onto layer 0.
+       The document is allowed to be untidy; the file it writes is not. */
+    const layersOut = DOC.layers.slice();
+    {
+      const have = new Set(layersOut.map(l => l.name));
+      const named = new Set();
+      for (const e of DOC.ents.values()) if (e && e.layer != null) named.add(String(e.layer));
+      for (const b of Object.values(DOC.blocks || {})) {
+        const list = Array.isArray(b) ? b : (b && b.ents) || [];
+        for (const e of list) if (e && e.layer != null) named.add(String(e.layer));
+      }
+      for (const n of named) {
+        if (n === '' || have.has(n)) continue;
+        layersOut.push(Object.assign(newLayer(n), { name: n }));
+        have.add(n);
+      }
+    }
+    tbl('LAYER', K.tLayer, layersOut.length, () => {
+      for (const l of layersOut) {
         const hh = this.H(); this.layerHandles[l.name] = hh;
         rec('LAYER', hh, K.tLayer, 'AcDbLayerTableRecord');
         P(o, 2, l.name); P(o, 70, l.lock ? 4 : 0);

@@ -266,7 +266,16 @@ noticed months later.
 
 - Everything is 2D. Walls, openings and slabs carry height, sill and level data already,
   so the model is ready for a 3D view later without a data migration.
-- DWG remains experimental and unverified against AutoCAD — use DXF.
+- DWG remains experimental and **rejected by AutoCAD**, which refuses the file at
+  its header with "Drawing was created by an incompatible version" — before it
+  reaches any geometry. The writer follows the published specification and
+  round-trips through this program's own reader, which is exactly as far as it
+  has been proven. Use DXF R2000.
+- The DXF is checked two ways, because one was not enough: `check_dxf.py` reads
+  it back with ezdxf, and `dxf_strict.py` checks the structural rules a strict
+  reader enforces and a forgiving one does not. AutoCAD discarded a drawing over
+  a missing class marker in the DIMSTYLE table header that ezdxf read without
+  complaint.
 - Importing a DXF flattens blocks: an INSERT arrives as its geometry rather than
   as a reusable definition. MTEXT arrives as text, and per-vertex polyline widths
   are dropped. These are the losses a foreign-file audit found; everything else it
