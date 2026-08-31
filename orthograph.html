@@ -1064,6 +1064,7 @@ function resetDoc() {
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];
+  if (typeof roomCacheForget === 'function') roomCacheForget();
   DOC.dimStyles = stdDimStyles(); DOC.curDim = 'Standard';
   DOC.textStyles = stdTextStyles(); DOC.curTextStyle = 'Standard';
   DOC.levelUid = (DOC.levels || []).length;
@@ -1217,6 +1218,10 @@ function mut(e) {
     /* the wall node map is patched here, while the OLD position is still on
        the entity; see wallCacheTouch for why that moment is the only one */
     if (typeof wallCacheTouch === 'function') wallCacheTouch(e);
+    /* and the room log, at the OLD position: a wall moving AWAY from a room
+       changes it just as much as one moving into it, and afterwards there is
+       no record of where it was */
+    if (typeof roomTouch === 'function') roomTouch(e);
     IDXdirty.add(e); markDirty(e.id); DOCV++;
   }
   return e;
@@ -1310,12 +1315,20 @@ function delEnt(id) {
     JN.before.delete(id);
   }
   idxRemove(e); IDXdirty.delete(e);
+  if (typeof roomTouch === 'function') roomTouch(e);
   DOC.ents.delete(id); SEL.delete(id); markDirty(id); DOCV++;
 }
 
 function commit(label) {
   idxFlush();
   if (!JN.on) { if (label) echo(label); return; }
+  /* the NEW position of everything that moved, so a wall dragged into a room
+     invalidates it as surely as one dragged out of it */
+  if (typeof roomTouch === 'function') {
+    for (const id of JN.before.keys()) { const e = DOC.ents.get(id); if (e) roomTouch(e); }
+    for (const id of JN.added) { const e = DOC.ents.get(id); if (e) roomTouch(e); }
+    for (const e of JN.removed.values()) roomTouch(e);
+  }
   const chg = [];
   for (const [id, before] of JN.before) {
     const cur = DOC.ents.get(id); if (!cur) continue;
@@ -1354,6 +1367,15 @@ function rollback() {
 }
 
 function applyPatch(p, redoDir) {
+  /* Undo and redo put entities back without going through mut(), so the room
+     log has to be told here too — otherwise a room keeps the shape it had
+     before the undo, and a file saved in that window records a state the
+     document was never in. */
+  if (typeof roomTouch === 'function') {
+    for (const e of p.add) roomTouch(e);
+    for (const e of p.del) roomTouch(e);
+    for (const c of p.chg) { roomTouch(c.b); roomTouch(c.a); }
+  }
   for (const e of p.add) markDirty(e.id);
   for (const e of p.del) markDirty(e.id);
   for (const c of p.chg) markDirty(c.id);
@@ -4414,18 +4436,22 @@ const ROOM_WELD = 1e-6;                            /* node coincidence, mm */
 
 function roomBlockers(lvl) {
   const segs = [];
-  const push = (a, b) => { if (dist(a, b) > ROOM_WELD) segs.push([a, b]); };
+  /* Each segment carries the id of the object it came off. The walk knew this
+     all along and threw it away, which is why nothing could say what bounded a
+     room, and why every room had to be re-traced whenever anything at all
+     changed. It costs one number per segment. */
+  const push = (a, b, id) => { if (dist(a, b) > ROOM_WELD) segs.push([a, b, id]); };
   for (const w of allWalls()) {
     if ((w.lvl || 0) !== (lvl || 0)) continue;
     if (wallLen(w) < EPS) continue;
     const o = wallOutline(w);
-    for (let i = 0; i < o.length; i++) push(o[i], o[(i + 1) % o.length]);
+    for (let i = 0; i < o.length; i++) push(o[i], o[(i + 1) % o.length], w.id);
   }
   for (const e of DOC.ents.values()) {
     if (e.t !== 'column' || (e.lvl || 0) !== (lvl || 0)) continue;
     const p = poly(e, 32);
-    for (let i = 1; i < p.length; i++) push(p[i - 1], p[i]);
-    if (p.length > 2) push(p[p.length - 1], p[0]);
+    for (let i = 1; i < p.length; i++) push(p[i - 1], p[i], e.id);
+    if (p.length > 2) push(p[p.length - 1], p[0], e.id);
   }
   return segs;
 }
@@ -4485,7 +4511,7 @@ function roomSplit(segs) {
       if (ts[k] - ts[k - 1] < 1e-9) continue;
       const p0 = [a[0] + (b[0] - a[0]) * ts[k - 1], a[1] + (b[1] - a[1]) * ts[k - 1]];
       const p1 = [a[0] + (b[0] - a[0]) * ts[k], a[1] + (b[1] - a[1]) * ts[k]];
-      if (dist(p0, p1) > ROOM_WELD) out.push([p0, p1]);
+      if (dist(p0, p1) > ROOM_WELD) out.push([p0, p1, segs[i][2]]);
     }
   }
   return out;
@@ -4510,20 +4536,125 @@ function roomGraph(edges) {
     return idx;
   }
   const seen = new Set();
-  for (const [a, b] of edges) {
+  /* which object each edge belongs to, keyed by the pair of nodes it joins.
+     A map rather than a parallel array, because adj is re-sorted by angle
+     below and a parallel array would quietly stop lining up. */
+  const src = new Map();
+  for (const [a, b, id] of edges) {
     const ia = nodeAt(a), ib = nodeAt(b);
     if (ia === ib) continue;
     const sig = ia < ib ? ia + '-' + ib : ib + '-' + ia;
     if (seen.has(sig)) continue;
     seen.add(sig);
+    if (id != null) src.set(sig, id);
     nodes[ia].adj.push(ib);
     nodes[ib].adj.push(ia);
   }
   for (const nd of nodes) {
     nd.adj.sort((x, y) => ang(nd.p, nodes[x].p) - ang(nd.p, nodes[y].p));
   }
+  nodes.src = src;
   return nodes;
 }
+/* ============================================================
+   What a room has to be re-traced for
+   ------------------------------------------------------------
+   A room was re-traced whenever DOCV moved, which is whenever ANYTHING
+   changed: typing a note, nudging a dimension, changing a hatch. Tracing is
+   the most expensive thing an edit can provoke, and none of those edits can
+   change the shape of a room.
+
+   Only walls and columns bound rooms, so only those are logged. Each entry
+   remembers the extent of the thing that changed at the moment it changed —
+   which is why a wall MOVED into a room still invalidates it, and why a wall
+   that has been erased can still be recognised as having mattered.
+
+   A room can then be left alone unless something it was actually built from
+   changed, or something changed within reach of it. The log is bounded; when
+   it overflows, every room re-traces, which is slow rather than wrong.
+   ============================================================ */
+let ROOMV = 0;
+const ROOM_LOG = [];
+const ROOM_LOG_MAX = 512;
+/* Deliberately NOT bbox(). This runs inside mut(), before the entity has
+   finished changing, and bbox() goes through shapes() — which would warm the
+   shape cache with geometry that is about to be wrong and hand it back later.
+   A wall and a column are both fully described by their own numbers, so the
+   extent is worked out from those and nothing else is touched. */
+function roomLogBox(e) {
+  if (!e) return null;
+  const pt = p => Array.isArray(p) && isFinite(p[0]) && isFinite(p[1]);
+  if (e.t === 'wall') {
+    if (!pt(e.a) || !pt(e.b)) return null;
+    const t = (typeof wallT === 'function' ? wallT(e) : 100) || 100;
+    return [Math.min(e.a[0], e.b[0]) - t, Math.min(e.a[1], e.b[1]) - t,
+            Math.max(e.a[0], e.b[0]) + t, Math.max(e.a[1], e.b[1]) + t];
+  }
+  if (e.t === 'column') {
+    if (!pt(e.p)) return null;
+    const r = Math.max(e.w || 400, e.d || e.w || 400);
+    return [e.p[0] - r, e.p[1] - r, e.p[0] + r, e.p[1] + r];
+  }
+  return null;
+}
+/** Start again: a new document reuses entity ids from 1, so a cache left over
+    from the last one can be handed out for a completely different room. */
+function roomCacheForget() {
+  _roomCache.clear();
+  ROOM_LOG.length = 0;
+  ROOMV++;
+}
+/** record that something which can bound a room has changed */
+function roomTouch(e) {
+  if (!e || (e.t !== 'wall' && e.t !== 'column')) return;
+  ROOMV++;
+  ROOM_LOG.push({ v: ROOMV, id: e.id, box: roomLogBox(e) });
+  if (ROOM_LOG.length > ROOM_LOG_MAX) ROOM_LOG.splice(0, ROOM_LOG.length - ROOM_LOG_MAX);
+}
+/** is this stamp still within reach of the log? */
+function roomLogHas(v) { return !ROOM_LOG.length || ROOM_LOG[0].v <= v + 1; }
+/** the extent of a ring of points */
+function bboxPts(pts) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of pts) {
+    if (p[0] < x0) x0 = p[0];
+    if (p[0] > x1) x1 = p[0];
+    if (p[1] < y0) y0 = p[1];
+    if (p[1] > y1) y1 = p[1];
+  }
+  return isFinite(x0) ? [x0, y0, x1, y1] : null;
+}
+/** Can this cached room be trusted after everything that has happened since it
+    was traced? Only if nothing it was built from moved, and nothing that moved
+    came within reach of it. */
+function roomCacheGood(hit) {
+  if (!hit || hit.rv == null) return false;
+  if (hit.rv === ROOMV) return true;                 /* nothing has happened */
+  if (!roomLogHas(hit.rv)) return false;             /* too long ago to know */
+  /* the room's own extent, worked out once and kept: this is asked on every
+     room on every edit, so it must not rebuild anything */
+  let rb = hit.box;
+  if (!rb) {
+    const pts = hit.pts || hit.good;
+    rb = pts && pts.length > 2 ? bboxPts(pts) : null;
+    if (!rb) return false;
+    hit.box = rb;
+  }
+  const src = hit.src || [];
+  /* Both the old and the new position of anything that moved are already in
+     the log — mut() records where it was, commit() where it went — so there
+     is nothing to look up on the live document here. */
+  for (let i = ROOM_LOG.length - 1; i >= 0; i--) {
+    const c = ROOM_LOG[i];
+    if (c.v <= hit.rv) break;
+    const b = c.box;
+    if (!b) return false;                            /* unknown extent */
+    if (!(b[2] < rb[0] || b[0] > rb[2] || b[3] < rb[1] || b[1] > rb[3])) return false;
+    if (src.indexOf(c.id) >= 0) return false;        /* it is one of ours */
+  }
+  return true;
+}
+
 /* the arrangement is expensive, so build it once per document version */
 const _arrCache = { v: -1, lvl: null, nodes: null };
 function roomArrangement(lvl) {
@@ -4556,9 +4687,19 @@ function roomStartEdge(seed, nodes) {
   const u = sub(nodes[j].p, nodes[i].p);
   return cross(u, sub(seed, nodes[i].p)) > 0 ? [i, j] : [j, i];
 }
-/** walk the bounded face lying to the left of the given half-edge */
+/** the id of the object the edge between two nodes came off, if it is known */
+function roomEdgeSrc(nodes, i, j) {
+  const m = nodes.src;
+  if (!m) return null;
+  const v = m.get(i < j ? i + '-' + j : j + '-' + i);
+  return v == null ? null : v;
+}
+/** walk the bounded face lying to the left of the given half-edge.
+    `out.src` collects what the walk followed, in the order it followed it. */
 function roomWalkFace(nodes, start) {
   const out = [];
+  const src = [];
+  out.src = src;
   let [u, v] = start;
   const guard = nodes.length * 4 + 64;
   for (let step = 0; step < guard; step++) {
@@ -4569,10 +4710,14 @@ function roomWalkFace(nodes, start) {
     if (back < 0) return null;
     /* the next edge clockwise from the one we came in on keeps the face on the left */
     const next = nd.adj[(back - 1 + nd.adj.length) % nd.adj.length];
+    const from = roomEdgeSrc(nodes, v, next);
+    if (from != null && src.indexOf(from) < 0) src.push(from);
     u = v; v = next;
     if (u === start[0] && v === start[1]) {
       const pts = out.map(k => nodes[k].p.slice());
-      return pts.length >= 3 ? pts : null;
+      if (!(pts.length >= 3)) return null;
+      pts.src = src;
+      return pts;
     }
   }
   return null;
@@ -4591,6 +4736,10 @@ function roomDropCollinear(pts) {
   return out.length >= 3 ? out : null;
 }
 /** trace the enclosure containing `seed`; null if the space is not closed */
+/* How many faces have actually been walked. A room re-trace is the most
+   expensive thing an edit can provoke, and the only way to know whether the
+   work is being avoided is to be able to count it. */
+let ROOM_TRACES = 0;
 function roomTrace(seed, lvl) {
   const nodes = roomArrangement(lvl);
   if (!nodes || !nodes.length) return null;
@@ -4600,11 +4749,13 @@ function roomTrace(seed, lvl) {
   if (!raw) return null;
   const pts = roomDropCollinear(raw);
   if (!pts) return null;
+  pts.src = raw.src || [];
   /* a negative signed area means we walked the outside, not a room */
   let a2 = 0;
   for (let i = 0; i < pts.length; i++) a2 += cross(pts[i], pts[(i + 1) % pts.length]);
   if (a2 <= 0) return null;
   if (!pointInPoly(seed, pts)) return null;
+  ROOM_TRACES++;
   return pts;
 }
 /** True when an automatic room's walls no longer enclose its seed, so the
@@ -4622,7 +4773,10 @@ const _roomCache = new Map();
 function roomBoundary(r) {
   if (!r.auto || !r.seed) return r.pts;
   const hit = _roomCache.get(r.id);
-  if (hit && hit.v === DOCV) return hit.pts;
+  if (hit && (hit.v === DOCV || roomCacheGood(hit))) {
+    hit.v = DOCV; hit.rv = ROOMV;                    /* still true; stop asking */
+    return hit.pts;
+  }
   let pts = null;
   try { pts = roomTrace(r.seed, r.lvl || 0); } catch (e) { pts = null; }
   /* A failed trace means the walls no longer close around the seed. The last
@@ -4645,8 +4799,45 @@ function roomBoundary(r) {
      all the rendering path ever needed. The one consumer that genuinely needs
      a materialised polygon is the .ocad writer, and it materialises its own
      copy at write time — see roomForSave() in 11-io.js. */
-  _roomCache.set(r.id, { v: DOCV, pts, open, good });
+  const src = (pts && pts.src) || (hit && hit.src) || [];
+  _roomCache.set(r.id, { v: DOCV, rv: ROOMV, pts, open, good, src });
   return pts;
+}
+/** What the walk followed to get this room's shape: the ids of the walls and
+    columns that bound it, in the order it met them. Empty for a room drawn as
+    a polygon, which was not traced from anything and must not claim to have
+    been. Derived, never stored on the entity, so an undo cannot leave it
+    disagreeing with the drawing. */
+function roomSources(r) {
+  if (!r || !r.auto || !r.seed) return [];
+  roomBoundary(r);
+  const hit = _roomCache.get(r.id);
+  const src = (hit && hit.src) || [];
+  /* an id that has since been erased bounds nothing */
+  return src.filter(id => DOC.ents.has(id));
+}
+/** the same, in words, for the properties panel and LIST */
+function roomSourceText(r) {
+  const src = roomSources(r);
+  if (!src.length) return r && r.auto ? 'Not enclosed by anything' : 'Drawn, not traced';
+  const by = {};
+  for (const id of src) { const e = DOC.ents.get(id); if (e) by[e.t] = (by[e.t] || 0) + 1; }
+  const bits = Object.keys(by).map(t => by[t] + ' ' + t + (by[t] === 1 ? '' : 's'));
+  return 'Bounded by ' + bits.join(' and ');
+}
+/** Does a change to this object change this room? Its own boundary objects, of
+    course — and anything whose extent reaches inside it, because a NEW wall
+    through the middle bounds a room that has never heard of it. */
+function roomAffectedBy(r, e) {
+  if (!r || !e || !r.auto) return false;
+  if (roomSources(r).indexOf(e.id) >= 0) return true;
+  const hit = _roomCache.get(r.id);
+  const pts = (hit && (hit.pts || hit.good)) || r.pts;
+  const rb = pts && pts.length > 2 ? bboxPts(pts) : null;
+  if (!rb) return true;                             /* nothing known: assume so */
+  const b = roomLogBox(e);
+  if (!b) return true;
+  return !(b[2] < rb[0] || b[0] > rb[2] || b[3] < rb[1] || b[1] > rb[3]);
 }
 
 /* ===== 05-view.js ===== */
@@ -20440,6 +20631,10 @@ const PROPS = {
     ro(w, 'Perimeter', fmt(polyLen(pts, true)));
     ro(w, 'Corners', pts.length);
     ro(w, 'Boundary', e.auto ? 'follows the walls' : 'drawn by hand');
+    /* A room the wrong shape is otherwise a mystery. The walk knows exactly
+       what it followed, so it can say so, and the answer is a list of objects
+       to go and look at. */
+    if (e.auto) ro(w, 'Enclosed by', roomSourceText(e));
     if (e.auto) btnRow(w, '', 'Detach from walls',
       () => { begin(); mut(e); e.auto = false; e.pts = (roomBoundary(e) || e.pts).map(q => q.slice()); commit('Detached'); upd(); });
     else if (e.seed) btnRow(w, '', 'Re-attach to walls',

@@ -195,6 +195,7 @@ function resetDoc() {
   DOC.wallTypes = stdWallTypes(); DOC.doorTypes = stdDoorTypes();
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];
+  if (typeof roomCacheForget === 'function') roomCacheForget();
   DOC.dimStyles = stdDimStyles(); DOC.curDim = 'Standard';
   DOC.textStyles = stdTextStyles(); DOC.curTextStyle = 'Standard';
   DOC.levelUid = (DOC.levels || []).length;
@@ -348,6 +349,10 @@ function mut(e) {
     /* the wall node map is patched here, while the OLD position is still on
        the entity; see wallCacheTouch for why that moment is the only one */
     if (typeof wallCacheTouch === 'function') wallCacheTouch(e);
+    /* and the room log, at the OLD position: a wall moving AWAY from a room
+       changes it just as much as one moving into it, and afterwards there is
+       no record of where it was */
+    if (typeof roomTouch === 'function') roomTouch(e);
     IDXdirty.add(e); markDirty(e.id); DOCV++;
   }
   return e;
@@ -441,12 +446,20 @@ function delEnt(id) {
     JN.before.delete(id);
   }
   idxRemove(e); IDXdirty.delete(e);
+  if (typeof roomTouch === 'function') roomTouch(e);
   DOC.ents.delete(id); SEL.delete(id); markDirty(id); DOCV++;
 }
 
 function commit(label) {
   idxFlush();
   if (!JN.on) { if (label) echo(label); return; }
+  /* the NEW position of everything that moved, so a wall dragged into a room
+     invalidates it as surely as one dragged out of it */
+  if (typeof roomTouch === 'function') {
+    for (const id of JN.before.keys()) { const e = DOC.ents.get(id); if (e) roomTouch(e); }
+    for (const id of JN.added) { const e = DOC.ents.get(id); if (e) roomTouch(e); }
+    for (const e of JN.removed.values()) roomTouch(e);
+  }
   const chg = [];
   for (const [id, before] of JN.before) {
     const cur = DOC.ents.get(id); if (!cur) continue;
@@ -485,6 +498,15 @@ function rollback() {
 }
 
 function applyPatch(p, redoDir) {
+  /* Undo and redo put entities back without going through mut(), so the room
+     log has to be told here too — otherwise a room keeps the shape it had
+     before the undo, and a file saved in that window records a state the
+     document was never in. */
+  if (typeof roomTouch === 'function') {
+    for (const e of p.add) roomTouch(e);
+    for (const e of p.del) roomTouch(e);
+    for (const c of p.chg) { roomTouch(c.b); roomTouch(c.a); }
+  }
   for (const e of p.add) markDirty(e.id);
   for (const e of p.del) markDirty(e.id);
   for (const c of p.chg) markDirty(c.id);

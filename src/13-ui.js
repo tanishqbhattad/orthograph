@@ -1265,6 +1265,10 @@ const PROPS = {
     ro(w, 'Perimeter', fmt(polyLen(pts, true)));
     ro(w, 'Corners', pts.length);
     ro(w, 'Boundary', e.auto ? 'follows the walls' : 'drawn by hand');
+    /* A room the wrong shape is otherwise a mystery. The walk knows exactly
+       what it followed, so it can say so, and the answer is a list of objects
+       to go and look at. */
+    if (e.auto) ro(w, 'Enclosed by', roomSourceText(e));
     if (e.auto) btnRow(w, '', 'Detach from walls',
       () => { begin(); mut(e); e.auto = false; e.pts = (roomBoundary(e) || e.pts).map(q => q.slice()); commit('Detached'); upd(); });
     else if (e.seed) btnRow(w, '', 'Re-attach to walls',
