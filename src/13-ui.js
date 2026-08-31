@@ -1183,6 +1183,24 @@ const PROPS = {
   dim(w, e, set, upd) {
     ro(w, 'Kind', e.k);
     ro(w, 'Measured', dimGeom(e).txt);
+    /* Which way round this dimension works, and — when it is the driving kind
+       — the field that changes the drawing. An override only changes what the
+       label says; this changes what is there. Keeping them next to each other
+       and named differently is the whole difference. */
+    btnRow(w, 'Works', e.drive ? 'drives the drawing' : 'reports the drawing', () => {
+      dimDrive(e, !e.drive); upd();
+    });
+    if (e.drive) {
+      const dr = el('div', 'row', '<label>Size</label>');
+      const di = el('input', 'f'); di.id = 'dimdrv';
+      di.value = fmt(dimMeasureAt(e, dimEnd(e, 1), dimEnd(e, 2)));
+      di.onchange = () => {
+        const v = parseLen(di.value);
+        if (isFinite(v) && v > 0) dimSetValue(e, v);
+        upd();
+      };
+      dr.appendChild(di); w.appendChild(dr);
+    }
     const r = el('div', 'row', '<label>Override</label>');
     const inp = el('input', 'f'); inp.value = e.txt || ''; inp.placeholder = 'automatic';
     inp.onchange = () => { begin(); mut(e); e.txt = inp.value || null; commit(); upd(); };

@@ -603,6 +603,12 @@ function dimAssoc(e) {
   }
   return false;
 }
+/** A driving dimension is marked the way every parametric modeller marks one:
+    the drawing has to say which numbers it is obeying and which it is merely
+    reporting, or the two look identical and one of them is a trap. Only the
+    drawn text is marked — an export carries the measurement itself, because
+    the program opening it has no constraints to obey. */
+function drvTxt(e, s) { return (e && e.drive) ? 'fx ' + s : s; }
 function dimGeom(e0) {
   /* Resolve any association once, then work from the live points. The body
      below is unchanged and still reads p1/p2: an associative dimension simply
@@ -621,7 +627,7 @@ function dimGeom(e0) {
     lines.push([a, p]); arrows.push({ p, a: ang(a, p) });
     if (e.k === 'diameter') arrows.push({ p: a, a: ang(p, a) });
     const val = (e.k === 'diameter' ? 2 : 1) * dist(c, p);
-    return { lines, arrows, tp: mid(a, p), tr: 0, txt: (e.k === 'diameter' ? 'Ø' : 'R') + dimParts(e, val).main, tol: dimParts(e, val), val, S };
+    return { lines, arrows, tp: mid(a, p), tr: 0, txt: drvTxt(e0, (e.k === 'diameter' ? 'Ø' : 'R') + dimParts(e, val).main), tol: dimParts(e, val), val, S };
   }
   /* ORDINATE — how a setting-out drawing is dimensioned. Not a chain of sizes
      between features, where one error walks down the whole run, but each
@@ -645,7 +651,7 @@ function dimGeom(e0) {
     const tp = axis === 'x'
       ? [tp0[0], tp0[1] + along * S.gap]
       : [tp0[0] + along * S.gap, tp0[1]];
-    return { lines, arrows: [], tp, tr: 0, txt: dimParts(e, val).main, tol: dimParts(e, val), val, S,
+    return { lines, arrows: [], tp, tr: 0, txt: drvTxt(e0, dimParts(e, val).main), tol: dimParts(e, val), val, S,
              anchor: axis === 'x' ? 'c' : (along > 0 ? 'l' : 'r') };
   }
   /* ARC LENGTH — measured ALONG the curve. An aligned dimension across the
@@ -716,7 +722,7 @@ function dimGeom(e0) {
   let tr = Math.atan2(q2[1] - q1[1], q2[0] - q1[0]);
   if (tr > Math.PI / 2 + 1e-9 || tr < -Math.PI / 2 - 1e-9) tr += Math.PI;
   const tp = add(mid(q1, q2), mul(perp([Math.cos(tr), Math.sin(tr)]), S.gap + S.txt * 0.5));
-  return { lines, arrows, tp, tr, txt: dimParts(e, val).main, tol: dimParts(e, val), val, S, q1, q2 };
+  return { lines, arrows, tp, tr, txt: drvTxt(e0, dimParts(e, val).main), tol: dimParts(e, val), val, S, q1, q2 };
 }
 /** arrowhead outline as a closed polygon, in model space */
 function arrowPoly(p, a, sz) {

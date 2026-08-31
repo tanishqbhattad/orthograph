@@ -354,6 +354,7 @@ const ALIAS = {
   col: 'COLUMN', str: 'STAIR', rm: 'ROOM', cg: 'COLUMNGRID',
   wf: 'WALLFLIP', wj: 'WALLJOIN', ws: 'WALLSPLIT',
   det: 'DETAIL', dv: 'DETAILVIEW', vpl: 'VPLAYER', lb: 'LABEL', mat: 'MATERIAL',
+  dcon: 'DIMDRIVE', dvl: 'DIMVALUE',
 };
 /** aliases the user has defined this session, checked before acad.pgp */
 const USERALIAS = {};

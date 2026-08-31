@@ -196,6 +196,12 @@ function resetDoc() {
   DOC.winTypes = stdWinTypes(); DOC.levels = stdLevels(); DOC.curLevel = 0;
   DOC.sheets = []; DOC.curSheet = null; SHEET_UID = 1; DOC.layerStates = [];
   if (typeof roomCacheForget === 'function') roomCacheForget();
+  /* A new document does not inherit the last one's selection. Ids start again
+     from 1, so a leftover id is not merely stale — it can name a different
+     object entirely, and commands that behave differently with a selection
+     (HATCH takes the selection instead of asking where) then do the wrong
+     thing on a drawing nobody has touched yet. */
+  SEL.clear();
   DOC.dimStyles = stdDimStyles(); DOC.curDim = 'Standard';
   DOC.textStyles = stdTextStyles(); DOC.curTextStyle = 'Standard';
   DOC.levelUid = (DOC.levels || []).length;
