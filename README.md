@@ -283,10 +283,17 @@ noticed months later.
   verifies that a door onto a protected stair actually has a rating.
 - Schedules export as CSV, one file per schedule; there is no live link back
   from a spreadsheet into the drawing.
+- A driving dimension solves the points its own dimensions are attached to.
+  There are no other constraints — nothing says "parallel", "equal" or
+  "tangent" — so a shape is held by its dimensions and by nothing else.
+- Materials carry density, conductivity, a fire class and a hatch pattern, which
+  is enough for a mass take-off and a wall U-value. It is not a thermal model:
+  there is no bridging, no glazing, and no whole-envelope figure.
 - An arc-length dimension has no DXF R2000 equivalent, so it exports as flattened
   geometry rather than as an editable dimension.
-- Fields cover the drawing name, sheet, scale, date, and an object's area,
-  length or count; there is no field browser, so they are typed by hand.
+- Fields cover the drawing name, sheet, scale, date, and any property the
+  schedule engine names — a label can read the object it points at. There is no
+  field browser, so anything beyond a LABEL is typed by hand.
 - Dynamic blocks cover visibility states only: there are no stretch, array or
   lookup parameters.
 - Keyboard picking is Ctrl+Enter rather than a rebindable key, and the themes are
