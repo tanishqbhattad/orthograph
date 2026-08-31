@@ -21,8 +21,11 @@ jobs:
       # orthograph.html is committed, because the one-file download is the
       # whole pitch. A stale build has shipped from this repo before, so the
       # build is re-run above and the result must match what was committed.
+      # index.html is the same bytes under a second name, so that a static host
+      # serves the app from a bare URL. It has to be checked too, or half the
+      # release can go stale on its own.
       - name: Fail if the committed build is stale
-        run: git diff --exit-code orthograph.html
+        run: git diff --exit-code orthograph.html index.html
 
       - name: Unit tests
         run: node test/run.js
@@ -38,3 +41,9 @@ jobs:
         run: |
           pip install ezdxf
           python tools/check_dxf.py test/out/fixture.dxf
+
+      # ezdxf is forgiving by design, and that is the gap: it read a DXF
+      # happily that AutoCAD refused outright over a missing class marker.
+      # This checks the structural rules a strict reader enforces.
+      - name: Validate DXF structure the way a strict reader would
+        run: python tools/dxf_strict.py test/out/fixture.dxf

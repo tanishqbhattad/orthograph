@@ -610,7 +610,17 @@ function ro(w, label, v) { w.appendChild(el('div', 'row', `<label>${label}</labe
 function selRow(w, label, options, cur, on) {
   const r = el('div', 'row', `<label>${label}</label>`);
   const s = el('select', 'f');
-  for (const [v, t] of options) { const o = el('option', '', t); o.value = v; if (String(v) === String(cur)) o.selected = true; s.appendChild(o); }
+  /* textContent, not innerHTML: the labels here are wall type names, layer
+     names and block names, all of which arrive in the project file. el() sets
+     innerHTML, so a component called <img onerror=...> was markup rather than
+     a name. One fix here covers every list in the program. */
+  for (const [v, t] of options) {
+    const o = document.createElement('option');
+    o.textContent = t == null ? '' : String(t);
+    o.value = v;
+    if (String(v) === String(cur)) o.selected = true;
+    s.appendChild(o);
+  }
   s.onchange = () => on(s.value);
   r.appendChild(s); w.appendChild(r); return s;
 }
@@ -1411,7 +1421,7 @@ function openTypeManager() {
   const doorCols = [['name', 'Name'], ['w', 'Width', 1], ['h', 'Height', 1]];
   const winCols = [['name', 'Name'], ['w', 'Width', 1], ['h', 'Height', 1], ['sill', 'Sill', 1]];
   modal(`<h3>Component library</h3>
-    <p>Sizes are in ${DOC.units}. These travel with the drawing.</p>
+    <p>Sizes are in ${esc(DOC.units)}. These travel with the drawing.</p>
     <style>
       .tabs{display:flex;gap:4px;margin-bottom:10px}
       .tab{padding:5px 10px;border-radius:5px;background:var(--bg2);font-size:12px}

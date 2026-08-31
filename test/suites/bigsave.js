@@ -30,6 +30,19 @@ const FAKE = `
     },
     removeItem(k) { this.map.delete(k); },
   });
+  /* IndexedDB answers AFTER the function that started the write has returned.
+     The fake below answers immediately, which is why an ordering fault here
+     stayed invisible: this one holds its callback until it is released. */
+  const mkSlow = () => ({
+    map: new Map(), puts: 0, pending: [],
+    put(k, v, cb) { this.puts++; this.pending.push(() => { this.map.set(k, String(v)); cb && cb(true); }); },
+    fail(k, v, cb) { this.pending.push(() => cb && cb(false)); },
+    settle(ok) { const q = this.pending; this.pending = [];
+      for (const f of q) { if (ok === false) { /* drop */ } else f(); } },
+    reject() { const q = this.pending; this.pending = []; for (const f of q) f.cb === undefined ? null : null; },
+    get(k, cb) { cb(this.map.has(k) ? this.map.get(k) : null); },
+    del(k, cb) { this.map.delete(k); if (cb) cb(true); },
+  });
   const mkBig = (broken) => ({
     map: new Map(), puts: 0, gets: 0, dels: 0,
     put(k, v, cb) { this.puts++;
@@ -172,5 +185,49 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       setBigStore(null);
       return { rec };`);
     eq(r.rec, null, 'a pointer to nothing is nothing');
+  });
+  group('a write that has not landed yet');
+
+  /* The pointer in localStorage is what recovery follows. Writing it while the
+     drawing is still in flight to IndexedDB means a tab that dies in that
+     window comes back to a pointer with nothing behind it — recovery offering
+     work it cannot produce. */
+  t('no pointer is left claiming a drawing that has not been stored', () => {
+    const r = R(`${SETUP}${FAKE}
+      const small = mkStore(2000); const slow = mkSlow();
+      setStore(small); setBigStore(slow);
+      draw2(60);
+      const wrote = autosaveNow('test');
+      /* the write is still in flight here — exactly where a crash hurts */
+      const ptrDuring = small.getItem(AUTOSAVE.key);
+      const storedDuring = slow.map.size;
+      slow.settle();
+      const ptrAfter = small.getItem(AUTOSAVE.key);
+      const storedAfter = slow.map.size;
+      setBigStore(null);
+      return { wrote, ptrDuring: !!ptrDuring, storedDuring,
+               ptrAfter: !!ptrAfter, storedAfter };`);
+    eq(r.storedDuring, 0, 'nothing is in the overflow store yet');
+    eq(r.ptrDuring, false, 'and nothing points at it yet either');
+    eq(r.storedAfter, 1, 'the drawing lands');
+    eq(r.ptrAfter, true, 'and only then is it pointed at');
+  });
+
+  t('a write that fails leaves the last good recovery point alone', () => {
+    const r = R(`${SETUP}${FAKE}
+      const small = mkStore(4000); const good = mkBig();
+      setStore(small); setBigStore(good);
+      draw2(20);
+      autosaveNow('first');                 /* a real, complete recovery point */
+      const first = small.getItem(AUTOSAVE.key);
+      const slow = mkSlow(); setBigStore(slow);
+      draw2(20);
+      autosaveNow('second');                /* in flight, then dropped */
+      slow.settle(false);
+      const after = small.getItem(AUTOSAVE.key);
+      setBigStore(null);
+      return { same: first === after, had: !!first };`);
+    eq(r.had, true, 'there was something to keep');
+    eq(r.same, true, 'and the failed attempt did not replace it with a dangling pointer');
   });
 };

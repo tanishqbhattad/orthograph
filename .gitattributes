@@ -1,0 +1,12 @@
+# Line endings are normalised so a build is reproducible on any machine.
+#
+# Without this, git checks the repository out with CRLF on Windows, and
+# build.js could not strip the per-module 'use strict' directive — so a fresh
+# clone produced a DIFFERENT orthograph.html from the one committed, and CI,
+# which rebuilds and diffs, failed on a clean checkout. build.js tolerates
+# either ending now; this stops the two from diverging in the first place.
+* text=auto eol=lf
+
+# The generated single-file app is text and must match byte for byte.
+orthograph.html text eol=lf
+index.html      text eol=lf

@@ -407,6 +407,51 @@ function saveNative() {
    opens with one bad number repaired is worth far more than a refusal — but a
    value that cannot mean anything is dropped so the type default takes over. */
 /** Types this build can draw. Anything else is carried but not understood. */
+/* ============================================================
+   A project file is hostile input
+   ------------------------------------------------------------
+   Everything below this line treats a .ocad as something a stranger wrote,
+   because that is what it is the moment one is shared. Three faults an audit
+   found here, all of them real:
+
+     two entities sharing an id loaded "successfully" with one of them silently
+     gone; a units value nothing recognises was accepted and then every
+     measurement in the drawing was NaN; and a units value that is HTML reached
+     a dialog unescaped.
+
+   The answers are different for each. A drawing that contradicts itself is
+   REFUSED — the file is not opened and the drawing already on screen is left
+   alone, because the alternative is losing work without being told. A value
+   that is merely wrong is corrected to something safe. A value that is a
+   string is forced to be one.
+   ============================================================ */
+const UNITS_OK = ['mm', 'cm', 'm', 'in', 'ft'];
+/** the units a file asks for, if they are units at all */
+function safeUnits(u) {
+  const s = (typeof u === 'string') ? u.trim().toLowerCase() : '';
+  return UNITS_OK.indexOf(s) >= 0 ? s : null;
+}
+/** Anything shown to a person is a string of sane length. A name is not a
+    place to put a script, and a megabyte of text is not a layer name. */
+function safeStr(v, max) {
+  if (v == null) return '';
+  const s = (typeof v === 'string') ? v : String(v);
+  return s.length > (max || 256) ? s.slice(0, max || 256) : s;
+}
+/** Every id in the file, or the first one that appears twice. Ids are what
+    doors, dimensions, labels and details point at, so two objects sharing one
+    is not a tidiness problem — it is a file that cannot be read correctly. */
+function firstDuplicateId(list) {
+  const seen = new Set();
+  for (const e of (list || [])) {
+    if (!e || e.id == null) continue;
+    const id = +e.id;
+    if (!isFinite(id)) return { id: e.id, why: 'is not a number' };
+    if (seen.has(id)) return { id, why: 'appears twice' };
+    seen.add(id);
+  }
+  return null;
+}
 function knownType(t) {
   if (GEOM[t]) return true;
   return ['line', 'pline', 'spline', 'circle', 'arc', 'ellipse', 'point',
@@ -415,6 +460,12 @@ function knownType(t) {
 }
 function sanitiseEnt(e) {
   if (!e || typeof e !== 'object' || !e.t) return null;
+  /* Anything that will be SHOWN is a string of sane length. A layer name that
+     is an array, or a name that is a script, is not a drawing detail — it is
+     the file trying to be something other than data. */
+  for (const k of ['layer', 'name', 'mark', 'num', 'code', 'mat', 's', 'tag', 'txt'])
+    if (e[k] != null && typeof e[k] !== 'string') e[k] = safeStr(e[k], 4096);
+  if (typeof e.layer === 'string') e.layer = safeStr(e.layer, 255);
   const num = (v, min) => (typeof v === 'number' && isFinite(v) && v > (min || 0));
   /* thickness, height and sill are all strictly positive when present at all;
      null and undefined are meaningful (fall back to the type) and are kept */
@@ -491,6 +542,17 @@ function loadNative(txt) {
     return loadRefused('That file is not a drawing.');
   if ('layers' in d && d.layers !== undefined && !Array.isArray(d.layers))
     return loadRefused('That file is not a drawing.');
+  /* Checked BEFORE the drawing on screen is touched. Two objects cannot share
+     an id — doors, dimensions, labels and details all point at ids, so a file
+     that reuses one cannot be read correctly whatever we do with it. It used
+     to load anyway, one object quietly replacing the other in the Map, and
+     report success. Refusing keeps the work that is already open; repairing it
+     by renumbering would mean rewriting every reference in the file and
+     getting one wrong silently. */
+  const dup = firstDuplicateId(d.ents);
+  if (dup)
+    return loadRefused('That file cannot be read: object id ' + dup.id + ' ' + dup.why +
+                       '. The drawing you had open is unchanged.');
   const undoAll = docSnapshot();
   try {
     loadNativeInto(d);
@@ -509,13 +571,20 @@ function loadRefused(msg) {
 function loadNativeInto(d) {
   begin();
   DOC.layers = d.layers && d.layers.length ? d.layers : [newLayer('0')];
-  DOC.cur = d.cur || '0';
-  DOC.units = d.units || 'mm';
+  DOC.cur = safeStr(d.cur, 255) || '0';
+  /* A units value nothing recognises used to be taken at its word, and then
+     U[DOC.units] was undefined and every measurement in the drawing came out
+     NaN — including the ones written back to the next file saved. */
+  DOC.units = safeUnits(d.units) || 'mm';
   DOC.textH = d.textH || 2.5;
   DOC.gridStep = d.gridStep || 100;
   DOC.snapStep = d.snapStep || 100;
   DOC.dimStyle = d.dimStyle || {};
   DOC.blocks = d.blocks || {};
+  /* the component library travels with the drawing, so its names are as much
+     a stranger's text as anything else in the file */
+  for (const list of [d.wallTypes, d.doorTypes, d.winTypes])
+    for (const t of (list || [])) if (t && t.name != null) t.name = safeStr(t.name, 128);
   DOC.wallTypes = d.wallTypes || stdWallTypes();
   DOC.doorTypes = d.doorTypes || stdDoorTypes();
   DOC.winTypes = d.winTypes || stdWinTypes();
@@ -697,36 +766,45 @@ function autosaveOverflow(payload) {
   if (!BIGSTORE) return autosaveGaveUp(
     'This drawing is too large to autosave. Save it to a file.');
   const FULL = 'Autosave failed - browser storage is full or blocked. Save manually.';
-  /* Three states, not two. IndexedDB normally answers after this function has
-     returned, and a write still in flight is not a write that failed — but a
-     store that refuses immediately is a refusal we can report honestly now
-     rather than claiming the work is safe. */
-  let state = 'flight';
-  try {
-    BIGSTORE.put(AUTOSAVE.key, payload, r => {
-      if (r !== false) { state = 'ok'; return; }
-      state = 'failed';
-      /* a pointer to a drawing that never landed: recovery ignores it, but the
-         person still has to be told their work is not being kept */
-      autosaveGaveUp(FULL);
-      try { STORE.removeItem(AUTOSAVE.key); } catch (e) { /* nothing to do */ }
-    });
-  } catch (e) { return autosaveGaveUp(FULL); }
-  if (state === 'failed') return false;
+  /* The pointer in localStorage is what recovery follows, so it must never be
+     written before the drawing it points at is actually in the store.
+     IndexedDB answers after this function has returned, and the pointer used
+     to be written immediately — so a tab that died in that window came back to
+     a pointer with nothing behind it, and recovery offered work it could not
+     produce. Worse, it had already overwritten the pointer to the last
+     recovery point that DID exist.
+
+     So: the drawing goes in first, and the pointer is written from the
+     callback, once. Until then the previous recovery point stands untouched,
+     which is the right thing to fall back to. */
   let head;
   try {
     const o = JSON.parse(payload);
     head = JSON.stringify({ v: o.v, at: o.at, seq: o.seq, name: o.name,
                             reason: o.reason, big: true, size: payload.length });
   } catch (e) { return false; }
+  /* Three outcomes, and they are not two: a store that refuses straight away
+     is a failure we can report now, one that has not answered yet is not. */
+  let outcome = 'flight';
+  AUTOSAVE.pending = true;
   try {
-    STORE.setItem(AUTOSAVE.key, head);
-  } catch (e) { return autosaveGaveUp(FULL); }
-  AUTOSAVE.last = Date.now();
-  AUTOSAVE.bytes = payload.length;
-  AUTOSAVE.failed = false;
-  AUTOSAVE.big = true;
-  return true;
+    BIGSTORE.put(AUTOSAVE.key, payload, r => {
+      AUTOSAVE.pending = false;
+      if (r === false) { outcome = 'failed'; autosaveGaveUp(FULL); return; }
+      try { STORE.setItem(AUTOSAVE.key, head); }
+      catch (e) { outcome = 'failed'; autosaveGaveUp(FULL); return; }
+      outcome = 'ok';
+      AUTOSAVE.last = Date.now();
+      AUTOSAVE.bytes = payload.length;
+      AUTOSAVE.failed = false;
+      AUTOSAVE.big = true;
+    });
+  } catch (e) { AUTOSAVE.pending = false; return autosaveGaveUp(FULL); }
+  /* Still in flight counts as accepted: the work is on its way to a store that
+     took it, and AUTOSAVE.pending is what says it is not durable yet. A
+     drawing this large cannot be made durable synchronously by any means the
+     browser offers, so the last good recovery point stands until it is. */
+  return outcome !== 'failed';
 }
 /** say it once, then stop saying it on every edit */
 function autosaveGaveUp(msg) {

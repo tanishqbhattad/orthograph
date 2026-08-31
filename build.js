@@ -13,7 +13,11 @@ function bundle() {
   return ORDER.map(f => {
     const p = path.join(SRC, f);
     if (!fs.existsSync(p)) throw new Error('missing module: ' + f);
-    return `/* ===== ${f} ===== */\n` + fs.readFileSync(p, 'utf8').replace(/^'use strict';\n/m, '');
+    /* \r?\n, not \n: git checks this repository out with CRLF on Windows, so on
+       any fresh clone the directive was not stripped and the build came out
+       with eleven 'use strict' lines instead of one -- a different file from
+       the one committed, which is a release nobody can reproduce. */
+    return `/* ===== ${f} ===== */\n` + fs.readFileSync(p, 'utf8').replace(/^'use strict';\r?\n/m, '');
   }).join('\n');
 }
 function build(out) {
