@@ -51,7 +51,19 @@ const SCHED_FIELDS = {
   fire:     { label: 'Fire', get: e => fireText(openingSpec(e).fire) },
   acoustic: { label: 'Acoustic Rw', get: e => specText(openingSpec(e).acoustic) },
   finish:   { label: 'Finish', get: e => specText(openingSpec(e).finish) },
-  material: { label: 'Material', get: e => e.mat || (wallType(e.wt) || {}).mat || '—' },
+  /* What a thing is made of, and what that means for a take-off. A wall of
+     several layers is not made of one thing, so it says so rather than naming
+     whichever layer happened to be first. */
+  material: { label: 'Material', get: e => {
+    const m = matOf(e);
+    if (m) return (material(m) || {}).name || m;
+    const wt = wallType(e.wt) || {};
+    return (wt.layers && wt.layers.length) ? 'compound' : '—';
+  } },
+  mass:     { label: 'Mass kg', get: e => e.t === 'wall' ? wallMass(e) : 0,
+              num: true, sum: true, unit: 'n' },
+  uvalue:   { label: 'U W/m²K', get: e => { const u = wallUValue(e); return u == null ? '—' : (+u.toFixed(2)); } },
+  code:     { label: 'Code', get: e => e.code || '—' },
   block:    { label: 'Block', get: e => e.name || '—' },
   /* a room's area comes from the boundary it draws and labels with, so the
      schedule cannot disagree with the plan */

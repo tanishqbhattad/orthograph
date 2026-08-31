@@ -1208,7 +1208,14 @@ const PROPS = {
     ro(w, 'Length', fmt(wallLen(e)));
     ro(w, 'Angle', deg(ang(e.a, e.b)).toFixed(2) + '°');
     ro(w, 'Area (plan)', fmtArea(polyArea(wallOutline(e))));
-    ro(w, 'Elevation area', fmtArea(wallLen(e) * (e.h || ARCH.wallH)));
+    ro(w, 'Elevation area', fmtArea(wallLen(e) * wallHeight(e)));
+    /* What it is made of, what that weighs and what it keeps the heat in
+       with. All three fall out of the wall type's own layers, so a wall that
+       has been drawn has already answered them. */
+    ro(w, 'Made of', (material(matOf(e)) || {}).name ||
+      ((wallType(e.wt) || {}).layers || []).map(L => (material(L.fill) || {}).name || L.fill).join(' / ') || '—');
+    ro(w, 'U-value', wallUText(e));
+    ro(w, 'Mass', Math.round(wallMass(e)).toLocaleString() + ' kg');
     const ops = openingsByHost().get(e.id) || [];
     ro(w, 'Openings', ops.length);
     if (ops.length) btnRow(w, '', 'Select openings', () => { SEL.clear(); ops.forEach(o => SEL.add(o.id)); syncUI(); draw(); });

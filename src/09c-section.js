@@ -20,8 +20,14 @@
     floor-to-floor of the storey it belongs to. A wall with no answer at all is
     3000, which is a storey rather than a guess at nothing. */
 function wallHeight(w) {
-  if (w.hgt != null) return w.hgt;
-  const l = (DOC.levels || []).find(x => x.id === (w.lvl || 0));
+  /* `h` is what the properties panel writes and what the elevation area has
+     always used; `hgt` is what this function alone read. A wall given a height
+     in the panel was therefore still a storey tall in the section, in its mass
+     and anywhere else that asked — two names for one number, and only one of
+     them connected. Both are honoured, `h` first. */
+  if (w && typeof w.h === 'number' && isFinite(w.h) && w.h > 0) return w.h;
+  if (w && w.hgt != null) return w.hgt;
+  const l = (DOC.levels || []).find(x => x.id === ((w && w.lvl) || 0));
   return (l && l.h) || 3000;
 }
 function levelElev(id) {

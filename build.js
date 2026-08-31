@@ -6,7 +6,7 @@ const SRC = path.join(__dirname, 'src');
 const ORDER = [
   '00-core.js', '01-doc.js', '02-geom.js', '03-solve.js',
   '04a-wall.js', '04b-openings.js', '04c-components.js',
-  '05-view.js', '06-snap.js', '07-cmd.js', '07b-nav.js', '07c-sheet.js', '08-modify.js', '09-archcmd.js', '09b-layer.js', '09c-section.js', '09d-slab.js', '09e-boundary.js', '09f-detail.js', '09g-sched.js',
+  '05-view.js', '06-snap.js', '07-cmd.js', '07b-nav.js', '07c-sheet.js', '08-modify.js', '09-archcmd.js', '09b-layer.js', '09c-section.js', '09d-slab.js', '09e-boundary.js', '09f-detail.js', '09g-sched.js', '09h-material.js',
   '10-dxf.js', '11-io.js', '12-dwg.js', '13-ui.js', '14-events.js',
 ];
 function bundle() {

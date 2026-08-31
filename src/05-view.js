@@ -1510,27 +1510,9 @@ function hatchPattern(name) {
          HATCH_PATTERNS[String(name || '').toUpperCase()] ||
          HATCH_PATTERNS.line;
 }
-/* What a wall layer's material is drawn as. This is the whole point of the
-   exercise: a section through a cavity wall should read as brick, cavity,
-   block and plaster rather than as four shades of grey. A material nobody has
-   mapped gets no pattern invented for it. */
-const MATERIAL_PATTERN = {
-  brick: 'AR-BRSTD',
-  block: 'AR-B816',
-  concrete: 'AR-CONC',
-  structural: 'AR-CONC',
-  insulation: 'INSUL',
-  cavity: null,
-  finish: 'PLAST',
-  timber: 'TIMBER',
-  steel: 'STEEL',
-  earth: 'EARTH',
-};
-function materialPattern(mat) {
-  if (!mat) return null;
-  const p = MATERIAL_PATTERN[String(mat).toLowerCase()];
-  return p || null;
-}
+/* What a wall layer's material is drawn as lives with the material itself, in
+   09h — a pattern and a density and a conductivity are three facts about one
+   substance, and keeping them in two places is how they drift apart. */
 
 /** Draw a material pattern inside one closed band — a wall layer, in the
     wall's own space. Shares the family generator with drawHatch by building a
