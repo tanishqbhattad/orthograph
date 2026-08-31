@@ -906,19 +906,41 @@ function fitColumns(rows, h) {
 }
 defc('schedule', {
   key: 'schedule', group: 'annotate',
-  hint: 'Pick the top-left corner of the schedule',
+  hint: 'What to schedule — <em>rooms</em>, doors, windows, walls, blocks… or Enter for rooms',
   init(c) {
-    if (!roomsOnLevel().length) { cliPrint('No rooms on this level to schedule.', 'err'); endCmd(true); }
+    c.data = { spec: Object.assign({}, SCHED_PRESET.rooms) };
+    cliPrint('Schedule of what? ' + schedKinds().map(k => SCHED_OF[k].label).join(', ') +
+             '. Add "grouped" or "total" to say how.');
   },
+  text(c, s) {
+    /* "walls grouped total" — the three decisions a schedule is, in the order
+       anyone says them */
+    const words = String(s).trim().toLowerCase().split(/[\s,]+/).filter(Boolean);
+    if (!words.length) return true;
+    const spec = { of: null, cols: null, group: false, total: false };
+    for (const w of words) {
+      if (w === 'grouped' || w === 'group' || w === 'g') { spec.group = true; continue; }
+      if (w === 'total' || w === 'totals' || w === 't') { spec.total = true; continue; }
+      const of = schedOfName(w);
+      if (of) { spec.of = of; continue; }
+      cliPrint('Nothing called "' + w + '" can be scheduled. Try: ' +
+               schedKinds().join(', ') + '.', 'err');
+      return true;
+    }
+    if (!spec.of) { cliPrint('Say what to schedule.', 'err'); return true; }
+    spec.cols = SCHED_OF[spec.of].cols.slice();
+    c.data.spec = spec;
+    hint('Pick the top-left corner of the schedule');
+    cliPrint('Schedule of ' + SCHED_OF[spec.of].label.toLowerCase() +
+             (spec.group ? ', grouped' : '') + (spec.total ? ', totalled' : '') +
+             '. Where does it go?');
+    return true;
+  },
+  enter(c) { hint('Pick the top-left corner of the schedule'); return true; },
   point(c, p) {
-    const rows = roomScheduleRows();
-    const h = DOC.textH || 2.5;
-    begin();
-    addEnt({ t: 'table', p: p.slice(), rows, colW: fitColumns(rows, h), h,
-             align: ['l', 'l', 'r'], kind: 'rooms', layer: annoLayer('TEXT') });
-    commit('Room schedule');
-    cliPrint((rows.length - 1) + ' rooms scheduled');
-    endCmd();
+    const spec = c.data.spec;
+    schedPlace(spec, p, (SCHED_OF[spec.of] || {}).label || 'Schedule');
+    draw(); syncUI(); endCmd();
   },
 });
 /** Re-read a schedule from the drawing. It is not a copy, so this is the whole
@@ -931,10 +953,20 @@ defc('schedule', {
    Keyed off what each kind is built from, so adding a schedule type means
    adding a line here rather than remembering to. */
 const SCHEDULE_ROWS = {
-  rooms: (tb) => roomScheduleRows(tb.lvl),
-  doors: (tb) => openingScheduleRows('door', tb.lvl),
-  windows: (tb) => openingScheduleRows('window', tb.lvl),
+  rooms: (tb) => schedRows(schedSpecOf(tb)),
+  doors: (tb) => schedRows(schedSpecOf(tb)),
+  windows: (tb) => schedRows(schedSpecOf(tb)),
+  sched: (tb) => schedRows(schedSpecOf(tb)),
 };
+/** The specification a placed table was built from. A table placed before
+    schedules had one carries only its kind, so the preset stands in — which is
+    what makes an old drawing refresh correctly rather than not at all. */
+function schedSpecOf(tb) {
+  const spec = (tb.spec && tb.spec.of) ? clone(tb.spec)
+             : clone(SCHED_PRESET[tb.kind] || SCHED_PRESET.rooms);
+  if (tb.lvl != null) spec.lvl = tb.lvl;
+  return spec;
+}
 function scheduleUpdate() {
   const tabs = [...DOC.ents.values()]
     .filter(e => e.t === 'table' && SCHEDULE_ROWS[e.kind]);
