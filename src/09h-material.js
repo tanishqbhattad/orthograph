@@ -151,3 +151,53 @@ defc('material', {
     return true;
   },
 });
+
+/* ============================================================
+   LABEL — a note that reads the thing it points at
+   ------------------------------------------------------------
+   "CAVITY WALL 300" is a claim somebody typed once. Change the
+   wall to a 215 solid and the note goes on saying 300 until
+   someone notices, which on a real drawing set is at the worst
+   possible moment.
+
+   A label stores the QUESTION rather than the answer, in the
+   same vocabulary the schedule engine uses, and is attached to
+   the object it points at so it does not even have to name it.
+   ============================================================ */
+/** what a label says about each kind of thing, by default */
+const LABEL_DEFAULT = {
+  wall: '%<prop:.wallType>%',
+  door: '%<prop:.opening>% %<prop:.width>%',
+  window: '%<prop:.opening>% %<prop:.width>%x%<prop:.height>%',
+  room: '%<prop:.name>% %<prop:.roomArea>%',
+  column: '%<prop:.width>%x%<prop:.height>%',
+  insert: '%<prop:.block>%',
+};
+function labelTextFor(e) {
+  return LABEL_DEFAULT[e && e.t] || '%<prop:.type>% %<prop:.layer>%';
+}
+defc('label', {
+  key: 'label', group: 'annotate',
+  hint: 'Pick what to label',
+  init(c) { c.data = {}; },
+  point(c, p) {
+    if (!c.data.host) {
+      const e = pickAt(p, 12);
+      if (!e) { echo('Nothing there to label'); return; }
+      c.data.host = e; c.data.at = p.slice();
+      hint('Where does the note go?');
+      cliPrint('Labelling the ' + e.t + ' — where does the note go?');
+      return;
+    }
+    const e = c.data.host;
+    begin();
+    const lab = addEnt({ t: 'leader', pts: [c.data.at, p.slice()], ref: e.id,
+                         s: labelTextFor(e), layer: annoLayer('TEXT') });
+    commit('Label');
+    cliPrint('Labelled: ' + resolveFields(lab.s, e));
+    draw(); syncUI(); endCmd();
+  },
+  preview(c, p) {
+    return c.data.at ? [pv({ t: 'leader', pts: [c.data.at, p], s: '' })] : null;
+  },
+});

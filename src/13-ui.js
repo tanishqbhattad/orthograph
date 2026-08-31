@@ -100,6 +100,8 @@ const IC = {
   sectioncut: '<path d="M2 8h12" stroke-dasharray="3 1.6"/><rect x="5" y="9.5" width="6" height="4.5" rx="0.5"/>',
   /* a dashed ring round what is enlarged, with the bubble it points at */
   detail: '<circle cx="6.5" cy="9.5" r="4.5" stroke-dasharray="2.4 1.6"/><path d="M9.7 6.3l1.6-1.6"/><circle cx="12.4" cy="3.6" r="2.2"/>',
+  /* a leader with a tag on the end of it */
+  label: '<path d="M2 13l4.5-4.5"/><path d="M6.5 8.5h7"/><path d="M8 5.5h6M8 3h6"/>',
   /* points, wrapped */
   hull: '<path d="M3 6.5L7.5 2l5.5 4.5-2 6.5H5z"/><circle cx="7.5" cy="8" r="0.9" fill="currentColor"/><circle cx="10" cy="5.5" r="0.9" fill="currentColor"/>',
   table: '<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M2 6h12M6 6v7M10 6v7"/>',
@@ -194,7 +196,7 @@ const RAILS = {
        nothing, and the cut without a line has nothing to cut along. */
     ['Views', [
       ['section', 'Section line', 'SE'], ['sectioncut', 'Cut the section', 'SC'],
-      ['detail', 'Detail callout', 'DET'],
+      ['detail', 'Detail callout', 'DET'], ['label', 'Label an object', 'LB'],
     ]],
     ['Transform', [
       ['move', 'Move', 'M'], ['copy', 'Copy', 'CO'], ['rotate', 'Rotate', 'RO'],

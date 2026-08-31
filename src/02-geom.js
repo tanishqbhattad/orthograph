@@ -125,7 +125,7 @@ function shapes(e, tol) {
     case 'point': return [];
     /* an annotative note is sized in paper units; annoFor turns that into the
        model height the scale currently looking at it calls for */
-    case 'text': return [{ text: resolveFields(e.s), p: e.p, h: textH(e) * annoFor(e),
+    case 'text': return [{ text: resolveFields(e.s, labelHost(e)), p: e.p, h: textH(e) * annoFor(e),
                            rot: e.rot || 0, anchor: e.anchor || 'l' }];
     /* mtext, leader and attdef were each given their own drawing path and never
        added here, so shapes() answered EMPTY for all three. Everything that
@@ -334,6 +334,11 @@ function textH(e) {
 }
 const FIELD_RE = /%<([a-z]+)(?::([^>]*))?>%/gi;
 function hasField(s) { return typeof s === 'string' && s.indexOf('%<') >= 0; }
+/* Which object a label is reading. Set while an entity carrying fields is
+   being resolved, so `%<prop:.thickness>%` means "the thing this label is
+   attached to" and nobody has to type an id into a note. */
+let FIELD_HOST = null;
+function fieldHostUse(e) { const was = FIELD_HOST; FIELD_HOST = e || null; return was; }
 function fieldValue(name, arg) {
   const byId = () => {
     const id = parseInt(arg, 10);
@@ -352,6 +357,25 @@ function fieldValue(name, arg) {
       const a = entArea(e); return a ? fmtArea(a) : null; }
     case 'length': { const e = byId(); if (!e) return null;
       const L = entLength(e); return L ? fmt(L) : null; }
+    /* Every property the schedule engine can put in a column, a label can
+       print — one vocabulary for both, so a note and a schedule cannot
+       disagree about what a wall is. `%<prop:12.thickness>%` names the object;
+       `%<prop:.thickness>%` means whatever this label is attached to. */
+    case 'prop': {
+      const raw = String(arg || '');
+      const dot = raw.lastIndexOf('.');
+      if (dot < 0) return null;
+      const idPart = raw.slice(0, dot).trim();
+      const field = raw.slice(dot + 1).trim();
+      const f = (typeof SCHED_FIELDS === 'object') ? SCHED_FIELDS[field] : null;
+      if (!f) return null;
+      const e = idPart ? DOC.ents.get(parseInt(idPart, 10)) : FIELD_HOST;
+      if (!e) return null;
+      let v = null;
+      try { v = f.get(e); } catch (err) { return null; }
+      if (v == null || v === '') return null;
+      return (typeof schedText === 'function') ? schedText(f, v) : String(v);
+    }
     case 'count': {
       const want = String(arg || '').toLowerCase();
       if (!want) return null;
@@ -367,13 +391,20 @@ function fieldDate() {
   const p = (n) => (n < 10 ? '0' : '') + n;
   return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear();
 }
-function resolveFields(s) {
+function resolveFields(s, host) {
   if (!hasField(s)) return s == null ? '' : String(s);
-  return String(s).replace(FIELD_RE, (m, name, arg) => {
-    let v = null;
-    try { v = fieldValue(String(name).toLowerCase(), arg); } catch (e) { v = null; }
-    return v == null || v === '' ? '####' : String(v);
-  });
+  const was = fieldHostUse(host || FIELD_HOST);
+  try {
+    return String(s).replace(FIELD_RE, (m, name, arg) => {
+      let v = null;
+      try { v = fieldValue(String(name).toLowerCase(), arg); } catch (e) { v = null; }
+      return v == null || v === '' ? '####' : String(v);
+    });
+  } finally { fieldHostUse(was); }
+}
+/** the object a label is attached to, if it still exists */
+function labelHost(e) {
+  return (e && e.ref != null) ? (DOC.ents.get(e.ref) || null) : null;
 }
 
 /* ============================================================
@@ -461,8 +492,11 @@ function leaderGeom(e) {
   const spine = pts.concat([tail]);
   const head = arrowPoly(a, ang(pts[1], a), h * 0.8);
   const tp = [tail[0] + dir * h * 0.3, tail[1] + h * 0.3];
-  return { spine, head, tail, tp, h, dir,
-           anchor: dir > 0 ? 'l' : 'r', text: e.s == null ? '' : String(e.s) };
+  /* Resolved here rather than in each of the four places that draw a leader:
+     the entity keeps the field code, everything derived from it carries the
+     answer — which is the rule a text entity already follows. */
+  return { spine, head, tail, tp, h, dir, anchor: dir > 0 ? 'l' : 'r',
+           text: e.s == null ? '' : resolveFields(e.s, labelHost(e)) };
 }
 function bboxAll(list) {
   let b = [Infinity, Infinity, -Infinity, -Infinity];

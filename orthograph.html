@@ -1657,7 +1657,7 @@ function shapes(e, tol) {
     case 'point': return [];
     /* an annotative note is sized in paper units; annoFor turns that into the
        model height the scale currently looking at it calls for */
-    case 'text': return [{ text: resolveFields(e.s), p: e.p, h: textH(e) * annoFor(e),
+    case 'text': return [{ text: resolveFields(e.s, labelHost(e)), p: e.p, h: textH(e) * annoFor(e),
                            rot: e.rot || 0, anchor: e.anchor || 'l' }];
     /* mtext, leader and attdef were each given their own drawing path and never
        added here, so shapes() answered EMPTY for all three. Everything that
@@ -1866,6 +1866,11 @@ function textH(e) {
 }
 const FIELD_RE = /%<([a-z]+)(?::([^>]*))?>%/gi;
 function hasField(s) { return typeof s === 'string' && s.indexOf('%<') >= 0; }
+/* Which object a label is reading. Set while an entity carrying fields is
+   being resolved, so `%<prop:.thickness>%` means "the thing this label is
+   attached to" and nobody has to type an id into a note. */
+let FIELD_HOST = null;
+function fieldHostUse(e) { const was = FIELD_HOST; FIELD_HOST = e || null; return was; }
 function fieldValue(name, arg) {
   const byId = () => {
     const id = parseInt(arg, 10);
@@ -1884,6 +1889,25 @@ function fieldValue(name, arg) {
       const a = entArea(e); return a ? fmtArea(a) : null; }
     case 'length': { const e = byId(); if (!e) return null;
       const L = entLength(e); return L ? fmt(L) : null; }
+    /* Every property the schedule engine can put in a column, a label can
+       print — one vocabulary for both, so a note and a schedule cannot
+       disagree about what a wall is. `%<prop:12.thickness>%` names the object;
+       `%<prop:.thickness>%` means whatever this label is attached to. */
+    case 'prop': {
+      const raw = String(arg || '');
+      const dot = raw.lastIndexOf('.');
+      if (dot < 0) return null;
+      const idPart = raw.slice(0, dot).trim();
+      const field = raw.slice(dot + 1).trim();
+      const f = (typeof SCHED_FIELDS === 'object') ? SCHED_FIELDS[field] : null;
+      if (!f) return null;
+      const e = idPart ? DOC.ents.get(parseInt(idPart, 10)) : FIELD_HOST;
+      if (!e) return null;
+      let v = null;
+      try { v = f.get(e); } catch (err) { return null; }
+      if (v == null || v === '') return null;
+      return (typeof schedText === 'function') ? schedText(f, v) : String(v);
+    }
     case 'count': {
       const want = String(arg || '').toLowerCase();
       if (!want) return null;
@@ -1899,13 +1923,20 @@ function fieldDate() {
   const p = (n) => (n < 10 ? '0' : '') + n;
   return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear();
 }
-function resolveFields(s) {
+function resolveFields(s, host) {
   if (!hasField(s)) return s == null ? '' : String(s);
-  return String(s).replace(FIELD_RE, (m, name, arg) => {
-    let v = null;
-    try { v = fieldValue(String(name).toLowerCase(), arg); } catch (e) { v = null; }
-    return v == null || v === '' ? '####' : String(v);
-  });
+  const was = fieldHostUse(host || FIELD_HOST);
+  try {
+    return String(s).replace(FIELD_RE, (m, name, arg) => {
+      let v = null;
+      try { v = fieldValue(String(name).toLowerCase(), arg); } catch (e) { v = null; }
+      return v == null || v === '' ? '####' : String(v);
+    });
+  } finally { fieldHostUse(was); }
+}
+/** the object a label is attached to, if it still exists */
+function labelHost(e) {
+  return (e && e.ref != null) ? (DOC.ents.get(e.ref) || null) : null;
 }
 
 /* ============================================================
@@ -1993,8 +2024,11 @@ function leaderGeom(e) {
   const spine = pts.concat([tail]);
   const head = arrowPoly(a, ang(pts[1], a), h * 0.8);
   const tp = [tail[0] + dir * h * 0.3, tail[1] + h * 0.3];
-  return { spine, head, tail, tp, h, dir,
-           anchor: dir > 0 ? 'l' : 'r', text: e.s == null ? '' : String(e.s) };
+  /* Resolved here rather than in each of the four places that draw a leader:
+     the entity keeps the field code, everything derived from it carries the
+     answer — which is the rule a text entity already follows. */
+  return { spine, head, tail, tp, h, dir, anchor: dir > 0 ? 'l' : 'r',
+           text: e.s == null ? '' : resolveFields(e.s, labelHost(e)) };
 }
 function bboxAll(list) {
   let b = [Infinity, Infinity, -Infinity, -Infinity];
@@ -9608,7 +9642,7 @@ const ALIAS = {
   w: 'WALL', wa: 'WALL', wr: 'WALLRECT', dr: 'DOOR', win: 'WINDOW', wi: 'WINDOW',
   col: 'COLUMN', str: 'STAIR', rm: 'ROOM', cg: 'COLUMNGRID',
   wf: 'WALLFLIP', wj: 'WALLJOIN', ws: 'WALLSPLIT',
-  det: 'DETAIL', dv: 'DETAILVIEW', vpl: 'VPLAYER',
+  det: 'DETAIL', dv: 'DETAILVIEW', vpl: 'VPLAYER', lb: 'LABEL', mat: 'MATERIAL',
 };
 /** aliases the user has defined this session, checked before acad.pgp */
 const USERALIAS = {};
@@ -16981,6 +17015,56 @@ defc('material', {
   },
 });
 
+/* ============================================================
+   LABEL — a note that reads the thing it points at
+   ------------------------------------------------------------
+   "CAVITY WALL 300" is a claim somebody typed once. Change the
+   wall to a 215 solid and the note goes on saying 300 until
+   someone notices, which on a real drawing set is at the worst
+   possible moment.
+
+   A label stores the QUESTION rather than the answer, in the
+   same vocabulary the schedule engine uses, and is attached to
+   the object it points at so it does not even have to name it.
+   ============================================================ */
+/** what a label says about each kind of thing, by default */
+const LABEL_DEFAULT = {
+  wall: '%<prop:.wallType>%',
+  door: '%<prop:.opening>% %<prop:.width>%',
+  window: '%<prop:.opening>% %<prop:.width>%x%<prop:.height>%',
+  room: '%<prop:.name>% %<prop:.roomArea>%',
+  column: '%<prop:.width>%x%<prop:.height>%',
+  insert: '%<prop:.block>%',
+};
+function labelTextFor(e) {
+  return LABEL_DEFAULT[e && e.t] || '%<prop:.type>% %<prop:.layer>%';
+}
+defc('label', {
+  key: 'label', group: 'annotate',
+  hint: 'Pick what to label',
+  init(c) { c.data = {}; },
+  point(c, p) {
+    if (!c.data.host) {
+      const e = pickAt(p, 12);
+      if (!e) { echo('Nothing there to label'); return; }
+      c.data.host = e; c.data.at = p.slice();
+      hint('Where does the note go?');
+      cliPrint('Labelling the ' + e.t + ' — where does the note go?');
+      return;
+    }
+    const e = c.data.host;
+    begin();
+    const lab = addEnt({ t: 'leader', pts: [c.data.at, p.slice()], ref: e.id,
+                         s: labelTextFor(e), layer: annoLayer('TEXT') });
+    commit('Label');
+    cliPrint('Labelled: ' + resolveFields(lab.s, e));
+    draw(); syncUI(); endCmd();
+  },
+  preview(c, p) {
+    return c.data.at ? [pv({ t: 'leader', pts: [c.data.at, p], s: '' })] : null;
+  },
+});
+
 /* ===== 10-dxf.js ===== */
 /* ============================================================
    ORTHOGRAPH — 10 DXF in and out
@@ -19620,6 +19704,8 @@ const IC = {
   sectioncut: '<path d="M2 8h12" stroke-dasharray="3 1.6"/><rect x="5" y="9.5" width="6" height="4.5" rx="0.5"/>',
   /* a dashed ring round what is enlarged, with the bubble it points at */
   detail: '<circle cx="6.5" cy="9.5" r="4.5" stroke-dasharray="2.4 1.6"/><path d="M9.7 6.3l1.6-1.6"/><circle cx="12.4" cy="3.6" r="2.2"/>',
+  /* a leader with a tag on the end of it */
+  label: '<path d="M2 13l4.5-4.5"/><path d="M6.5 8.5h7"/><path d="M8 5.5h6M8 3h6"/>',
   /* points, wrapped */
   hull: '<path d="M3 6.5L7.5 2l5.5 4.5-2 6.5H5z"/><circle cx="7.5" cy="8" r="0.9" fill="currentColor"/><circle cx="10" cy="5.5" r="0.9" fill="currentColor"/>',
   table: '<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M2 6h12M6 6v7M10 6v7"/>',
@@ -19714,7 +19800,7 @@ const RAILS = {
        nothing, and the cut without a line has nothing to cut along. */
     ['Views', [
       ['section', 'Section line', 'SE'], ['sectioncut', 'Cut the section', 'SC'],
-      ['detail', 'Detail callout', 'DET'],
+      ['detail', 'Detail callout', 'DET'], ['label', 'Label an object', 'LB'],
     ]],
     ['Transform', [
       ['move', 'Move', 'M'], ['copy', 'Copy', 'CO'], ['rotate', 'Rotate', 'RO'],
