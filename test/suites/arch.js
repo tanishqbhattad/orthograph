@@ -28,7 +28,11 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
               pocheGhost:n('pocheGhost'), jamb:n('jamb')};`);
     ok(r.faceGhost >= 2, 'both faces must survive across the window, ghosted: ' + r.faceGhost);
     eq(r.pocheGhost, 1, 'the wall body under the window is drawn back');
-    eq(r.poche, 1, 'the wall still has exactly one solid poche');
+    /* This asked for exactly one, which is what the fault looked like from
+       inside: a single polygon spanning the wall regardless of what was cut
+       into it. The fill is in runs now — before the door, between the door and
+       the window, after the window. */
+    eq(r.poche, 3, 'the solid fill is in runs, one per stretch of unbroken wall');
     eq(r.jamb, 4, 'two jambs each for the door and the window');
   });
 
@@ -56,6 +60,71 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       return {on, offHatch:off.hatch, stillPoche:off.role==='poche', pts:off.pts.length};`);
     eq(r.on, true); eq(r.offHatch, false);
     eq(r.stillPoche, true, 'the outline is still published so the renderer can stroke it');
+  });
+
+  /* ------------------------------------------------------------
+     A doorway is a hole, and the fill has to know it
+
+     Every face line stopped at the reveal already. The fill behind
+     them did not: one poche polygon ran the whole length of the
+     wall, straight through the opening. A faint wash hid that.
+     A solid one does not — a door came out as a block of wall
+     with a swing arc drawn over the top of it, which is what the
+     browser test photographed.
+
+     A window is cut out too and then drawn back ghosted, which is
+     what pocheGhost has always been for; it only ever made sense
+     against a poche that was cut in the first place.
+     ------------------------------------------------------------ */
+  const pocheRuns = `
+    const u=wallU(w);
+    const runs=wallShapes(w).filter(s=>s.role==='poche'&&!s.node)
+      .map(s=>{const d=s.pts.map(p=>dot(sub(p,w.a),u));
+               return [Math.round(Math.min.apply(null,d)), Math.round(Math.max.apply(null,d))];})
+      .sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+    const spans=runs.map(x=>x[0]+'..'+x[1]).join(' | ');
+  `;
+
+  t('the poche stops at a door reveal, because a doorway is a hole', () => {
+    const r = R(SETUP + `
+      const w=addEnt({t:'wall',a:[0,0],b:[8000,0],wt:'gen100',layer:'A-WALL'});
+      addOpening('door',w,2000,'sgl900');
+      ${pocheRuns}
+      return {n:runs.length, spans};`);
+    eq(r.n, 2, 'the fill comes in two pieces, one either side of the doorway');
+    eq(r.spans, '0..1550 | 2450..8000', 'and neither piece reaches into it');
+  });
+
+  t('and in every layer of a compound wall, not just the outline', () => {
+    const r = R(SETUP + `
+      const w=addEnt({t:'wall',a:[0,0],b:[8000,0],wt:'cav300',layer:'A-WALL'});
+      addOpening('door',w,2000,'sgl900');
+      ${pocheRuns}
+      const crossing=runs.filter(x=>x[1]>1551&&x[0]<2449).map(x=>x.join('..')).join(', ');
+      return {n:runs.length, crossing};`);
+    eq(r.n, 8, 'four layers, twice: a run either side of the door');
+    eq(r.crossing, '', 'and not one of them crosses the opening');
+  });
+
+  t('the fill is one piece again once the door is taken out', () => {
+    const r = R(SETUP + `
+      const w=addEnt({t:'wall',a:[0,0],b:[8000,0],wt:'gen100',layer:'A-WALL'});
+      const d=addOpening('door',w,2000,'sgl900');
+      begin(); eraseEnt(d.id); commit('erase');
+      ${pocheRuns}
+      return {spans};`);
+    eq(r.spans, '0..8000', 'end to end, as it was before the door');
+  });
+
+  t('a window is cut out of the fill too, then drawn back ghosted', () => {
+    const r = R(SETUP + `
+      const w=addEnt({t:'wall',a:[0,0],b:[8000,0],wt:'gen100',layer:'A-WALL'});
+      addOpening('window',w,5000,'w1512');
+      ${pocheRuns}
+      const g=wallShapes(w).filter(s=>s.role==='pocheGhost').length;
+      return {spans, g};`);
+    eq(r.spans, '0..4250 | 5750..8000', 'the solid fill stops at the reveals');
+    eq(r.g, 1, 'and the ghost fills the gap back in');
   });
 
   /* ============================================================ */

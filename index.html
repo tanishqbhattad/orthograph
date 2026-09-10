@@ -3792,9 +3792,21 @@ function wallShapes(w) {
   const doorCuts = ops.filter(o => o.o.t !== 'window').map(o => [o.s, o.e]);
   const winCuts = ops.filter(o => o.o.t === 'window').map(o => [o.s, o.e]);
 
-  /* the joined outline comes first so a renderer can lay the poche down before
-     anything is drawn over it */
-  const outline = [E0.plus, E1.minus, E1.plus, E0.minus];
+  /* The fill comes first so a renderer can lay the poche down before anything
+     is drawn over it — and it stops where the face lines stop. It did not: one
+     polygon ran the whole length of the wall, straight on behind every reveal.
+     A faint wash hid that. A solid poche does not, and a doorway came out as a
+     block of wall with a swing arc drawn over the top of it.
+
+     Both kinds of opening are cut out here. A window then gets its body drawn
+     back ghosted a few lines down, which is what pocheGhost has always been
+     for and only ever made sense against a poche that was cut to begin with. */
+  const Lcar = { a: E0.plus, b: E1.minus }, Rcar = { a: E0.minus, b: E1.plus };
+  /* The mitred corners are the wall's real ends; only an interior edge, made
+     by a reveal, is square across the wall. Taking the end from the carrier
+     would square off every corner and reopen the mitre. */
+  const leftAt = (d) => d <= 1e-6 ? E0.plus : d >= L - 1e-6 ? E1.minus : faceAtD(Lcar, w, u, n, d);
+  const rightAt = (d) => d <= 1e-6 ? E0.minus : d >= L - 1e-6 ? E1.plus : faceAtD(Rcar, w, u, n, d);
   /* A compound wall is poched by layer. The bands are built from the SAME
      interpolation as the layer lines drawn further down, between the mitred
      end points rather than across a nominal thickness, so a band cannot
@@ -3802,21 +3814,23 @@ function wallShapes(w) {
      A wall with no layers keeps the single fill it always had. */
   const out = [];
   const pocheStack = wallLayerStack(w);
-  if (pocheStack) {
-    const lerpP = (A, B, f) => [A[0] + (B[0] - A[0]) * f, A[1] + (B[1] - A[1]) * f];
-    const tot = pocheStack.reduce((n, l) => n + l.t, 0) || 1;
-    let acc = 0;
-    for (const lay of pocheStack) {
-      const f0 = acc / tot, f1 = (acc + lay.t) / tot;
-      acc += lay.t;
-      out.push({
-        pts: [lerpP(E0.plus, E0.minus, f0), lerpP(E1.minus, E1.plus, f0),
-              lerpP(E1.minus, E1.plus, f1), lerpP(E0.plus, E0.minus, f1)],
-        closed: true, role: 'poche', hatch: wallHatchOn(w), mat: lay.fill || null,
-      });
+  const lerpP = (A, B, f) => [A[0] + (B[0] - A[0]) * f, A[1] + (B[1] - A[1]) * f];
+  for (const [rs, re] of cutRuns(L, [...doorCuts, ...winCuts])) {
+    const l0 = leftAt(rs), l1 = leftAt(re), r1 = rightAt(re), r0 = rightAt(rs);
+    if (pocheStack) {
+      const tot = pocheStack.reduce((sum, l) => sum + l.t, 0) || 1;
+      let acc = 0;
+      for (const lay of pocheStack) {
+        const f0 = acc / tot, f1 = (acc + lay.t) / tot;
+        acc += lay.t;
+        out.push({
+          pts: [lerpP(l0, r0, f0), lerpP(l1, r1, f0), lerpP(l1, r1, f1), lerpP(l0, r0, f1)],
+          closed: true, role: 'poche', hatch: wallHatchOn(w), mat: lay.fill || null,
+        });
+      }
+    } else {
+      out.push({ pts: [l0, l1, r1, r0], closed: true, role: 'poche', hatch: wallHatchOn(w) });
     }
-  } else {
-    out.push({ pts: outline, closed: true, role: 'poche', hatch: wallHatchOn(w) });
   }
   /* and the patch in the middle of a junction, from whichever wall owns it */
   for (const end of [0, 1]) {
@@ -3831,13 +3845,12 @@ function wallShapes(w) {
   }
 
   /* the wall body across each window, ghosted */
-  const Lc0 = { a: E0.plus, b: E1.minus }, Rc0 = { a: E0.minus, b: E1.plus };
   for (const o of winCuts) {
     const s = clamp(o[0], 0, L), e = clamp(o[1], 0, L);
     if (e - s <= 1e-9) continue;
     out.push({
-      pts: [faceAtD(Lc0, w, u, n, s), faceAtD(Lc0, w, u, n, e),
-        faceAtD(Rc0, w, u, n, e), faceAtD(Rc0, w, u, n, s)],
+      pts: [faceAtD(Lcar, w, u, n, s), faceAtD(Lcar, w, u, n, e),
+        faceAtD(Rcar, w, u, n, e), faceAtD(Rcar, w, u, n, s)],
       closed: true, role: 'pocheGhost', hatch: wallHatchOn(w),
     });
   }
