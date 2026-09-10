@@ -33,6 +33,20 @@ jobs:
       - name: Behavioural checks
         run: node tools/verify.js
 
+      # The suite above runs the program against a stub canvas, a Map for
+      # localStorage and an IndexedDB that answers synchronously. That stub is
+      # why it is fast, and it is also why three faults shipped past it: a
+      # press-drag nothing ever performed, a recovery pointer written before
+      # the drawing reached the store, and a hole at a junction that only a
+      # painted canvas can show. This job drives the real thing.
+      - name: Install Chromium
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Real-browser tests
+        run: node test/browser.js
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
