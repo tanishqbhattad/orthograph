@@ -43,6 +43,7 @@ const ST = {
   /* ---- shared interaction contract (several modules read these) ---- */
   crossLen: CROSS_PCT,    /* crosshair arm length, % of viewport; 100 = full width */
   crossGap: CROSS_GAP,    /* hole at the centre of the crosshair, screen px      */
+  liveDim: true,          /* show the numbers that place what is selected        */
   pickBox: PICK_PX,       /* pick aperture in screen px */
   aperture: 10,           /* osnap aperture radius in screen px — AutoCAD's APERTURE */
   apBox: false,           /* draw the aperture box at a point prompt — APBOX */

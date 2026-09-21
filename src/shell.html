@@ -143,6 +143,10 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 .dyn input{font-family:var(--mono);font-size:11.5px;width:78px;padding:4px 6px;
   background:var(--pop);border:1px solid var(--popbd);border-radius:4px;color:var(--poptx)}
 .dyn input.act{border-color:var(--amber);color:var(--amber)}
+/* the field that opens over a live dimension when its value is clicked */
+.ldimf{position:absolute;font-family:var(--mono);font-size:11px;font-weight:600;
+  padding:2px 4px;border-radius:3px;background:var(--bg1);color:var(--blue,#2f6fd0);
+  border:1px solid #2f6fd0;pointer-events:auto;z-index:60;text-align:center}
 .dyn label{position:absolute;top:-13px;font-family:var(--mono);font-size:8.5px;
   color:var(--tx2);letter-spacing:.1em}
 /* The panel stays transparent to the mouse — it floats over the drawing and

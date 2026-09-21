@@ -367,6 +367,24 @@ stage.addEventListener('pointerdown', ev => {
   /* ZOOM real time: drag up to magnify, anchored where the drag started */
   if (ST.rtzoom && ev.button === 0) {
     ST.rtdrag = { x: scr[0], y: scr[1] }; navCursor(); return;  }
+  /* A live dimension is a field lying on the drawing. The click that lands
+     on its value has to open it rather than start a selection underneath —
+     before snapping, because the value box is a screen target and has
+     nothing to do with where the world point would land. */
+  if (ev.button === 0 && !activeCmd()) {
+    const lb = liveDimAt(scr[0], scr[1]);
+    if (lb) {
+      /* The press has already taken the pointer capture, and the release
+         that follows hands focus back to the stage — which blurs the field
+         a few milliseconds after it opens, so a click appeared to do
+         nothing at all. Give the capture back and suppress the focus
+         change, and the field survives its own click. */
+      try { stage.releasePointerCapture(ev.pointerId); } catch (_) { }
+      ptrs.delete(ev.pointerId);
+      ev.preventDefault();
+      if (liveDimEdit(lb)) { downPt = null; downScr = null; return; }
+    }
+  }
   const p = snapPoint(scr[0], scr[1], refPoint());
   ST.cur = p; downPt = p;
   ST.shift = ev.shiftKey;

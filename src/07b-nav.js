@@ -222,6 +222,7 @@ const VARDEF = {
   gridmajor: { get: () => VS.gridMajor, set: v => { VS.gridMajor = clamp(Math.round(v), 1, 100); draw(); }, label: 'Minor grid lines per major line' },
   cursorsize: { get: () => ST.crossLen, set: v => { ST.crossLen = clamp(Math.round(v), 1, 100); draw(); }, label: 'Crosshair size, % of the viewport' },
   cursorgap: { get: () => crosshairGap(), set: v => { ST.crossGap = clamp(Math.round(v), 0, 60); draw(); }, label: 'Hole at the centre of the crosshair, px (0 = crossing lines)' },
+  livedim: { get: () => (ST.liveDim !== false ? 1 : 0), set: v => { ST.liveDim = !!v; draw(); }, label: 'Show the dimensions that place a selected wall or opening' },
   pickbox: { get: () => ST.pickBox, set: v => { ST.pickBox = clamp(Math.round(v), 2, 40); draw(); }, label: 'Pick box, screen pixels' },
   vtduration: { get: () => VS.vtDuration, set: v => { VS.vtDuration = clamp(Math.round(v), 0, 3000); }, label: 'View transition time, ms' },
 };

@@ -2337,6 +2337,9 @@ function paint() {
   if (SEL.size) for (const id of SEL) { const e = DOC.ents.get(id); if (e && fvis(e)) drawEntHL(e, 'sel'); }
   if (ST.preview) for (const e of ST.preview) drawEnt(e, 'prev');
   drawGrips();
+  /* the numbers that place what is selected, after the grips so they sit
+     over them rather than under */
+  drawLiveDims();
   drawTrackPts();
   drawTracks();
   drawBand();

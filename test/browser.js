@@ -236,6 +236,60 @@ scene('a door erased closes the wall up on screen', async (page) => {
   eq('and erasing it puts the wall back', hex(healed), hex(solid));
 });
 
+/* A live dimension is a field lying on the drawing rather than in a panel, so
+   the only way to know a person can use it is to send a real click at the
+   number and type into whatever appears. The headless suite can call set()
+   directly, which proves the arithmetic and nothing about the gesture. */
+scene('the number on a selected wall can be clicked and typed over', async (page) => {
+  await page.evaluate(() => {
+    OG.reset();
+    ensureLayer('A-WALL');
+    begin();
+    addEnt({ t: 'wall', a: [0, 0], b: [0, 4000], wt: 'brk230', layer: 'A-WALL' });
+    addEnt({ t: 'wall', a: [4100, 0], b: [4100, 4000], wt: 'brk230', layer: 'A-WALL' });
+    commit('room');
+    const right = [...DOC.ents.values()].find(e => e.t === 'wall' && e.a[0] === 4100);
+    SEL.clear(); SEL.add(right.id);
+    OG.stage(2050, 2000, 0.08);
+  });
+  await page.evaluate(() => OG.settle());
+  const box = await page.evaluate(() => {
+    const b = LDIM_BOXES.find(x => x.dim.k === 'gap');
+    if (!b) return null;
+    const cv = document.getElementById('cv').getBoundingClientRect();
+    return { v: Math.round(b.dim.value), x: cv.left + b.x + b.w / 2, y: cv.top + b.y + b.h / 2 };
+  });
+  if (!ok('the gap to the opposite wall is drawn as a value', !!box)) return;
+  eq('and it is the face-to-face figure', box.v, 3870);
+  await page.mouse.click(box.x, box.y);
+  const opened = await page.evaluate(() => {
+    const f = document.querySelector('.ldimf');
+    return f ? { there: true, value: f.value, focused: document.activeElement === f } : { there: false };
+  });
+  if (!ok('clicking it opens a field', opened.there, JSON.stringify(opened))) return;
+  eq('with the cursor already in it', opened.focused, true);
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.type('2000');
+  await page.keyboard.press('Enter');
+  await page.evaluate(() => OG.settle());
+  const after = await page.evaluate(() => {
+    const right = [...DOC.ents.values()].find(e => e.t === 'wall' && e.b[1] === 4000 && e.a[0] > 1000);
+    return { x: right ? Math.round(right.a[0]) : null,
+             gap: Math.round((liveDims().find(d => d.k === 'gap') || {}).value),
+             field: !!document.querySelector('.ldimf') };
+  });
+  eq('typing a number moves the wall', after.x, 2230);
+  eq('to exactly the gap that was asked for', after.gap, 2000);
+  eq('and the field goes away again', after.field, false);
+  /* it went through the journal, so it comes back */
+  const undone = await page.evaluate(() => {
+    undoStep();
+    const right = [...DOC.ents.values()].find(e => e.t === 'wall' && e.b[1] === 4000 && e.a[0] > 1000);
+    return right ? Math.round(right.a[0]) : null;
+  });
+  eq('one undo puts it back', undone, 4100);
+});
+
 /* The one the fake store could not see: a pointer written before the drawing
    reached IndexedDB, and a reload that finds it. */
 scene('autosave survives a real reload', async (page) => {
