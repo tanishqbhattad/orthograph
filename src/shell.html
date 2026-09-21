@@ -404,7 +404,8 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
 /* ---- Command panel: the style header, segmented controls, swatches ---- */
 .sty{display:flex;align-items:center;justify-content:space-between;gap:8px;
   padding:5px 11px 7px}
-.sty b{font-size:12.5px;font-weight:600;letter-spacing:-.01em}
+.sty b{flex:1;font-size:12.5px;font-weight:600;letter-spacing:-.01em}
+.sty i{font-family:var(--mono);font-size:9.5px;color:var(--tx2);font-style:normal}
 .styacts{display:flex;gap:2px}
 .styb{width:24px;height:22px;border-radius:5px;display:grid;place-items:center;color:var(--tx1)}
 .styb:hover{background:var(--bg3);color:var(--tx0)}
@@ -420,6 +421,8 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
   stroke-linecap:round;stroke-linejoin:round}
 .swrow{display:flex;align-items:center;gap:7px;text-align:left}
 .swb{width:22px;height:13px;border-radius:3px;border:1px solid #0006;flex:none}
+.swbtn{height:20px;cursor:pointer}
+.swbtn:hover{border-color:var(--amber)}
 .swt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .swx{width:20px;height:22px;border-radius:4px;color:var(--tx2);flex:none;font-size:14px;line-height:1}
 .swx:hover{background:var(--bg3);color:var(--rose)}

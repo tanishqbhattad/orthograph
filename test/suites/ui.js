@@ -142,6 +142,83 @@ module.exports = ({ group, t, ok, eq, close, run, R, bootApp }) => {
     eq(bad.length, 0, 'still showing document settings for: ' + bad.join(', '));
   });
 
+  /* ------------------------------------------------------------
+     A wall you have SELECTED is edited the way a wall you are
+     DRAWING is
+
+     The command panel already reads like the reference: a style
+     header with its actions, a thickness, and Alignment as three
+     buttons you can see the meaning of. Select that same wall
+     afterwards and it fell back to a flat list of dropdowns — the
+     justification, which is a three-way choice about which face
+     the line runs along, was a <select> you had to open and read.
+
+     Same control, same words, both sides of the click.
+     ------------------------------------------------------------ */
+  const PICK_WALL = `
+    const wall = [...DOC.ents.values()].find(e => e.t === 'wall');
+    SEL.clear(); SEL.add(wall.id); buildProps();
+    const p = document.getElementById('props');
+    const all = [];
+    (function walk(n){ for (const c of (n.children||[])) { all.push(c); walk(c); } })(p);
+    const byClass = (c) => all.filter(x => (x.className||'').split(' ').indexOf(c) >= 0);
+    /* The stub does not parse innerHTML into child nodes, so a <label> written
+       that way is never a walkable element. The row's own markup is. */
+    const markup = all.map(x => x.innerHTML || '').join(' | ');
+  `;
+
+  t('Alignment is three buttons you can see, not a dropdown you must open', () => {
+    const r = R(PICK_WALL + `
+      const segs = byClass('seg');
+      const btns = byClass('segb');
+      const selects = all.filter(x => x.tagName === 'SELECT').length;
+      SEL.clear(); buildProps();
+      return { segs: segs.length, btns: btns.length, labels: markup, selects };`);
+    ok(r.segs >= 1, 'there is a segmented control on a selected wall');
+    eq(r.btns, 3, 'with one button per face');
+    ok(/Alignment/.test(r.labels), 'and it is called Alignment, as on the command panel');
+  });
+
+  t('the header carries the wall actions, as it does while one is being drawn', () => {
+    const r = R(PICK_WALL + `
+      const heads = byClass('sty');
+      const acts = byClass('styb').length;
+      const title = heads.length ? (heads[0].children[0].textContent || heads[0].children[0].innerHTML) : '';
+      SEL.clear(); buildProps();
+      return { heads: heads.length, acts, title };`);
+    eq(r.heads, 1, 'one style header');
+    ok(r.acts >= 1, 'with actions on it, got ' + r.acts);
+    ok(/Wall/.test(r.title), 'titled for what is selected: ' + r.title);
+  });
+
+  t('pressing a face button moves the wall onto that face, and undo puts it back', () => {
+    const r = R(PICK_WALL + `
+      const before = wall.just || 'center';
+      const btns = byClass('segb');
+      /* the one that is not already on */
+      const target = btns.find(b => (b.className||'').indexOf('on') < 0);
+      target.onclick();
+      const after = (DOC.ents.get(wall.id) || {}).just;
+      undoStep();
+      const back = (DOC.ents.get(wall.id) || {}).just || 'center';
+      SEL.clear(); buildProps();
+      return { before, after, back };`);
+    ok(r.after && r.after !== r.before, 'the justification changed: ' + r.before + ' -> ' + r.after);
+    eq(r.back, r.before, 'and one undo returns it');
+  });
+
+  t('Fill and Stroke are shown, not named', () => {
+    const r = R(PICK_WALL + `
+      const sw = byClass('swb');
+      const cols = sw.map(x => (x.style && x.style.background) || '');
+      SEL.clear(); buildProps();
+      return { n: sw.length, labels: markup, cols: cols.join(',') };`);
+    ok(/Fill/.test(r.labels), 'there is a Fill row');
+    ok(/Stroke/.test(r.labels), 'and a Stroke row');
+    ok(r.n >= 2, 'both carry a swatch rather than a word, got ' + r.n);
+    ok(/#|rgb/.test(r.cols), 'and the swatches carry a real colour: ' + r.cols);
+  });
+
   t('a selected object leads with its own parameters, General comes after', () => {
     const r = R(`
       const wall = [...DOC.ents.values()].find(e => e.t === 'wall');
@@ -152,13 +229,34 @@ module.exports = ({ group, t, ok, eq, close, run, R, bootApp }) => {
                             .filter(x => x[1] === 'grp').map(x => [x[0], x[2]]);
       return {first: cls[0], head: p.children[0].children.map(c => c.innerHTML),
               grps, rows: cls.filter(c => c === 'row').length};`);
-    eq(r.first, 'pttl', 'the panel should open with a selection header');
+    /* A type whose panel names itself uses a style header; everything else
+       gets the generic one. Either way the panel opens by saying what is
+       selected, and General is the last thing on it. */
+    ok(r.first === 'pttl' || r.first === 'sty', 'the panel opens with a header, got ' + r.first);
     ok(/Wall/.test(r.head.join(' ')), 'header: ' + r.head.join(' '));
     const names = r.grps.map(g => g[1]);
-    eq(names[0], 'Parameters', 'sections: ' + names.join(' > '));
     ok(names.indexOf('General') > 0, 'General must come last: ' + names.join(' > '));
     eq(names.indexOf('General'), names.length - 1);
     ok(r.rows >= 8, 'wall rows: ' + r.rows);
+  });
+
+  /* The generic path is the one most objects take, so it keeps a test of its
+     own rather than being covered only by whatever walls happen to do. */
+  t('an object with no style header of its own still leads with Parameters', () => {
+    const r = R(`
+      /* the suites share one sandbox, so bring your own and take it away */
+      begin();
+      const ln = addEnt({t:'line', a:[0,0], b:[1000,0], layer:'0'});
+      commit('probe');
+      SEL.clear(); SEL.add(ln.id); buildProps();
+      const p = document.getElementById('props');
+      const cls = p.children.map(c => c.className);
+      const grps = p.children.filter(c => c.className === 'grp').map(c => c.innerHTML);
+      SEL.clear(); buildProps(); undoStep();
+      return { first: cls[0], grps };`);
+    eq(r.first, 'pttl', 'the generic selection header');
+    eq(r.grps[0], 'Parameters', 'sections: ' + r.grps.join(' > '));
+    eq(r.grps[r.grps.length - 1], 'General', 'and General last');
   });
 
   t('a multi-selection shows totals plus the shared General section', () => {

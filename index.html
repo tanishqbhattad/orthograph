@@ -404,7 +404,8 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
 /* ---- Command panel: the style header, segmented controls, swatches ---- */
 .sty{display:flex;align-items:center;justify-content:space-between;gap:8px;
   padding:5px 11px 7px}
-.sty b{font-size:12.5px;font-weight:600;letter-spacing:-.01em}
+.sty b{flex:1;font-size:12.5px;font-weight:600;letter-spacing:-.01em}
+.sty i{font-family:var(--mono);font-size:9.5px;color:var(--tx2);font-style:normal}
 .styacts{display:flex;gap:2px}
 .styb{width:24px;height:22px;border-radius:5px;display:grid;place-items:center;color:var(--tx1)}
 .styb:hover{background:var(--bg3);color:var(--tx0)}
@@ -420,6 +421,8 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--bg2);border:1px so
   stroke-linecap:round;stroke-linejoin:round}
 .swrow{display:flex;align-items:center;gap:7px;text-align:left}
 .swb{width:22px;height:13px;border-radius:3px;border:1px solid #0006;flex:none}
+.swbtn{height:20px;cursor:pointer}
+.swbtn:hover{border-color:var(--amber)}
 .swt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .swx{width:20px;height:22px;border-radius:4px;color:var(--tx2);flex:none;font-size:14px;line-height:1}
 .swx:hover{background:var(--bg3);color:var(--rose)}
@@ -21023,9 +21026,10 @@ function segRow(w, label, options, cur, on) {
   r.appendChild(g); w.appendChild(r); return g;
 }
 /** the style header: what is being drawn, plus its actions */
-function styleHead(w, title, actions) {
+function styleHead(w, title, actions, note) {
   const h = el('div', 'sty');
   h.appendChild(el('b', '', esc(title)));
+  if (note != null) h.appendChild(el('i', '', esc(note)));
   const box = el('span', 'styacts');
   for (const [icon, tip, fn] of (actions || [])) {
     const b = el('button', 'styb', svg(icon, 20));
@@ -21044,6 +21048,27 @@ function swatchRow(w, label, colour, text, on, onClear) {
   r.appendChild(b);
   if (onClear) { const x = el('button', 'swx', '−'); x.title = 'Reset to ByLayer'; x.onclick = onClear; r.appendChild(x); }
   w.appendChild(r); return b;
+}
+
+/** Colour and weight on one line, because they are one decision: what the
+    linework looks like. The swatch opens the picker, the list sets the weight,
+    the minus hands both back to the layer. */
+function strokeRow(w, label, colour, lw, onColour, onWeight, onClear) {
+  const r = el('div', 'row', `<label>${label}</label>`);
+  const b = el('button', 'swb swbtn'); b.style.background = colour || 'transparent';
+  b.title = 'Colour'; b.onclick = onColour;
+  const s = el('select', 'f');
+  for (const v of LW_LADDER) {
+    const o = document.createElement('option');
+    o.textContent = v === 0 ? '0.00 (hairline)' : v.toFixed(2) + ' mm';
+    o.value = v;
+    if (lwSnap(lw) === v) o.selected = true;
+    s.appendChild(o);
+  }
+  s.onchange = () => onWeight(+s.value);
+  r.appendChild(b); r.appendChild(s);
+  if (onClear) { const x = el('button', 'swx', '−'); x.title = 'Back to the layer'; x.onclick = onClear; r.appendChild(x); }
+  w.appendChild(r); return r;
 }
 
 /* ============================================================
@@ -21066,6 +21091,14 @@ function cmdTitle(k) {
     point: 'Point', revcloud: 'Revision cloud', xline: 'Construction line', ray: 'Ray',
     donut: 'Donut' }[k]) || (k ? k.charAt(0).toUpperCase() + k.slice(1) : 'Command');
 }
+/* The same three-way choice the command panel offers, in the words the
+   ENTITY uses: a drawn wall is placed by inner/centre/outer relative to the
+   run, a selected one sits left/centre/right of its own line. */
+const JUST_OPTS = [
+  ['left', 'Left face — the centreline runs along the left of the wall', 'alignIn'],
+  ['center', 'Centred — the wall is even about its line', 'alignMid'],
+  ['right', 'Right face — the centreline runs along the right of the wall', 'alignOut'],
+];
 const ALIGN_OPTS = [
   ['inner', 'Inner face — the line you draw is the inside of the wall', 'alignIn'],
   ['centre', 'Centreline — the line you draw is the middle of the wall', 'alignMid'],
@@ -21155,11 +21188,13 @@ function openingCmdProps(w, c, kind) {
       (c && c.hand === -1) ? -1 : 1, v => { if (c) c.hand = +v; buildProps(); draw(); });
 }
 /** pick an existing object and adopt its settings for the tool in hand */
-function matchStyleFrom(kind, c) {
+/** Copy settings off another object of the same kind — onto the tool in hand
+    while one is running, or onto the object that is SELECTED when none is. */
+function matchStyleFrom(kind, c, onto) {
   toast('Click an existing ' + kind + ' to copy its settings');
-  ST.styleTarget = { kind, c };
+  ST.styleTarget = { kind, c, onto: onto ? onto.id : null };
 }
-function saveWallType(c) {
+function saveWallType(c, apply) {
   const base = wallType((c && c.wt) || ARCH.wt) || {};
   const th = (c && c.th) || base.t || 100;
   modal(`<h3>New wall type</h3>
@@ -21168,7 +21203,12 @@ function saveWallType(c) {
     const t = parseLen($('#wtt').value) || th;
     const id = 'u' + Date.now().toString(36);
     (DOC.wallTypes = DOC.wallTypes || []).push({ id, name: ($('#wtn').value || 'Wall').trim(), t, fn: 'interior' });
-    ARCH.wt = id; if (c) { c.wt = id; c.th = null; }
+    ARCH.wt = id;
+    /* A live command is a scratch object and can be assigned to. A SELECTED
+       wall is in the drawing, so it is changed through the journal or the
+       change cannot be undone. */
+    if (apply) apply(id);
+    else if (c) { c.wt = id; c.th = null; }
     buildProps(); draw();
   });
 }
@@ -21216,10 +21256,16 @@ function buildProps() {
   if (!es.length) { hideQuickProps(); return emptyProps(w); }
   const e = es[0], one = es.length === 1;
 
-  const head = el('div', 'pttl');
-  head.appendChild(el('b', '', esc(one ? niceName(e) : es.length + ' objects')));
-  head.appendChild(el('i', '', one ? '#' + e.id : esc(kindSummary(es))));
-  w.appendChild(head);
+  /* A type whose panel opens with its own style header supplies the name and
+     the actions that go with it. Printing the generic title above that says
+     "Wall" twice with a group heading wedged between them. */
+  const selfTitled = one && SELF_TITLED[e.t];
+  if (!selfTitled) {
+    const head = el('div', 'pttl');
+    head.appendChild(el('b', '', esc(one ? niceName(e) : es.length + ' objects')));
+    head.appendChild(el('i', '', one ? '#' + e.id : esc(kindSummary(es))));
+    w.appendChild(head);
+  }
 
   const upd = () => { draw(); buildProps(); };
   const set = fn => v => { begin(); es.forEach(x => mut(x)); fn(v); commit(); upd(); };
@@ -21227,7 +21273,7 @@ function buildProps() {
   /* most-edited things first: the object's own parameters */
   if (one) {
     const P = PROPS[e.t];
-    grpRow(w, P ? 'Parameters' : 'Geometry');
+    if (!selfTitled) grpRow(w, P ? 'Parameters' : 'Geometry');
     if (P) P(w, e, set, upd); else genericProps(w, e, set);
   } else {
     totals(w, es);
@@ -21250,6 +21296,9 @@ function buildProps() {
 
   showQuickProps(one ? e : es);
 }
+/* Types whose PROPS block opens with styleHead() and therefore name
+   themselves. Keep this in step with the panels that call it. */
+const SELF_TITLED = { wall: 1 };
 /* what can be sized in paper units at all */
 const ANNOTATABLE = { text: 1, mtext: 1, dim: 1, leader: 1, attdef: 1 };
 /** Turn annotative on or off, CONVERTING the height as it goes.
@@ -21593,17 +21642,39 @@ const PROPS = {
 
   /* ---- architecture ---- */
   wall(w, e, set, upd) {
+    /* The same header, the same words and the same controls as the panel that
+       was open while this wall was being drawn. A wall does not turn into a
+       different kind of thing at the moment you let go of the mouse, and the
+       justification in particular is a three-way choice about which face the
+       line runs along — which is something to look at, not to open a list and
+       read. */
+    styleHead(w, 'Wall', [
+      ['eyedrop', 'Copy the settings off another wall', () => matchStyleFrom('wall', null, e)],
+      ['plus', 'Save these settings as a new wall type', () =>
+        saveWallType({ wt: e.wt, th: wallT(e) }, (id) => {
+          begin(); mut(e); e.wt = id; e.th = null; commit('New wall type'); upd();
+        })],
+    ], '#' + e.id);
     selRow(w, 'Type', (DOC.wallTypes || []).map(t => [t.id, `${t.name} — ${fmt(t.t)}`]), e.wt,
       v => { begin(); mut(e); e.wt = v; e.th = null; commit('Wall type'); upd(); });
     addRow(w, 'Thickness', wallT(e), set(v => e.th = Math.max(v, 1)));
-    selRow(w, 'Justify', [['center', 'centre'], ['left', 'left face'], ['right', 'right face']], e.just || 'center',
-      v => { begin(); mut(e); e.just = v; commit('Justification'); upd(); });
+    /* Fill and Stroke are shown rather than named. A row that says "ByLayer"
+       reports where the colour comes from and not what it is, which is the one
+       thing you opened the row to find out. */
+    const poche = wallHatchOn(e);
+    swatchRow(w, 'Fill', poche ? pocheCol(e) : 'transparent', poche ? 'Solid' : 'None',
+      () => { begin(); mut(e); e.hatch = !poche; commit('Wall poche'); upd(); },
+      e.hatch != null ? () => { begin(); mut(e); e.hatch = null; commit('Wall poche'); upd(); } : null);
+    strokeRow(w, 'Stroke', entColor(e), flw(e),
+      () => pickColor(entColor(e), (c) => { begin(); mut(e); e.color = c; commit('Colour'); upd(); }, true),
+      (v) => { begin(); mut(e); e.lw = v; commit('Lineweight'); upd(); },
+      (e.color || e.lw != null) ? () => {
+        begin(); mut(e); e.color = null; e.lw = null; commit('Back to layer'); upd();
+      } : null);
+    grpRow(w, 'Active properties');
+    segRow(w, 'Alignment', JUST_OPTS, e.just || 'center',
+      v => { begin(); mut(e); e.just = v; commit('Alignment'); upd(); });
     addRow(w, 'Height', e.h || ARCH.wallH, set(v => e.h = Math.max(v, 1)));
-    btnRow(w, 'Poche', e.hatch === false ? 'off' : (e.hatch === true ? 'on' : 'follows drawing'), () => {
-      begin(); mut(e);
-      e.hatch = e.hatch === true ? false : (e.hatch === false ? null : true);
-      commit('Wall poche'); upd();
-    });
     w.appendChild(el('div', 'grp', 'Centreline'));
     addRow(w, 'Start X', e.a[0], set(v => e.a[0] = v)); addRow(w, 'Start Y', e.a[1], set(v => e.a[1] = v));
     addRow(w, 'End X', e.b[0], set(v => e.b[0] = v)); addRow(w, 'End Y', e.b[1], set(v => e.b[1] = v));
@@ -21621,11 +21692,6 @@ const PROPS = {
     const ops = openingsByHost().get(e.id) || [];
     ro(w, 'Openings', ops.length);
     if (ops.length) btnRow(w, '', 'Select openings', () => { SEL.clear(); ops.forEach(o => SEL.add(o.id)); syncUI(); draw(); });
-    btnRow(w, '', 'Flip justification', () => {
-      begin(); mut(e);
-      e.just = e.just === 'left' ? 'right' : e.just === 'right' ? 'left' : 'center';
-      commit('Flipped'); upd();
-    });
   },
   door(w, e, set, upd) { openingProps(w, e, set, upd, 'door'); },
   window(w, e, set, upd) { openingProps(w, e, set, upd, 'window'); },
@@ -22946,17 +23012,42 @@ function takeStyleFrom(p) {
   const e = pickAt(p, 12, x => x.t === t.kind);
   if (!e) { ST.styleTarget = null; echo('Nothing of that kind there'); buildProps(); return true; }
   const c = t.c && CMD === t.c ? t.c : null;
+  /* The eyedropper is also offered on a SELECTED object, where there is no
+     command to load and the settings have to land on the drawing itself. That
+     goes through the journal: a change that cannot be undone is a change
+     nothing recorded. */
+  const onto = t.onto != null ? DOC.ents.get(t.onto) : null;
+  const toSel = (onto && onto !== e && onto.t === t.kind) ? onto : null;
   if (t.kind === 'wall') {
     ARCH.wt = e.wt || ARCH.wt;
     if (e.th != null) ARCH.wallTh = e.th;
     if (e.h) ARCH.wallH = e.h;
     if (c) { c.wt = ARCH.wt; c.th = e.th != null ? e.th : null; }
+    if (toSel) {
+      begin(); mut(toSel);
+      toSel.wt = e.wt || toSel.wt;
+      toSel.th = e.th != null ? e.th : null;
+      if (e.h) toSel.h = e.h;
+      toSel.just = e.just || toSel.just;
+      commit('Match wall');
+    }
   } else if (t.kind === 'door') {
     ARCH.dt = e.dt || ARCH.dt;
     if (c) { c.type = ARCH.dt; c.flip = !!e.flip; c.hand = e.hand === -1 ? -1 : 1; }
+    if (toSel) {
+      begin(); mut(toSel);
+      toSel.dt = e.dt || toSel.dt; toSel.flip = !!e.flip;
+      toSel.hand = e.hand === -1 ? -1 : 1;
+      commit('Match door');
+    }
   } else if (t.kind === 'window') {
     ARCH.wtp = e.wtp || ARCH.wtp;
     if (c) { c.type = ARCH.wtp; c.flip = !!e.flip; }
+    if (toSel) {
+      begin(); mut(toSel);
+      toSel.wtp = e.wtp || toSel.wtp; toSel.flip = !!e.flip;
+      commit('Match window');
+    }
   }
   ST.styleTarget = null;
   toast('Settings copied from ' + t.kind + ' #' + e.id);

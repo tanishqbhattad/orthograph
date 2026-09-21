@@ -250,17 +250,42 @@ function takeStyleFrom(p) {
   const e = pickAt(p, 12, x => x.t === t.kind);
   if (!e) { ST.styleTarget = null; echo('Nothing of that kind there'); buildProps(); return true; }
   const c = t.c && CMD === t.c ? t.c : null;
+  /* The eyedropper is also offered on a SELECTED object, where there is no
+     command to load and the settings have to land on the drawing itself. That
+     goes through the journal: a change that cannot be undone is a change
+     nothing recorded. */
+  const onto = t.onto != null ? DOC.ents.get(t.onto) : null;
+  const toSel = (onto && onto !== e && onto.t === t.kind) ? onto : null;
   if (t.kind === 'wall') {
     ARCH.wt = e.wt || ARCH.wt;
     if (e.th != null) ARCH.wallTh = e.th;
     if (e.h) ARCH.wallH = e.h;
     if (c) { c.wt = ARCH.wt; c.th = e.th != null ? e.th : null; }
+    if (toSel) {
+      begin(); mut(toSel);
+      toSel.wt = e.wt || toSel.wt;
+      toSel.th = e.th != null ? e.th : null;
+      if (e.h) toSel.h = e.h;
+      toSel.just = e.just || toSel.just;
+      commit('Match wall');
+    }
   } else if (t.kind === 'door') {
     ARCH.dt = e.dt || ARCH.dt;
     if (c) { c.type = ARCH.dt; c.flip = !!e.flip; c.hand = e.hand === -1 ? -1 : 1; }
+    if (toSel) {
+      begin(); mut(toSel);
+      toSel.dt = e.dt || toSel.dt; toSel.flip = !!e.flip;
+      toSel.hand = e.hand === -1 ? -1 : 1;
+      commit('Match door');
+    }
   } else if (t.kind === 'window') {
     ARCH.wtp = e.wtp || ARCH.wtp;
     if (c) { c.type = ARCH.wtp; c.flip = !!e.flip; }
+    if (toSel) {
+      begin(); mut(toSel);
+      toSel.wtp = e.wtp || toSel.wtp; toSel.flip = !!e.flip;
+      commit('Match window');
+    }
   }
   ST.styleTarget = null;
   toast('Settings copied from ' + t.kind + ' #' + e.id);
