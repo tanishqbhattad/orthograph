@@ -1661,6 +1661,25 @@ function drawHatch(e, col, mode) {
 /* ---- grips ----
    GRIPS turns them off, GRIPOBJLIMIT stops a thousand-object selection from
    burying the drawing under boxes, and GRIPSIZE sets the square. */
+/** a double-headed arrow: this grip slides, and here is the line it slides on */
+function gripArrow(x, y, r, d) {
+  const L = r + 3, h = r + 1;
+  const px = -d[1], py = d[0];
+  ctx.beginPath();
+  ctx.moveTo(x - d[0] * L, y - d[1] * L);
+  ctx.lineTo(x + d[0] * L, y + d[1] * L);
+  for (const s of [1, -1]) {
+    const tx = x + d[0] * L * s, ty = y + d[1] * L * s;
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(tx - d[0] * h * s + px * h * 0.7, ty - d[1] * h * s + py * h * 0.7);
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(tx - d[0] * h * s - px * h * 0.7, ty - d[1] * h * s - py * h * 0.7);
+  }
+  const keep = ctx.strokeStyle;
+  ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 1.6;
+  ctx.setLineDash(DASH_SOLID); ctx.stroke();
+  ctx.strokeStyle = keep; ctx.lineWidth = HAIR;
+}
 function drawGrips() {
   if (typeof ST.gripsOn !== 'undefined' && !ST.gripsOn) return;
   if (SEL.size > (+ST.gripObjLimit || 100)) return;
@@ -1681,9 +1700,16 @@ function drawGrips() {
       const r = Math.round((isHot || isHov ? s + 2 : s) / 2);
       const x = snapXd(q[0], 0), y = snapYd(q[1], 0);
       ctx.fillStyle = isHot ? CO.gripHot : isHov ? CO.gripHover : CO.grip;
-      ctx.fillRect(x - r, y - r, r * 2, r * 2);
       ctx.strokeStyle = CO.bg;
-      ctx.strokeRect(snapXd(x - r, 1), snapYd(y - r, 1), r * 2, r * 2);
+      if (g.shape === 'round') {
+        ctx.beginPath(); ctx.arc(x, y, r + 0.5, 0, Math.PI * 2);
+        ctx.fill(); ctx.lineWidth = 1; ctx.stroke();
+      } else if (g.shape === 'arrow') {
+        gripArrow(x, y, r, g.dir ? ldimDir(g.p, g.dir) : [1, 0]);
+      } else {
+        ctx.fillRect(x - r, y - r, r * 2, r * 2);
+        ctx.strokeRect(snapXd(x - r, 1), snapYd(y - r, 1), r * 2, r * 2);
+      }
       /* the hover ring is what tells you the grip is live before you press */
       if (isHov && !isHot) {
         ctx.strokeStyle = CO.gripHover;

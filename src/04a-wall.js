@@ -691,10 +691,14 @@ GEOM.wall = {
   },
   grips(w) {
     const n = perp(wallU(w)), off = wallOffsets(w), m = mid(w.a, w.b);
+    /* A grip that moves a POINT and a grip that pushes a FACE are two
+       different offers. Drawn as the same little square they read as the
+       same one, so a node is round because it is a position, and a face
+       carries a double-headed arrow that also says which way it slides. */
     return [
-      { p: w.a, k: 'a' }, { p: m, k: 'm' }, { p: w.b, k: 'b' },
-      { p: add(m, mul(n, off[0])), k: 'fL' },      /* drag a face to set thickness */
-      { p: add(m, mul(n, off[1])), k: 'fR' },
+      { p: w.a, k: 'a', shape: 'round' }, { p: m, k: 'm' }, { p: w.b, k: 'b', shape: 'round' },
+      { p: add(m, mul(n, off[0])), k: 'fL', shape: 'arrow', dir: n },
+      { p: add(m, mul(n, off[1])), k: 'fR', shape: 'arrow', dir: n },
     ];
   },
   grip(w, k, p) {

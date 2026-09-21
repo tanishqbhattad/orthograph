@@ -408,6 +408,47 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(r.gap >= 3, 'with a real gap out of the box: ' + r.gap);
   });
 
+  /* A grip that moves a point and a grip that pushes a face are two different
+     offers, and drawing both as the same little square says they are the
+     same. A node is round because it is a position; a face carries a
+     double-headed arrow because it slides, and the arrow says which way. */
+  t('a wall end is a round grip and a wall face is an arrow', () => {
+    const r = R(SETUP + `
+      resetDoc(); ensureLayer('A-WALL');
+      begin();
+      const w = addEnt({t:'wall', a:[0,0], b:[4000,0], wt:'brk230', layer:'A-WALL'});
+      commit('w');
+      const gs = gripsOf(w);
+      const shape = {};
+      for (const g of gs) shape[g.k] = g.shape || 'square';
+      const dir = (gs.find(g => g.k === 'fL') || {}).dir;
+      SEL.clear(); SEL.add(w.id);
+      return { shape, hasDir: !!dir && Math.abs(dir[1]) > 0.9 };`);
+    eq(r.shape.a, 'round', 'the start is a node');
+    eq(r.shape.b, 'round', 'so is the end');
+    eq(r.shape.fL, 'arrow', 'the left face slides');
+    eq(r.shape.fR, 'arrow', 'and so does the right');
+    eq(r.shape.m, 'square', 'the move grip stays the plain one');
+    eq(r.hasDir, true, 'and a face grip says which way it slides');
+  });
+
+  t('and the renderer draws them as the shapes they say they are', () => {
+    const r = R(SETUP + TRACE + `
+      resetDoc(); ensureLayer('A-WALL');
+      begin();
+      const w = addEnt({t:'wall', a:[0,0], b:[4000,0], wt:'brk230', layer:'A-WALL'});
+      commit('w');
+      SEL.clear(); SEL.add(w.id);
+      ST.grid = false; ST.cur = null;
+      fit();
+      _reset(); drawGrips();
+      const out = { arcs: _c.__trace.counts.arc || 0, rects: _c.__trace.counts.fillRect || 0 };
+      SEL.clear(); ST.grid = true;
+      return out;`);
+    eq(r.arcs, 2, 'two round ends, got ' + r.arcs);
+    ok(r.rects >= 1, 'and the square one is still a rectangle');
+  });
+
   t('the UCS icon sits on the origin when it fits and retreats to the corner when it does not', () => {
     const r = R(SETUP + TRACE + `
       ST.grid = false; ST.cur = null;
