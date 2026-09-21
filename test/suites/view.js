@@ -370,6 +370,44 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.away.n, 0, 'no crosshair once the pointer has left the drawing area');
   });
 
+  /* A crosshair whose arms cross is a cross drawn ON TOP of the one thing it
+     is there to point at. Every drafting program that is not AutoCAD leaves a
+     hole in the middle for that reason, and it is what makes a SHORT crosshair
+     readable at all: at 14px arms, two solid lines meeting is just a blob. */
+  t('the crosshair leaves a hole in the middle, where the point it marks is', () => {
+    const r = R(SETUP + TRACE + `
+      ST.grid = false; ST.cur = s2w(600, 400); ST.inView = true; ST.crossLen = 10;
+      const c = w2s(ST.cur);
+      const shot = () => { _reset(); drawCursor();
+        const pts = _c.__trace.pts.filter(p => isFinite(p[0]) && isFinite(p[1]));
+        /* how close any drawn point comes to the middle, along its own arm */
+        let near = Infinity;
+        for (const p of pts) near = Math.min(near, Math.max(Math.abs(p[0]-c[0]), Math.abs(p[1]-c[1])));
+        return { n: pts.length, near: Math.round(near) }; };
+      ST.crossGap = 6; const gapped = shot();
+      ST.crossGap = 0; const solid = shot();
+      ST.crossGap = null; ST.crossLen = 100; ST.cur = null; ST.grid = true;
+      return { gapped, solid };`);
+    eq(r.gapped.n, 8, 'four arms, not two lines through the middle');
+    eq(r.gapped.near, 6, 'and none of them starts closer in than the gap');
+    eq(r.solid.n, 4, 'CURSORGAP 0 gives back the two crossing lines');
+    eq(r.solid.near, 40, 'whose only ends are the far ones — they run straight through');
+  });
+
+  t('the crosshair is small by default, so the gap is worth having', () => {
+    const r = R(SETUP + TRACE + `
+      ST.grid = false; ST.cur = s2w(600, 400); ST.inView = true;
+      ST.crossLen = null; ST.crossGap = null;
+      _reset(); drawCursor();
+      const xs = _c.__trace.pts.map(p => p[0]).filter(isFinite);
+      const out = { span: Math.round(Math.max.apply(null,xs) - Math.min.apply(null,xs)),
+                    gap: crosshairGap() };
+      ST.cur = null; ST.grid = true;
+      return out;`);
+    ok(r.span > 12 && r.span < 60, 'arms of a few pixels, not a third of the screen: ' + r.span);
+    ok(r.gap >= 3, 'with a real gap out of the box: ' + r.gap);
+  });
+
   t('the UCS icon sits on the origin when it fits and retreats to the corner when it does not', () => {
     const r = R(SETUP + TRACE + `
       ST.grid = false; ST.cur = null;

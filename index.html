@@ -876,11 +876,24 @@ function annoFor(e) { return (e && e.anno) ? annoK() : 1; }
    Named once and read everywhere. A default declared in one place and
    defaulted-to differently in another is the same bug twice: clear the value
    and the drawing reverts to a number nobody chose. */
-const CROSS_PCT = 20;        /* crosshair arms, % of viewport */
+/* Small, with a hole in the middle. AutoCAD's crosshair is two lines that
+   meet, which is fine at CURSORSIZE 100 because the meeting point is nowhere
+   near the ends — but at short arms two crossing lines are a blob drawn on top
+   of the one thing a cursor exists to point at. Drafting programs that are not
+   AutoCAD leave a gap for exactly that reason. CURSORSIZE 100 and CURSORGAP 0
+   give the classic back. */
+const CROSS_PCT = 4;         /* crosshair arms, % of viewport */
+const CROSS_GAP = 5;         /* the hole at the centre, screen px */
 const PICK_PX = 10;          /* pick aperture, screen px */
 function crosshairPct() {
   const v = +ST.crossLen;
   return (isFinite(v) && v > 0) ? Math.max(1, Math.min(100, v)) : CROSS_PCT;
+}
+/** 0 is a setting, not an absence — it asks for the crossing lines — so only
+    null/undefined and nonsense fall through to the default. */
+function crosshairGap() {
+  const v = +ST.crossGap;
+  return (ST.crossGap != null && isFinite(v) && v >= 0) ? Math.min(v, 60) : CROSS_GAP;
 }
 function pickBoxPx() {
   const v = +ST.pickBox;
@@ -6935,13 +6948,21 @@ function drawCursor() {
   ctx.strokeStyle = CO.cross; ctx.globalAlpha = 0.82;
   ctx.lineWidth = HAIR; ctx.setLineDash(DASH_SOLID); ctx.lineDashOffset = 0;
   ctx.beginPath();
-  if (pct >= 100) {
-    ctx.moveTo(0, y); ctx.lineTo(V.w, y);
-    ctx.moveTo(x, 0); ctx.lineTo(x, V.h);
+  /* Four arms and a hole, not two lines crossing at a point. The gap is
+     measured out from the centre, so it is the same hole whether the arms run
+     to the edge of the screen or stop 14px away. */
+  const g = crosshairGap();
+  const arm = pct >= 100 ? null : Math.max(6, pct / 100 * Math.min(V.w, V.h) / 2);
+  const x0 = arm == null ? 0 : x - arm, x1 = arm == null ? V.w : x + arm;
+  const y0 = arm == null ? 0 : y - arm, y1 = arm == null ? V.h : y + arm;
+  if (g > 0) {
+    if (x - g > x0) { ctx.moveTo(x0, y); ctx.lineTo(x - g, y); }
+    if (x + g < x1) { ctx.moveTo(x + g, y); ctx.lineTo(x1, y); }
+    if (y - g > y0) { ctx.moveTo(x, y0); ctx.lineTo(x, y - g); }
+    if (y + g < y1) { ctx.moveTo(x, y + g); ctx.lineTo(x, y1); }
   } else {
-    const arm = Math.max(6, pct / 100 * Math.min(V.w, V.h) / 2);
-    ctx.moveTo(x - arm, y); ctx.lineTo(x + arm, y);
-    ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm);
+    ctx.moveTo(x0, y); ctx.lineTo(x1, y);
+    ctx.moveTo(x, y0); ctx.lineTo(x, y1);
   }
   ctx.stroke();
   /* APBOX: the osnap aperture, shown at a point prompt when it is asked for.
@@ -7408,6 +7429,7 @@ const ST = {
   trackPolar: true,       /* otrack follows every polar angle, not just 0/90 */
   /* ---- shared interaction contract (several modules read these) ---- */
   crossLen: CROSS_PCT,    /* crosshair arm length, % of viewport; 100 = full width */
+  crossGap: CROSS_GAP,    /* hole at the centre of the crosshair, screen px      */
   pickBox: PICK_PX,       /* pick aperture in screen px */
   aperture: 10,           /* osnap aperture radius in screen px — AutoCAD's APERTURE */
   apBox: false,           /* draw the aperture box at a point prompt — APBOX */
@@ -11771,6 +11793,7 @@ const VARDEF = {
   zoomfactor: { get: () => VS.zoomFactor, set: v => { VS.zoomFactor = clamp(Math.round(v), 3, 100); }, label: 'Wheel zoom step (3–100)' },
   gridmajor: { get: () => VS.gridMajor, set: v => { VS.gridMajor = clamp(Math.round(v), 1, 100); draw(); }, label: 'Minor grid lines per major line' },
   cursorsize: { get: () => ST.crossLen, set: v => { ST.crossLen = clamp(Math.round(v), 1, 100); draw(); }, label: 'Crosshair size, % of the viewport' },
+  cursorgap: { get: () => crosshairGap(), set: v => { ST.crossGap = clamp(Math.round(v), 0, 60); draw(); }, label: 'Hole at the centre of the crosshair, px (0 = crossing lines)' },
   pickbox: { get: () => ST.pickBox, set: v => { ST.pickBox = clamp(Math.round(v), 2, 40); draw(); }, label: 'Pick box, screen pixels' },
   vtduration: { get: () => VS.vtDuration, set: v => { VS.vtDuration = clamp(Math.round(v), 0, 3000); }, label: 'View transition time, ms' },
 };

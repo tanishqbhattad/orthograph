@@ -221,6 +221,7 @@ const VARDEF = {
   zoomfactor: { get: () => VS.zoomFactor, set: v => { VS.zoomFactor = clamp(Math.round(v), 3, 100); }, label: 'Wheel zoom step (3–100)' },
   gridmajor: { get: () => VS.gridMajor, set: v => { VS.gridMajor = clamp(Math.round(v), 1, 100); draw(); }, label: 'Minor grid lines per major line' },
   cursorsize: { get: () => ST.crossLen, set: v => { ST.crossLen = clamp(Math.round(v), 1, 100); draw(); }, label: 'Crosshair size, % of the viewport' },
+  cursorgap: { get: () => crosshairGap(), set: v => { ST.crossGap = clamp(Math.round(v), 0, 60); draw(); }, label: 'Hole at the centre of the crosshair, px (0 = crossing lines)' },
   pickbox: { get: () => ST.pickBox, set: v => { ST.pickBox = clamp(Math.round(v), 2, 40); draw(); }, label: 'Pick box, screen pixels' },
   vtduration: { get: () => VS.vtDuration, set: v => { VS.vtDuration = clamp(Math.round(v), 0, 3000); }, label: 'View transition time, ms' },
 };

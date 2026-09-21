@@ -1911,13 +1911,21 @@ function drawCursor() {
   ctx.strokeStyle = CO.cross; ctx.globalAlpha = 0.82;
   ctx.lineWidth = HAIR; ctx.setLineDash(DASH_SOLID); ctx.lineDashOffset = 0;
   ctx.beginPath();
-  if (pct >= 100) {
-    ctx.moveTo(0, y); ctx.lineTo(V.w, y);
-    ctx.moveTo(x, 0); ctx.lineTo(x, V.h);
+  /* Four arms and a hole, not two lines crossing at a point. The gap is
+     measured out from the centre, so it is the same hole whether the arms run
+     to the edge of the screen or stop 14px away. */
+  const g = crosshairGap();
+  const arm = pct >= 100 ? null : Math.max(6, pct / 100 * Math.min(V.w, V.h) / 2);
+  const x0 = arm == null ? 0 : x - arm, x1 = arm == null ? V.w : x + arm;
+  const y0 = arm == null ? 0 : y - arm, y1 = arm == null ? V.h : y + arm;
+  if (g > 0) {
+    if (x - g > x0) { ctx.moveTo(x0, y); ctx.lineTo(x - g, y); }
+    if (x + g < x1) { ctx.moveTo(x + g, y); ctx.lineTo(x1, y); }
+    if (y - g > y0) { ctx.moveTo(x, y0); ctx.lineTo(x, y - g); }
+    if (y + g < y1) { ctx.moveTo(x, y + g); ctx.lineTo(x, y1); }
   } else {
-    const arm = Math.max(6, pct / 100 * Math.min(V.w, V.h) / 2);
-    ctx.moveTo(x - arm, y); ctx.lineTo(x + arm, y);
-    ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm);
+    ctx.moveTo(x0, y); ctx.lineTo(x1, y);
+    ctx.moveTo(x, y0); ctx.lineTo(x, y1);
   }
   ctx.stroke();
   /* APBOX: the osnap aperture, shown at a point prompt when it is asked for.

@@ -23,15 +23,18 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
   /* Read from the source and from the accessors rather than from live ST:
      the suites share one sandbox, so by the time this runs another test has
      long since dragged the pick box somewhere else. */
-  t('the crosshair is short and the pick box is 10', () => {
+  t('the crosshair is short, gapped, and the pick box is 10', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', '..', 'src', '00-core.js'), 'utf8');
     const cross = +(src.match(/const CROSS_PCT = (\d+)/) || [0, 0])[1];
+    const gap = +(src.match(/const CROSS_GAP = (\d+)/) || [0, -1])[1];
     const pick = +(src.match(/const PICK_PX = (\d+)/) || [0, 0])[1];
-    eq(cross, 20, 'a 20% crosshair, not one across the whole viewport');
+    ok(cross > 0 && cross <= 10, 'a few percent of the viewport, not a third of it: ' + cross);
+    ok(gap >= 3 && gap <= 12, 'with a hole in the middle big enough to see through: ' + gap);
     eq(pick, 10, 'and a 10px pick box');
     const snap = fs.readFileSync(path.join(__dirname, '..', '..', 'src', '06-snap.js'), 'utf8');
     ok(/crossLen:\s*CROSS_PCT/.test(snap), 'and ST is initialised from them, not from a copy');
-    ok(/pickBox:\s*PICK_PX/.test(snap), 'both of them');
+    ok(/crossGap:\s*CROSS_GAP/.test(snap), 'the gap too');
+    ok(/pickBox:\s*PICK_PX/.test(snap), 'and the pick box');
   });
 
   /* A default written in one place and defaulted-to differently in another is
@@ -40,20 +43,31 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
   t('nothing falls back to a different number than the default', () => {
     const r = R(`${SETUP}
       /* what the renderer and the picker use when the value is missing */
-      ST.crossLen = null; ST.pickBox = null;
+      ST.crossLen = null; ST.pickBox = null; ST.crossGap = null;
       const cross = crosshairPct();
+      const gap = crosshairGap();
       const pick = pickBoxPx();
-      ST.crossLen = 20; ST.pickBox = 10;
-      return { cross, pick };`);
-    eq(r.cross, 20, 'the crosshair falls back to the default it was given');
-    eq(r.pick, 10, 'and so does the pick box');
+      /* 0 is a setting and not an absence: it asks for the crossing lines, so
+         it must NOT fall through to the default the way null does. */
+      ST.crossGap = 0; const zero = crosshairGap();
+      ST.crossGap = null;
+      return { cross, gap, pick, zero };`);
+    /* CROSS_PCT and friends are top-level const, so they live in the bundle's
+       lexical scope and are not reachable from injected code — the declared
+       number has to come from the source itself. */
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'src', '00-core.js'), 'utf8');
+    const decl = (n) => +(src.match(new RegExp('const ' + n + ' = ([0-9]+)')) || [0, NaN])[1];
+    eq(r.cross, decl('CROSS_PCT'), 'the crosshair falls back to the default it was given');
+    eq(r.gap, decl('CROSS_GAP'), 'and so does the gap');
+    eq(r.pick, decl('PICK_PX'), 'and so does the pick box');
+    eq(r.zero, 0, 'CURSORGAP 0 is honoured rather than treated as unset');
   });
 
   t('they are still adjustable, and clamped to something usable', () => {
     const r = R(`${SETUP}
       ST.crossLen = 100; const full = crosshairPct();
       ST.pickBox = 40; const fat = pickBoxPx();
-      ST.crossLen = 20; ST.pickBox = 10;
+      ST.crossLen = CROSS_PCT; ST.pickBox = PICK_PX;
       return { full, fat };`);
     eq(r.full, 100, 'a full-width crosshair is still available');
     eq(r.fat, 40, 'and a large pick box');

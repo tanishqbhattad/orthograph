@@ -256,11 +256,24 @@ function annoFor(e) { return (e && e.anno) ? annoK() : 1; }
    Named once and read everywhere. A default declared in one place and
    defaulted-to differently in another is the same bug twice: clear the value
    and the drawing reverts to a number nobody chose. */
-const CROSS_PCT = 20;        /* crosshair arms, % of viewport */
+/* Small, with a hole in the middle. AutoCAD's crosshair is two lines that
+   meet, which is fine at CURSORSIZE 100 because the meeting point is nowhere
+   near the ends — but at short arms two crossing lines are a blob drawn on top
+   of the one thing a cursor exists to point at. Drafting programs that are not
+   AutoCAD leave a gap for exactly that reason. CURSORSIZE 100 and CURSORGAP 0
+   give the classic back. */
+const CROSS_PCT = 4;         /* crosshair arms, % of viewport */
+const CROSS_GAP = 5;         /* the hole at the centre, screen px */
 const PICK_PX = 10;          /* pick aperture, screen px */
 function crosshairPct() {
   const v = +ST.crossLen;
   return (isFinite(v) && v > 0) ? Math.max(1, Math.min(100, v)) : CROSS_PCT;
+}
+/** 0 is a setting, not an absence — it asks for the crossing lines — so only
+    null/undefined and nonsense fall through to the default. */
+function crosshairGap() {
+  const v = +ST.crossGap;
+  return (ST.crossGap != null && isFinite(v) && v >= 0) ? Math.min(v, 60) : CROSS_GAP;
 }
 function pickBoxPx() {
   const v = +ST.pickBox;
