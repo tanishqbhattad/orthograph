@@ -59,74 +59,10 @@ const eq = (what, got, want) =>
   ok(what, JSON.stringify(got) === JSON.stringify(want),
      `got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
 
-/* ---------------- the server under test ---------------- */
-function waitFor(url, tries) {
-  return new Promise((res, rej) => {
-    const go = (n) => http.get(url, r => { r.resume(); res(); })
-      .on('error', () => n <= 0 ? rej(new Error('server never came up')) : setTimeout(() => go(n - 1), 120));
-    go(tries || 60);
-  });
-}
-
-/* ---------------- what the page can be asked ----------------
-   Injected once per page. Everything here is about REACHING the
-   program, never about deciding whether it is right — the
-   assertions stay on this side of the wire. */
-const PAGE_HELPERS = `
-window.OG = {
-  /* a known starting point: no drawing, no recovery offer, light theme */
-  reset() {
-    if (typeof cancelCmd === 'function') cancelCmd();
-    resetDoc(); SEL.clear();
-    setTheme('light');
-    autosaveClear && autosaveClear();
-    fit(); draw();
-    return DOC.ents.size;
-  },
-  /* Put a known point of the model in the middle of the canvas at a known
-     zoom, with the grid and the axes off. A pixel test has to be able to say
-     what it is looking at, and a grid line or the red X axis crossing the
-     sample point answers a different question than the one being asked. */
-  stage(cx, cy, z) {
-    ST.grid = false; VS.ucsIcon = false;
-    V.z = z; V.rot = 0;
-    V.px = V.w / 2 - cx * z;
-    V.py = V.h / 2 + cy * z;
-    shapeCacheClear(); draw();
-  },
-  /* draw() schedules a frame; it does not paint one. Reading the canvas
-     without waiting reads whatever was there before — which looks exactly
-     like a drawing that failed to appear. */
-  settle() {
-    return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-  },
-  /* world -> the pixel in the canvas backing store */
-  px(x, y) {
-    const cv = document.getElementById('cv');
-    const ctx = cv.getContext('2d');
-    const s = w2s([x, y]);
-    const dx = cv.width / (V.w || cv.clientWidth || 1);
-    const dy = cv.height / (V.h || cv.clientHeight || 1);
-    const d = ctx.getImageData(Math.round(s[0] * dx), Math.round(s[1] * dy), 1, 1).data;
-    return [d[0], d[1], d[2], d[3]];
-  },
-  /* world -> a page coordinate the mouse can be sent to, and whether that
-     coordinate is actually on the canvas: a drag that starts off the edge
-     tests nothing and reports the same as a drag that does not work */
-  at(x, y) {
-    const cv = document.getElementById('cv');
-    const b = cv.getBoundingClientRect();
-    const s = w2s([x, y]);
-    const px = b.left + s[0] * (b.width / (V.w || b.width));
-    const py = b.top + s[1] * (b.height / (V.h || b.height));
-    const on = px > b.left + 2 && px < b.right - 2 && py > b.top + 2 && py < b.bottom - 2;
-    return { x: px, y: py, on };
-  },
-  hex(p) { return '#' + p.slice(0, 3).map(v => v.toString(16).padStart(2, '0')).join(''); },
-};
-`;
-
-const hex = (p) => '#' + p.slice(0, 3).map(v => v.toString(16).padStart(2, '0')).join('');
+/* ---------------- the server and the page ----------------
+   Shared with anyone inspecting a build by hand: test/harness.js. */
+const H = require('./harness.js');
+const { waitFor, PAGE_HELPERS, hex } = H;
 
 /* ============================================================
    the scenes
@@ -443,6 +379,18 @@ scene('a wall is drawn in the poche, solid', async (page) => {
   ok('with nothing showing through it', r.body[3] === 255, 'alpha ' + r.body[3]);
   ok('on paper white', hex(r.paper) !== '#525252', hex(r.paper));
 });
+
+/* ------------------------------------------------------------
+   Scenes contributed per piece of work, one file each under
+   test/scenes/, so work done in parallel never edits this file.
+   Each exports ({ scene, ok, eq, hex, path, fs, os }) => void.
+   ------------------------------------------------------------ */
+{
+  const dir = path.join(__dirname, 'scenes');
+  if (fs.existsSync(dir))
+    for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.js')).sort())
+      require(path.join(dir, f))({ scene, ok, eq, hex, path, fs, os });
+}
 
 /* ============================================================
    run them
