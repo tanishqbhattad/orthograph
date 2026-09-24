@@ -327,15 +327,17 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(r.every(n => n.toLowerCase().startsWith('li')), 'prefix matches only, by default');
   });
 
+  /* 'lin', not 'li': LI is LIST's own acad.pgp alias, and an alias typed in
+     full always heads the list — recency orders what comes after it */
   t('a command used recently is offered before one that was not', () => {
     const r = R(SETUP + `
       CLI.mru.length = 0;
-      const cold = acSuggest('li', 10).map(x => x.name);
-      runInput('list'); cancelCmd();
-      const warm = acSuggest('li', 10).map(x => x.name);
+      const cold = acSuggest('lin', 10).map(x => x.name);
+      runInput('linetype'); cancelCmd();
+      const warm = acSuggest('lin', 10).map(x => x.name);
       return {cold, warm};`);
-    eq(r.warm[0], 'LIST', 'the last one used comes to the top: ' + r.warm.join(','));
-    ok(r.cold[0] !== 'LIST', 'and it was not there before');
+    eq(r.warm[0], 'LINETYPE', 'the last one used comes to the top: ' + r.warm.join(','));
+    ok(r.cold[0] !== 'LINETYPE', 'and it was not there before');
   });
 
   t('an alias offers the command it expands to, and names itself', () => {
