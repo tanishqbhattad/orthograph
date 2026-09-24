@@ -2682,16 +2682,33 @@ const PT_MODS = {
   tk: { n: 1, hint: 'Specify temporary OTRACK point', label: 'TEMPORARY TRACK POINT' },
 };
 /** start a point modifier; returns true when one was recognised */
-function startPtMod(name) {
+function startPtMod(name, typed) {
   const m = PT_MODS[name];
   if (!m) return false;
   /* the command's prompt comes back when the modifier has done its work */
-  if (osAtPrompt() && ST.osPrompt == null && typeof PROMPT !== 'undefined') ST.osPrompt = PROMPT.raw;
+  const at = osAtPrompt();
+  if (at && ST.osPrompt == null && typeof PROMPT !== 'undefined') ST.osPrompt = PROMPT.raw;
   ST.ptMod = { mode: name === 'fro' ? 'from' : (name === 'mtp' ? 'm2p' : (name === 'tk' ? 'tt' : name)), pts: [], def: m };
   ST.fromBase = null;
+  /* the history reads the way AutoCAD's does: "Specify first point: from
+     Base point:" typed, "…: _from Base point:" from the menu */
+  if (at) {
+    if (typed) cliAppend(' ' + m.hint + ':');
+    else if (typeof cliPrint === 'function' && typeof CLI !== 'undefined' && CLI.echo)
+      cliPrint(PROMPT.text + ' _' + ST.ptMod.mode + ' ' + m.hint + ':');
+  }
   if (typeof hint === 'function') hint(m.hint);
   if (typeof echo === 'function') echo(m.label);
   return true;
+}
+/** add to the line the command history is showing, as AutoCAD writes a
+    modifier's prompts onto the line that asked for the point */
+function cliAppend(s) {
+  if (typeof CLI === 'undefined' || !CLI || !CLI.echo) return;
+  const L = CLI.lines[CLI.lines.length - 1];
+  if (!L || typeof L.t !== 'string') return;
+  L.t += s;
+  if (typeof renderCli === 'function') renderCli();
 }
 /** feed a point to the pending modifier. Returns the point the *command*
     should receive, or null when the modifier swallowed it. */
@@ -2712,7 +2729,7 @@ function ptModPoint(p) {
     return null;
   }
   if (m.mode === 'm2p') {
-    if (m.pts.length < 2) { if (typeof hint === 'function') hint('Second point of mid'); return null; }
+    if (m.pts.length < 2) { cliAppend(' Second point of mid:'); if (typeof hint === 'function') hint('Second point of mid'); return null; }
     ST.ptMod = null;
     return mid(m.pts[0], m.pts[1]);
   }
@@ -2736,7 +2753,7 @@ function snapStateReset() {
 function snapInputText(s) {
   const k = String(s || '').trim().toLowerCase().replace(/^[._']+/, '');
   if (!k) return false;
-  if (startPtMod(k)) { if (typeof draw === 'function') draw(); return true; }
+  if (startPtMod(k, true)) { if (typeof draw === 'function') draw(); return true; }
   const kind = SNAP_ALIAS[k];
   if (!kind) return false;
   setSnapOverride(kind, true, true);
@@ -2787,8 +2804,7 @@ if (typeof cmdPoint === 'function' && !cmdPoint.__snapTracked) {
       /* the first object of an extended intersection: remember it, ask for the other */
       if (s && (s.k === 'xint1' || s.k === 'xapp1') && s.meta && s.meta.xfirst) {
         ST.xpick = { pc: s.meta.xfirst, kind: one };
-        const L = (typeof CLI !== 'undefined' && CLI) ? CLI.lines[CLI.lines.length - 1] : null;
-        if (L && CLI.echo) { L.t += ' and'; if (typeof renderCli === 'function') renderCli(); }
+        cliAppend(' and');
         osPromptWord('and');
         if (typeof draw === 'function') draw();
         return;

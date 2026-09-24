@@ -94,6 +94,40 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(JSON.stringify(r), '[500,550]');
   });
 
+  t('FROM: a base point, then an offset from it, typed or polar', () => {
+    const r = R(`${SETUP}
+      onlyModes('end');
+      addEnt({t:'line', a:[0,0], b:[400,0]});
+      startCmd('line'); runInput('from');
+      const h1 = last(), p1 = PROMPT.base;
+      pick(398, 2);
+      const p2 = PROMPT.base;
+      runInput('@100,50');
+      const got = CMD.pts[0].slice();
+      runInput('from'); pick(398, 2); runInput('@100<90');
+      return { h1, p1, p2, got, polar: CMD.pts[1] };`);
+    eq(r.h1, 'Specify first point: from Base point:');
+    eq(r.p1, 'Base point');
+    eq(r.p2, '<Offset>');
+    eq(JSON.stringify(r.got), '[500,50]');
+    close(r.polar[0], 400, 1e-9); close(r.polar[1], 100, 1e-9);
+  });
+
+  t('M2P: the point halfway between two picks, each of them snapped', () => {
+    const r = R(`${SETUP}
+      onlyModes('end');
+      addEnt({t:'line', a:[0,0], b:[400,0]});
+      addEnt({t:'line', a:[100,300], b:[500,300]});
+      startCmd('line'); runInput('m2p');
+      const p1 = PROMPT.base;
+      pick(3, 2); const p2 = PROMPT.base;
+      pick(497, 298);
+      return { p1, p2, hist: last(), got: CMD.pts[0] };`);
+    eq(r.p1, 'First point of mid'); eq(r.p2, 'Second point of mid');
+    ok(/m2p First point of mid: Second point of mid:$/.test(r.hist), 'history: ' + r.hist);
+    eq(JSON.stringify(r.got), '[250,150]');
+  });
+
   /* ============================================================ */
   group('A2 the aperture finds the object, the mode finds the point');
 
@@ -206,6 +240,56 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       close((x / 300) ** 2 + (y / 120) ** 2, 1, 1e-12, 'on the ellipse');
       close(p[0], 500 + p[1] / 40, 1e-9, 'on the line');
     }
+  });
+
+  t('an ellipse: nearest, tangent from a point, perpendicular foot and a circle crossing, all on it', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'ellipse', c:[500,400], rx:300, ry:120, rot:0.4});
+      addEnt({t:'circle', c:[780,500], r:90});
+      const E = {c:[500,400], rx:300, ry:120, rot:0.4};
+      const onE = p => { const dx = p[0]-E.c[0], dy = p[1]-E.c[1], c = Math.cos(E.rot), s = Math.sin(E.rot);
+                         const x = dx*c + dy*s, y = -dx*s + dy*c; return (x/E.rx)**2 + (y/E.ry)**2 - 1; };
+      const at0 = t => { const c = Math.cos(E.rot), s = Math.sin(E.rot), x = E.rx*Math.cos(t), y = E.ry*Math.sin(t);
+                         return [E.c[0] + x*c - y*s, E.c[1] + x*s + y*c]; };
+      const out = {};
+      onlyModes('near'); const q = at0(2.0); at(q[0] + 3, q[1] - 2); out.near = ST.snap && ST.snap.p;
+      startCmd('line'); cmdPoint([100, 700]);
+      onlyModes('tan'); ST.osnapOne = 'tan'; ST.osnapOneShot = true;
+      const qt = at0(1.9); at(qt[0], qt[1]); out.tan = ST.snap && ST.snap.p; out.tanK = ST.snap && ST.snap.k;
+      ST.osnapOne = 'perp'; const qp = at0(2.4); at(qp[0], qp[1]); out.perp = ST.snap && ST.snap.p;
+      ST.osnapOne = null; ST.osnapOneShot = false;
+      onlyModes('int');
+      const hits = [];
+      for (let a = 0; a < 6.3; a += 0.05) { const p = [780 + 90*Math.cos(a), 500 + 90*Math.sin(a)]; at(p[0], p[1]); if (ST.snap && ST.snap.k === 'int') hits.push(ST.snap.p); }
+      out.ints = hits;
+      out.res = { near: out.near && onE(out.near), tan: out.tan && onE(out.tan), perp: out.perp && onE(out.perp),
+                  ints: hits.map(p => [onE(p), Math.hypot(p[0]-780, p[1]-500) - 90]) };
+      /* the tangent condition: the ray from the start point is along the ellipse there */
+      if (out.tan) {
+        const dx = out.tan[0]-E.c[0], dy = out.tan[1]-E.c[1], c = Math.cos(E.rot), s = Math.sin(E.rot);
+        const x = dx*c + dy*s, y = -dx*s + dy*c;
+        const nx = x/(E.rx*E.rx), ny = y/(E.ry*E.ry);             /* normal, local */
+        const g = [nx*c - ny*s, nx*s + ny*c];                     /* normal, world */
+        const v = [out.tan[0] - 100, out.tan[1] - 700];
+        out.tanDot = (g[0]*v[0] + g[1]*v[1]) / Math.hypot(...g) / Math.hypot(...v);
+      }
+      if (out.perp) {
+        const dx = out.perp[0]-E.c[0], dy = out.perp[1]-E.c[1], c = Math.cos(E.rot), s = Math.sin(E.rot);
+        const x = dx*c + dy*s, y = -dx*s + dy*c;
+        const tx = -y*E.rx*E.rx, ty = x*E.ry*E.ry;                /* tangent, local (perp to normal) */
+        const g = [tx*c - ty*s, tx*s + ty*c];
+        const v = [out.perp[0] - 100, out.perp[1] - 700];
+        out.perpDot = (g[0]*v[0] + g[1]*v[1]) / Math.hypot(...g) / Math.hypot(...v);
+      }
+      return out;`);
+    ok(r.near, 'nearest'); close(r.res.near, 0, 1e-12, 'nearest is on the ellipse');
+    ok(r.tan, 'tangent'); eq(r.tanK, 'tan');
+    close(r.res.tan, 0, 1e-12, 'tangent point is on the ellipse');
+    close(r.tanDot, 0, 1e-9, 'and the line to it touches rather than crosses');
+    ok(r.perp, 'perpendicular'); close(r.res.perp, 0, 1e-12, 'foot on the ellipse');
+    close(r.perpDot, 0, 1e-9, 'and the line meets it square');
+    ok(r.ints.length >= 2, 'the circle crosses it twice: ' + r.ints.length);
+    for (const [a, b] of r.res.ints) { close(a, 0, 1e-12, 'crossing on the ellipse'); close(b, 0, 1e-9, 'and on the circle'); }
   });
 
   t('a polyline arc span: its midpoint, its centre and a crossing, all exact', () => {
