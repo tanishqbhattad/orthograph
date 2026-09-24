@@ -354,8 +354,13 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       ${AT(4, 3)}`);
     ok(r.n >= 3, 'expected several candidates, got ' + r.n);
     eq(r.kinds[0], 'end');
-    const pri = R(`return (ST.snapCands||[]).map(c=>c.pri);`);
-    for (let i = 1; i < pri.length; i++) ok(pri[i - 1] >= pri[i], 'candidates must be sorted by priority');
+    /* Best first means: everything inside the aperture before the far points
+       of the object under it, and within each tier by score (distance less
+       the priority head start) — the order the winner is chosen in. */
+    const c = R(`return (ST.snapCands||[]).map(c=>({t:c.tier, s:c.score}));`);
+    for (let i = 1; i < c.length; i++)
+      ok(c[i - 1].t < c[i].t || (c[i - 1].t === c[i].t && c[i - 1].s <= c[i].s),
+        'candidates must be in the order the winner is chosen by');
   });
 
   t('cycleSnap steps through the overlapping points and wraps', () => {
