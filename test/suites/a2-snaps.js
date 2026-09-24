@@ -493,6 +493,69 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(r.g, 'centre of area'); close(r.g[0], 500, 1e-9); close(r.g[1], 350, 1e-9);
   });
 
+  t('every kind of object the program draws offers a snap on its own geometry', () => {
+    const r = R(`${SETUP}
+      toggleSnap('all');
+      V.z = 0.1; V.px = 600; V.py = 400;
+      const w = addEnt({t:'wall', a:[-3000,-3000], b:[3000,-3000], wt:'gen100', layer:'A-WALL'});
+      DOC.blocks.KB = { base:[0,0], ents:[{t:'line', a:[0,0], b:[500,0]}, {t:'circle', c:[250,0], r:100}] };
+      const make = {
+        line: {t:'line', a:[0,0], b:[800,0]},
+        arc: {t:'arc', c:[0,0], r:500, a0:0.2, a1:2.5},
+        circle: {t:'circle', c:[0,0], r:400},
+        ellipse: {t:'ellipse', c:[0,0], rx:600, ry:300, rot:0.3},
+        ellarc: {t:'ellipse', c:[0,0], rx:600, ry:300, rot:0.3, a0:0.4, a1:2.2},
+        pline: {t:'pline', pts:[[0,0],[600,0],[600,400]], bulges:[0.5, 0]},
+        spline: {t:'spline', pts:fitSpline([[0,0],[300,200],[600,0],[900,300]], false), fit:[[0,0],[300,200],[600,0],[900,300]]},
+        point: {t:'point', p:[0,0]},
+        text: {t:'text', p:[0,0], s:'NOTE', h:200},
+        mtext: {t:'mtext', p:[0,0], s:'ONE PARAGRAPH', h:200, w:3000},
+        attdef: {t:'attdef', p:[0,0], tag:'TAG', val:'', h:200},
+        dim: {t:'dim', k:'aligned', p1:[0,0], p2:[1000,0], off:300},
+        leader: {t:'leader', pts:[[0,0],[600,600]], s:'NOTE'},
+        hatch: {t:'hatch', loops:[[[0,0],[800,0],[800,600],[0,600]]], pattern:'solid', solid:true},
+        insert: {t:'insert', name:'KB', p:[0,0], rot:0.5, sx:1, sy:1},
+        xline: {t:'xline', a:[0,0], d:[0.6,0.8]},
+        ray: {t:'ray', a:[0,0], d:[0.8,0.6]},
+        column: {t:'column', p:[0,0], w:400, d:400},
+        roundcol: {t:'column', p:[0,0], w:400, shape:'round'},
+        grid: {t:'grid', a:[0,-1000], b:[0,1000], label:'1'},
+        room: {t:'room', pts:[[0,0],[1000,0],[1000,800],[0,800]], name:'ROOM'},
+        stair: {t:'stair', a:[0,0], b:[3000,0], w:1000, risers:16, rise:187},
+        floor: {t:'floor', pts:[[0,0],[2000,0],[2000,1500],[0,1500]], th:-100},
+        table: {t:'table', p:[0,0], rows:[['Mark','Door'],['D-01','Single 900']], kind:'doors'},
+        section: {t:'section', a:[-1000,0], b:[2000,0], dir:1, label:'A'},
+      };
+      const out = {};
+      startCmd('line');
+      for (const [name, def] of Object.entries(make)) {
+        const e = addEnt(Object.assign({ layer: '0' }, def));
+        /* a point actually on what it draws */
+        let q = null;
+        const ss = shapes(e, 24);
+        for (const s of ss) {
+          if (s.pts && s.pts.length > 1) { q = mid(s.pts[0], s.pts[1]); break; }
+          if (s.c && s.r) { const a = s.a0 != null ? s.a0 + ((((s.a1 - s.a0) % TAU) + TAU) % TAU || TAU) / 2 : 1; q = [s.c[0] + s.r * Math.cos(a), s.c[1] + s.r * Math.sin(a)]; break; }
+        }
+        if (!q) { const P = poly(e, 24); q = P.length ? (P.length > 1 ? mid(P[0], P[1]) : P[0]) : (e.p || e.a); }
+        if (e.t === 'xline' || e.t === 'ray') q = [e.a[0] + e.d[0] * 700, e.a[1] + e.d[1] * 700];
+        const s = w2s(q);
+        snapPoint(s[0] + 1, s[1] + 1, [5000, 5000]);
+        out[name] = (ST.snapCands || []).filter(c => c.src === e.id || c.src == null).map(c => c.k).slice(0, 3).join('|') || 'none';
+        eraseEnt(e.id);
+      }
+      /* and a door, which needs a host */
+      const d = addOpening('door', w, 3000, DOC.doorTypes[0].id);
+      const leaf = shapes(d).find(s => s.role === 'leaf');
+      const sd = w2s(mid(leaf.pts[0], leaf.pts[1])); snapPoint(sd[0] + 1, sd[1], null);
+      out.door = (ST.snapCands || []).map(c => c.k).slice(0, 3).join('|') || 'none';
+      cancelCmd();
+      return out;`);
+    const none = Object.keys(r).filter(k => r[k] === 'none');
+    eq(none.join(','), '', 'these offered nothing: ' + JSON.stringify(r));
+    eq(Object.keys(r).length, 26);
+  });
+
   t('an xline: nearest along it, and its midpoint is the point it was drawn through', () => {
     const r = R(`${SETUP}
       addEnt({t:'xline', a:[100,300], d:[1,0]});
