@@ -2038,7 +2038,7 @@ function renderPromptKeys() {
   const base = p.base.replace(/:\s*$/, '');
   if (base) txt(base);
   if (p.keys.length) {
-    txt(base ? ' or [' : '[');
+    txt(base ? (/\?$/.test(base) ? ' [' : ' or [') : '[');
     p.keys.forEach((k, i) => {
       if (i) txt('/');
       const b = el('button', 'kw', kwLabelHTML(k));

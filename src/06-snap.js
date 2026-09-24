@@ -1628,6 +1628,7 @@ function bandCommit(remove) {
     if (P && P.length >= 3) {
       const q = ptsBox(P);
       ST.lastBand = q;                        /* STRETCH reuses the last box */
+      ST.lastBandPoly = P.map(v => v.slice());   /* ...and the shape itself (08-modify) */
     }
   }
   const n = selApply(ids, remove == null ? ST.selMode === 'remove' : remove);

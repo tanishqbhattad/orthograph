@@ -10336,6 +10336,7 @@ function bandCommit(remove) {
     if (P && P.length >= 3) {
       const q = ptsBox(P);
       ST.lastBand = q;                        /* STRETCH reuses the last box */
+      ST.lastBandPoly = P.map(v => v.slice());   /* ...and the shape itself (08-modify) */
     }
   }
   const n = selApply(ids, remove == null ? ST.selMode === 'remove' : remove);
@@ -11333,7 +11334,8 @@ function parsePrompt(s) {
 function promptText(p) {
   if (!p.base && !p.keys.length) return 'Command:';
   let s = p.base || 'Specify option';
-  if (p.keys.length) s += (p.base ? ' or ' : ' ') + '[' + p.keys.map(k => k.word).join('/') + ']';
+  /* a question takes its answers straight after it: "...points? [Yes/No]" */
+  if (p.keys.length) s += (p.base ? (/\?$/.test(p.base) ? ' ' : ' or ') : ' ') + '[' + p.keys.map(k => k.word).join('/') + ']';
   if (p.dflt) s += ' <' + p.dflt + '>';
   return s.replace(/:\s*$/, '') + ':';
 }
@@ -12885,10 +12887,13 @@ function acSuggest(text, limit) {
     let rank = -1;
     if (lo.startsWith(q)) rank = 0;
     else if (mid && lo.indexOf(q) > 0) rank = 2;
-    /* an alias typed in full offers its command straight away */
+    /* An alias typed in full offers its command straight away, and FIRST:
+       S Enter is STRETCH and E Enter is ERASE, as they are in AutoCAD, not
+       whichever command happens to sort ahead of them (SAVE, ELLIPSE). */
     const al = (USERALIAS[q] || ALIAS[q] || '').toUpperCase();
-    if (al && al === c.name) rank = Math.min(rank < 0 ? 9 : rank, 1);
-    if (rank < 0 || seen.has(c.name)) continue;
+    const aliasHit = !!al && al === c.name;
+    if ((rank < 0 && !aliasHit) || seen.has(c.name)) continue;
+    if (aliasHit) rank = -1;
     seen.add(c.name);
     const m = CLI.mru.indexOf(c.name);
     out.push({ name: c.name, kind: c.kind, key: c.key, alias: aliasFor(c.name), rank, mru: m < 0 ? 999 : m });
@@ -13851,8 +13856,12 @@ function opRun(c, label, fn) {
 function opUndo(c) {
   if (!c.ops || !c.ops.length) { cliPrint('Command has been completely undone.'); return false; }
   const seq = c.ops.pop();
-  while (HIST.past.length && HIST.past[HIST.past.length - 1].seq > seq) undoOne(HIST.past, HIST.future, false);
-  SEL.clear(); syncUI(); modRefresh(c);
+  let did = false;
+  while (HIST.past.length && HIST.past[HIST.past.length - 1].seq > seq) { undoOne(HIST.past, HIST.future, false); did = true; }
+  /* nothing of this command is left to take back (a new drawing since, say):
+     leave the selection alone, it belongs to whatever comes next */
+  if (did) { SEL.clear(); syncUI(); }
+  modRefresh(c);
   return true;
 }
 /** Redo the preview for where the cursor is NOW. The engine refreshes it on
@@ -15141,6 +15150,485 @@ defc('join', {
     endCmd(); return true;
   },
 });
+/* ============================================================
+   BREAK and BREAKATPOINT
+   ------------------------------------------------------------
+     Select object:                                  the pick IS the first point
+     Specify second break point or [First point]:    @ breaks at the first point
+
+   A circle loses the part counter-clockwise from the first point
+   to the second and becomes an arc; a closed polyline loses the
+   part from the first to the second along its own direction and
+   stays ONE object; a construction line becomes two rays. Breaking
+   a circle at a single point is refused, as it is in AutoCAD — an
+   arc cannot be a full 360 degrees.
+   ============================================================ */
+function breakPlan(e, p1, p2) {
+  const C = curveOf(e);
+  if (!C) return { err: 'That object cannot be broken' };
+  const t1 = crvNear(C, p1).t, t2 = crvNear(C, p2).t;
+  if (C.closed) {
+    const fwd = t2 >= t1 ? t2 - t1 : t2 + C.n - t1;
+    if (crvLenBetween(C, t1, t1 + fwd) < SLIVER || crvLenBetween(C, t1 + fwd, t1 + C.n) < SLIVER) {
+      if (e.t === 'circle' || e.t === 'ellipse') return { err: 'Arc cannot be full 360 degrees' };
+      const q = crvSub(C, t1, t1 + C.n);                 /* opened where it was picked */
+      return q ? { keep: [q] } : { err: 'That object cannot be broken there' };
+    }
+    const q = crvSub(C, t1 + fwd, t1 + C.n);
+    return { keep: q ? [q] : [], gone: crvSub(C, t1, t1 + fwd) };
+  }
+  const a = Math.min(t1, t2), b = Math.max(t1, t2);
+  const keep = [crvSub(C, 0, a), crvSub(C, b, C.n)].filter(Boolean);
+  if (crvLenBetween(C, a, b) < SLIVER) {
+    if (keep.length < 2) return { err: 'Nothing to break at the end of an object' };
+    return { keep };
+  }
+  return { keep, gone: crvSub(C, a, b) };
+}
+function breakApply(c, e, p1, p2) {
+  const r = breakPlan(e, p1, p2);
+  if (r.err) { cliPrint(r.err + '.', 'err'); return false; }
+  begin(); replaceWith(e, r.keep); commit('Break');
+  return true;
+}
+defc('break', {
+  group: 'modify',
+  objPick: c => !c.e,
+  init(c) { c.e = null; c.p1 = null; c.askFirst = false; SEL.clear(); hint('Select object:'); },
+  text(c, s) {
+    if (!c.e) return false;
+    const k = String(s).trim().toLowerCase();
+    if ((k === 'f' || k === 'first point') && !c.askFirst) { c.askFirst = true; c.p1 = null; hint('Specify first break point:'); return true; }
+    if (k === '@' && c.p1) { breakApply(c, c.e, c.p1, c.p1); endCmd(); return true; }
+    return false;
+  },
+  point(c, p0) {
+    if (!c.e) {
+      const p = rawPick(p0);
+      const e = pickEditable(p);
+      if (!e) return;
+      c.e = e; c.p1 = p; c.pts = [p];
+      SEL.clear(); SEL.add(e.id);
+      hint('Specify second break point or [First point]:');
+      return;
+    }
+    if (c.askFirst && !c.p1) { c.p1 = p0; c.pts = [p0]; hint('Specify second break point:'); return; }
+    breakApply(c, c.e, c.p1, p0);
+    endCmd();
+  },
+  preview(c, p) {
+    if (!c.e || !c.p1) return null;
+    const r = breakPlan(c.e, c.p1, p);
+    return r.gone ? dashPreview(r.gone) : null;
+  },
+  done() { SEL.clear(); },
+});
+defc('breakatpoint', {
+  group: 'modify',
+  objPick: c => !c.e,
+  init(c) { c.e = null; SEL.clear(); hint('Select object:'); },
+  point(c, p0) {
+    if (!c.e) {
+      const e = pickEditable(rawPick(p0));
+      if (!e) return;
+      c.e = e; SEL.clear(); SEL.add(e.id);
+      hint('Specify break point:');
+      return;
+    }
+    breakApply(c, c.e, p0, p0);
+    endCmd();
+  },
+  done() { SEL.clear(); },
+});
+
+/* ============================================================
+   LENGTHEN
+   ------------------------------------------------------------
+     Select an object to measure or [DElta/Percent/Total/DYnamic] <DElta>:
+   Picking reports the length (and an arc's included angle). DElta
+   and Total take a length or, with Angle, an arc's angle; Percent
+   a percentage; DYnamic drags the end. Then the end nearer each
+   pick changes, again and again, until Enter; Undo takes one back.
+   A line runs on straight, an arc round its circle, a polyline
+   along its end segment, straight or curved.
+   ============================================================ */
+const LEN_WORD = { de: 'DElta', p: 'Percent', t: 'Total', dy: 'DYnamic' };
+if (MODSET.lenDeltaA == null) MODSET.lenDeltaA = 0;
+if (MODSET.lenTotalA == null) MODSET.lenTotalA = 1;
+function lenMain(c) { c.stage = 'measure'; c.sub = null; c.e = null; SEL.clear(); hint('Select an object to measure or [DElta/Percent/Total/DYnamic] <' + LEN_WORD[MODSET.lenMode] + '>:'); }
+function lenChange(c) { c.stage = 'change'; c.sub = null; c.e = null; SEL.clear(); hint('Select an object to change or [Undo]:'); }
+function lenReport(e) {
+  const C = curveOf(e);
+  if (!C) return;
+  const L = crvLen(C);
+  if (e.t === 'arc') cliPrint('Current length: ' + fmt(L) + ', included angle: ' + +deg(arcSweep(e)).toFixed(4));
+  else cliPrint('Current length: ' + fmt(L));
+}
+function lenAsk(c, mode) {
+  MODSET.lenMode = mode;
+  if (mode === 'dy') { lenChange(c); return; }
+  const num = (raw, ok) => { const v = parseLen(raw); return isFinite(v) && ok(v) ? v : null; };
+  if (mode === 'de') {
+    const ask = () => hint('Enter delta length or [Angle] <' + fmt(MODSET.lenDelta) + '>:');
+    ask();
+    c.sub = (k, raw) => {
+      if (k === 'a' || k === 'angle') {
+        hint('Enter delta angle <' + +deg(MODSET.lenDeltaA).toFixed(4) + '>:');
+        c.sub = (k2, raw2) => {
+          if (k2 !== '') { const v = parseFloat(raw2); if (!isFinite(v)) return false; MODSET.lenDeltaA = rad(v); }
+          MODSET.lenAngle = true; lenChange(c); return true;
+        };
+        return true;
+      }
+      if (k !== '') { const v = num(raw, () => true); if (v === null) return false; MODSET.lenDelta = v; }
+      MODSET.lenAngle = false; lenChange(c); return true;
+    };
+    return;
+  }
+  if (mode === 'p') {
+    hint('Enter percentage length <' + +MODSET.lenPct.toFixed(4) + '>:');
+    c.sub = (k, raw) => {
+      if (k !== '') { const v = parseFloat(raw); if (!(v > 0)) { cliPrint('Requires a positive value.', 'err'); return true; } MODSET.lenPct = v; }
+      lenChange(c); return true;
+    };
+    return;
+  }
+  hint('Specify total length or [Angle] <' + fmt(MODSET.lenTotal) + '>:');
+  c.sub = (k, raw) => {
+    if (k === 'a' || k === 'angle') {
+      hint('Specify total angle <' + +deg(MODSET.lenTotalA).toFixed(4) + '>:');
+      c.sub = (k2, raw2) => {
+        if (k2 !== '') { const v = parseFloat(raw2); if (!(v > 0 && v < 360)) { cliPrint('Requires an angle between 0 and 360.', 'err'); return true; } MODSET.lenTotalA = rad(v); }
+        MODSET.lenAngle = true; lenChange(c); return true;
+      };
+      return true;
+    }
+    if (k !== '') { const v = num(raw, x => x > 0); if (v === null) { cliPrint('Requires a positive length.', 'err'); return true; } MODSET.lenTotal = v; }
+    MODSET.lenAngle = false; lenChange(c); return true;
+  };
+}
+/** the object lengthened (or shortened) to `target` at the chosen end */
+function lenTo(C, atEnd, target) {
+  const L = crvLen(C), n = C.n, e = C.e;
+  if (!(target > SLIVER)) return { err: 'The result would have no length' };
+  if (Math.abs(target - L) < 1e-12) return { ent: null };
+  if (target < L) {
+    const t = crvAtLen(C, atEnd ? target : L - target);
+    return { ent: atEnd ? crvSub(C, 0, t) : crvSub(C, t, n) };
+  }
+  if (e.t === 'ellipse') {
+    const E = C.ell, rest = TAU - Math.abs(E.sw), dir = E.sw < 0 ? -1 : 1;
+    const from = atEnd ? E.th0 + E.sw : E.th0, go = atEnd ? dir : -dir;
+    const G = curveOf(Object.assign({}, e, { id: undefined, a0: from, a1: from + go * rest }));
+    if (target - L >= crvLen(G) - SLIVER) return { err: 'That would close the ellipse on itself' };
+    const th = from + go * rest * crvAtLen(G, target - L) / G.ell.N;
+    const out = clone(e); delete out.id;
+    let a = atEnd ? E.th0 : th, b = atEnd ? th : E.th0 + E.sw;
+    if (b < a) { const k = a; a = b; b = k; }
+    out.a0 = wrap(a); out.a1 = out.a0 + (b - a);
+    return { ent: out };
+  }
+  const s = C.segs[atEnd ? n - 1 : 0];
+  const du = (target - L) / sgLen(s);
+  if (s.k === 'a' && Math.abs(s.sw) * (1 + du) >= TAU - 1e-9) return { err: 'That would close the arc on itself' };
+  return { ent: atEnd ? crvSub(C, 0, n + du) : crvSub(C, -du, n) };
+}
+function lenPlan(e, pick) {
+  const C = curveOf(e);
+  if (!C || C.closed || e.t === 'xline' || e.t === 'ray') return { err: 'That object has no end to lengthen' };
+  const L = crvLen(C);
+  const atEnd = crvLenTo(C, crvNear(C, pick).t) >= L / 2;
+  const s = C.segs[atEnd ? C.n - 1 : 0];
+  let target;
+  const m = MODSET.lenMode;
+  if ((m === 'de' || m === 't') && MODSET.lenAngle) {
+    if (s.k !== 'a') return { err: 'The Angle option lengthens arcs; that end is straight' };
+    target = m === 'de' ? L + MODSET.lenDeltaA * s.r : L - sgLen(s) + MODSET.lenTotalA * s.r;
+  } else if (m === 'de') target = L + MODSET.lenDelta;
+  else if (m === 'p') target = L * MODSET.lenPct / 100;
+  else target = MODSET.lenTotal;
+  return Object.assign(lenTo(C, atEnd, target), { C, atEnd });
+}
+/** DYnamic: the chosen end follows the cursor along the end segment */
+function lenDynamic(c, p) {
+  const C = curveOf(c.e);
+  if (!C) return null;
+  const n = C.n, s = C.segs[c.atEnd ? n - 1 : 0];
+  let u = sgU(s, p);
+  if (s.k === 'a' && !c.atEnd && u > 1) u -= TAU / Math.abs(s.sw);
+  if (c.atEnd) { const t = n - 1 + u; return t > 1e-9 ? crvSub(C, 0, t) : null; }
+  return u < n - 1e-9 ? crvSub(C, u, n) : null;
+}
+defc('lengthen', {
+  group: 'modify',
+  objPick: c => c.stage === 'measure' || c.stage === 'change',
+  init(c) { c.ops = []; lenMain(c); },
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (c.sub) return c.sub(k, s);
+    if (c.stage === 'measure') {
+      if (k === 'de' || k === 'delta') { lenAsk(c, 'de'); return true; }
+      if (k === 'p' || k === 'percent') { lenAsk(c, 'p'); return true; }
+      if (k === 't' || k === 'total') { lenAsk(c, 't'); return true; }
+      if (k === 'dy' || k === 'dynamic') { lenAsk(c, 'dy'); return true; }
+    }
+    if (c.stage === 'change' && (k === 'u' || k === 'undo')) { opUndo(c); return true; }
+    return false;
+  },
+  point(c, p0) {
+    if (c.stage === 'dyn') {
+      const n = lenDynamic(c, p0);
+      if (!n) { cliPrint('That would leave nothing of it.', 'err'); return; }
+      opRun(c, 'Lengthen', () => replaceWith(c.e, [n]));
+      lenChange(c); modRefresh(c); return;
+    }
+    const p = rawPick(p0);
+    const e = pickEditable(p);
+    if (!e) return;
+    if (c.stage === 'measure') { lenReport(e); return; }
+    if (MODSET.lenMode === 'dy') {
+      const C = curveOf(e);
+      if (!C || C.closed || e.t === 'xline' || e.t === 'ray') { cliPrint('That object has no end to lengthen.', 'err'); return; }
+      c.e = e; c.atEnd = crvLenTo(C, crvNear(C, p).t) >= crvLen(C) / 2;
+      c.pts = [crvPt(C, c.atEnd ? C.n : 0)];
+      SEL.clear(); SEL.add(e.id);
+      c.stage = 'dyn'; hint('Specify new end point:');
+      return;
+    }
+    const r = lenPlan(e, p);
+    if (r.err) { cliPrint(r.err + '.', 'err'); return; }
+    if (r.ent) opRun(c, 'Lengthen', () => replaceWith(e, [r.ent]));
+    modRefresh(c);
+  },
+  enter(c) {
+    if (c.sub) { c.sub('', ''); return; }
+    if (c.stage === 'measure') { lenAsk(c, MODSET.lenMode); return; }   /* the default option */
+    if (c.stage === 'dyn') { lenChange(c); return; }
+    endCmd();
+  },
+  preview(c, p) {
+    if (c.stage === 'dyn' && c.e) { const n = lenDynamic(c, p); return n ? [n] : null; }
+    if (c.stage !== 'change') return null;
+    const e = pickEditable(rawPick(p));
+    if (!e) return null;
+    let r; try { r = lenPlan(e, rawPick(p)); } catch (err) { return null; }
+    return r && r.ent ? [r.ent] : null;
+  },
+  done() { SEL.clear(); },
+});
+
+/* ============================================================
+   STRETCH
+   ------------------------------------------------------------
+     Select objects to stretch by crossing-window or crossing-polygon...
+     Specify base point or [Displacement] <Displacement>:
+     Specify second point or <use first point as displacement>:
+
+   What moves is decided by the last crossing window or polygon:
+   the vertices and ends inside it move, the ones outside stay. An
+   object wholly inside moves whole. A circle, text or block moves
+   if its centre or insertion point is inside. An arc keeps the
+   height of its bulge, so a stretched arc stays the same shape of
+   curve rather than blowing up. An object selected some other way
+   that the window does not touch moves whole, as AutoCAD's does.
+   ============================================================ */
+function stretchWindow() {
+  if (Array.isArray(ST.lastBandPoly) && ST.lastBandPoly.length >= 3) return ST.lastBandPoly;
+  const b = ST.lastBand;
+  return b ? [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]] : null;
+}
+function inRing(p, W) { return !W || pointInPoly(p, W); }
+/** stretch one object (in place) by d, moving what lies inside W */
+function stretchOne(e, W, d) {
+  const mv = p => [p[0] + d[0], p[1] + d[1]];
+  const all = () => xf(e, T.move(d));
+  const pts = (() => {
+    switch (e.t) {
+      case 'line': return [e.a, e.b];
+      case 'arc': return [arcPt(e, 0), arcPt(e, 1)];
+      case 'pline': case 'leader': return e.pts;
+      case 'spline': return e.fit && e.fit.length ? e.fit : e.pts;
+      case 'circle': case 'ellipse': return [e.c];
+      case 'point': case 'text': case 'mtext': case 'insert': case 'attdef': return [e.p];
+      case 'xline': case 'ray': return [e.a];
+      case 'dim': return [e.p1, e.p2, e.p3].filter(Boolean);
+      case 'hatch': return (e.loops || []).flat();
+      default: return null;
+    }
+  })();
+  if (!pts) {
+    /* an architectural object: by its grips, as it always has been */
+    const gs = gripsOf(e), move = new Set();
+    gs.forEach(g => { if (inRing(g.p, W)) move.add(g.k); });
+    if (!W || move.size === gs.length) { all(); return; }
+    if (!move.size) return;
+    if (e.t === 'wall' || e.t === 'stair') {
+      if (move.has('a')) e.a = mv(e.a);
+      if (move.has('b')) e.b = mv(e.b);
+    } else if (e.pts) {
+      for (let i = 0; i < e.pts.length; i++) if (move.has('p' + i)) e.pts[i] = mv(e.pts[i]);
+    } else all();
+    return;
+  }
+  const inside = pts.map(p => inRing(p, W));
+  const nIn = inside.filter(Boolean).length;
+  if (!W || nIn === pts.length) { all(); return; }
+  if (!nIn) {
+    /* picked some other way and nowhere near the window: it moves whole */
+    const b = bbox(e);
+    if (!crossWindowRing(e, W, b)) all();
+    return;
+  }
+  if (e.t === 'circle' || e.t === 'ellipse' || e.t === 'point' || e.t === 'text' || e.t === 'mtext' ||
+      e.t === 'insert' || e.t === 'attdef' || e.t === 'xline' || e.t === 'ray' || e.t === 'hatch') return;
+  switch (e.t) {
+    case 'line': if (inside[0]) e.a = mv(e.a); if (inside[1]) e.b = mv(e.b); return;
+    case 'arc': {
+      const S = arcPt(e, 0), E = arcPt(e, 1);
+      const b = Math.tan(arcSweep(e) / 4), h = b * dist(S, E) / 2;      /* the bulge height is kept */
+      const S2 = inside[0] ? mv(S) : S, E2 = inside[1] ? mv(E) : E;
+      const L2 = dist(S2, E2);
+      if (!(L2 > SLIVER)) return;
+      const A = bulgeArc(S2, E2, 2 * h / L2);
+      if (A) { e.c = A.c; e.r = A.r; e.a0 = A.a0; e.a1 = A.a1; }
+      return;
+    }
+    case 'pline': case 'leader':
+      for (let i = 0; i < e.pts.length; i++) if (inside[i]) e.pts[i] = mv(e.pts[i]);
+      return;
+    case 'spline':
+      if (e.fit && e.fit.length) {
+        e.fit = e.fit.map((p, i) => inside[i] ? mv(p) : p);
+        e.pts = e.fit.length > 2 ? fitSpline(e.fit, !!e.closed) : e.fit.slice();
+      } else e.pts = e.pts.map((p, i) => inside[i] ? mv(p) : p);
+      return;
+    case 'dim':
+      if (inRing(e.p1, W)) e.p1 = mv(e.p1);
+      if (inRing(e.p2, W)) e.p2 = mv(e.p2);
+      if (e.p3 && inRing(e.p3, W)) e.p3 = mv(e.p3);
+      return;
+  }
+}
+/** does an object's outline cross the ring? */
+function crossWindowRing(e, W, b) {
+  const R = ptsBox(W);
+  if (b && !boxMeet(b, R, 0)) return false;
+  const C = curveOf(e);
+  if (!C) return true;
+  return crvHits(C, curveOf({ t: 'pline', pts: W, closed: true }), null, null).length > 0;
+}
+function stretchApply(c, d) {
+  const W = c.win;
+  opRun(c, 'Stretch', () => { for (const e of selEnts()) { mut(e); stretchOne(e, W, d); } });
+  endCmd();
+}
+defc('stretch', {
+  needSel: true, group: 'modify',
+  selHint: 'Select objects to stretch by crossing-window or crossing-polygon...',
+  init(c) {
+    c.win = stretchWindow(); c.base = null; c.disp = false; c.pts = []; c.ops = [];
+    hint('Specify base point or [Displacement] <Displacement>:');
+  },
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (!c.base && !c.disp && (k === 'd' || k === 'displacement')) { c.disp = true; hint('Specify displacement <0.0000, 0.0000>:'); return true; }
+    return false;
+  },
+  point(c, p) {
+    if (c.disp) { stretchApply(c, p); return; }
+    if (!c.base) { c.base = p; c.pts = [p]; hint('Specify second point or <use first point as displacement>:'); return; }
+    stretchApply(c, sub(p, c.base));
+  },
+  enter(c) {
+    if (c.base) { stretchApply(c, c.base); return; }       /* the first point is the displacement */
+    if (!c.disp) { c.disp = true; hint('Specify displacement <0.0000, 0.0000>:'); return; }
+    endCmd();
+  },
+  preview(c, p) {
+    if (!c.base) return null;
+    const d = sub(p, c.base), W = c.win;
+    return selEnts().map(e => { const n = clone(e); delete n.id; stretchOne(n, W, d); return n; });
+  },
+});
+
+/* ============================================================
+   ALIGN
+   ------------------------------------------------------------
+     Specify first source point:  /  first destination point:
+     Specify second source point or <continue>:
+     Specify second destination point:
+     Specify third source point or <continue>:
+     Scale objects based on alignment points? [Yes/No] <N>:
+   One pair moves; two pairs move and turn, and scale only if asked.
+   ============================================================ */
+const ALIGN_ASK = ['Specify first source point:', 'Specify first destination point:',
+  'Specify second source point or <continue>:', 'Specify second destination point:',
+  'Specify third source point or <continue>:', 'Specify third destination point:'];
+function alignXform(pts, doScale) {
+  const [s1, d1, s2, d2] = pts;
+  if (!s2 || !d2) return p => [p[0] + d1[0] - s1[0], p[1] + d1[1] - s1[1]];
+  const a = ang(s1, s2), b = ang(d1, d2);
+  const ls = dist(s1, s2), ld = dist(d1, d2);
+  const k = doScale && ls > 1e-9 ? ld / ls : 1;
+  const t = b - a, cs = Math.cos(t), sn = Math.sin(t);
+  return p => {
+    const q = [(p[0] - s1[0]) * k, (p[1] - s1[1]) * k];
+    return [d1[0] + q[0] * cs - q[1] * sn, d1[1] + q[0] * sn + q[1] * cs];
+  };
+}
+/* The turn and move land as soon as the second destination is given, so what
+   is asked next is asked of the result; Yes to scaling adds the scale in the
+   same command, and cancelling takes the lot back, as Esc does in AutoCAD. */
+function alignApply(c, doScale) {
+  const f = alignXform(c.pts, doScale);
+  opRun(c, 'Align', () => selEnts().forEach(e => xf(e, f)));
+}
+function alignFinish(c, scale) {
+  if (scale) {
+    const [s1, d1, s2, d2] = c.pts, ls = dist(s1, s2);
+    if (ls > 1e-9) opRun(c, 'Align', () => selEnts().forEach(e => xf(e, T.scale(d1, dist(d1, d2) / ls))));
+  }
+  c.finished = true;
+  endCmd();
+}
+defc('align', {
+  needSel: true, group: 'modify',
+  init(c) { c.pts = []; c.ops = []; c.src = selEnts().map(clone); c.ask = false; c.finished = false; hint(ALIGN_ASK[0]); },
+  text(c, s) {
+    if (!c.ask) return false;
+    const k = String(s).trim().toLowerCase();
+    if (k === 'y' || k === 'yes') { alignFinish(c, true); return true; }
+    if (k === 'n' || k === 'no') { alignFinish(c, false); return true; }
+    return false;
+  },
+  point(c, p) {
+    if (c.ask) return;
+    c.pts.push(p);
+    const n = c.pts.length;
+    if (n === 4) alignApply(c, false);
+    if (n < 6) { hint(ALIGN_ASK[n]); return; }
+    /* a third pair only fixes a plane in 3D; in plan the first two decide */
+    alignFinish(c, false);
+  },
+  enter(c) {
+    if (c.ask) { alignFinish(c, false); return; }
+    const n = c.pts.length;
+    if (n === 2) { alignApply(c, false); alignFinish(c, false); return; }
+    if (n === 4) { c.ask = true; hint('Scale objects based on alignment points? [Yes/No] <N>:'); return; }
+    endCmd();
+  },
+  preview(c, p) {
+    const n = c.pts.length;
+    if (c.ask || !(n === 1 || n === 3)) return null;
+    const f = alignXform(n === 1 ? [c.pts[0], p] : [...c.pts, p], false);
+    ST.tracks = [[c.pts[n - 1], p]];
+    return (c.src || []).map(e => { const q = clone(e); delete q.id; return xf(q, f); });
+  },
+  done(c) {
+    /* abandoned before it was answered: nothing happened */
+    if (!c.finished) while (c.ops && c.ops.length) opUndo(c);
+  },
+});
 /** consecutive pairs of a point run, for drawing a path as it is built */
 function pairs(pts) {
   const out = [];
@@ -15151,103 +15639,10 @@ function pairs(pts) {
 function boxFence(p0, p1) {
   return [[p0[0], p0[1]], [p1[0], p0[1]], [p1[0], p1[1]], [p0[0], p1[1]]];
 }
-defc('lengthen', {
-  group: 'modify', hint: 'Type <em>DE</em> delta, <em>T</em> total, <em>P</em> percent — then pick an object end',
-  init: c => { c.mode = 'de'; c.val = null; },
-  text(c, s) {
-    let m = s.match(/^(de|t|p)\s*(.*)$/i);
-    if (m) { c.mode = m[1].toLowerCase(); if (m[2]) { c.val = c.mode === 'p' ? parseFloat(m[2]) : parseLen(m[2]); } hint('Pick the end to change'); return true; }
-    const v = c.mode === 'p' ? parseFloat(s) : parseLen(s);
-    if (!isNaN(v)) { c.val = v; hint('Pick the end to change'); return true; }
-    return false;
-  },
-  point(c, p) {
-    if (c.val == null) return echo('Give a value first');
-    const e = pickAt(p, 10, x => x.t === 'line' || x.t === 'arc'); if (!e) return;
-    const opts = c.mode === 'de' ? { delta: c.val } : c.mode === 't' ? { total: c.val } : { pct: c.val };
-    const n = lengthenTo(e, p, opts);
-    if (!n) return echo('Cannot lengthen that');
-    begin(); mut(e); Object.assign(e, n); commit('Lengthen');
-  },
-});
 defc('erase', {
   needSel: true, group: 'modify',
   init(c) { begin(); selEnts().forEach(e => eraseEnt(e.id)); commit('Erase'); endCmd(); },
 });
-defc('stretch', {
-  needSel: true, group: 'modify',
-  selHint: 'Drag a <em>crossing</em> window (right→left) over the parts to stretch, then <em>Enter</em>',
-  hint: 'Base point', init: c => { c.pts = []; c.box = ST.lastBand || null; },
-  point(c, p) {
-    c.pts.push(p);
-    if (c.pts.length === 2) {
-      const d = sub(c.pts[1], c.pts[0]);
-      begin(); stretchSel(c.box, d); commit('Stretch'); endCmd();
-    } else hint('Second point or type <em>@dx,dy</em>');
-  },
-  preview(c, p) {
-    if (c.pts.length !== 1) return null;
-    const d = sub(p, c.pts[0]);
-    const out = [];
-    for (const e of selEnts()) { const n = clone(e); stretchOne(n, c.box, d); out.push(n); }
-    return out;
-  },
-});
-function inBox(p, b) { return b ? (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) : true; }
-function stretchOne(e, box, d) {
-  const gs = gripsOf(e);
-  const move = new Set();
-  gs.forEach((g, i) => { if (inBox(g.p, box)) move.add(g.k); });
-  if (!box || move.size === gs.length) { xf(e, T.move(d)); return; }
-  if (!move.size) return;
-  const mv = p => add(p, d);
-  if (e.t === 'line') { if (move.has('a')) e.a = mv(e.a); if (move.has('b')) e.b = mv(e.b); }
-  else if (e.t === 'wall') { if (move.has('a')) e.a = mv(e.a); if (move.has('b')) e.b = mv(e.b); }
-  else if (e.t === 'stair') { if (move.has('a')) e.a = mv(e.a); if (move.has('b')) e.b = mv(e.b); }
-  else if (e.t === 'pline' || e.t === 'spline' || e.t === 'room') {
-    const P = e.pts;
-    for (let i = 0; i < P.length; i++) if (move.has('p' + i)) P[i] = mv(P[i]);
-  }
-  else xf(e, T.move(d));
-}
-function stretchSel(box, d) { selEnts().forEach(e => { mut(e); stretchOne(e, box, d); }); }
-
-defc('align', {
-  needSel: true, group: 'modify', hint: 'First source point', init: c => c.pts = [],
-  point(c, p) {
-    c.pts.push(p);
-    const n = c.pts.length;
-    if (n === 1) { c.src = selEnts().map(clone); hint('First destination point'); }
-    else if (n === 2) hint('Second source point');
-    else if (n === 3) hint('Second destination point · <em>Enter</em> to skip scaling');
-    else if (n === 4) { begin(); doAlign(c, true); commit('Align'); endCmd(); }
-  },
-  enter(c) {
-    if (c.pts.length === 2) { begin(); selEnts().forEach(e => xf(e, T.move(sub(c.pts[1], c.pts[0])))); commit('Align'); }
-    else if (c.pts.length === 4) { begin(); doAlign(c, false); commit('Align'); }
-    endCmd();
-  },
-  preview(c, p) {
-    if (c.pts.length === 3) { const t = { pts: [...c.pts, p] }; return alignPreview(c, t.pts); }
-    if (c.pts.length === 1) return (c.src || []).map(e => xf(clone(e), T.move(sub(p, c.pts[0]))));
-    return null;
-  },
-});
-function alignXform(pts, doScale) {
-  const [s1, d1, s2, d2] = pts;
-  const a = ang(s1, s2), b = ang(d1, d2);
-  const ls = dist(s1, s2), ld = dist(d1, d2);
-  const k = doScale && ls > 1e-9 ? ld / ls : 1;
-  return p => {
-    let q = sub(p, s1);
-    q = [q[0] * k, q[1] * k];
-    const t = b - a, cs = Math.cos(t), sn = Math.sin(t);
-    return [d1[0] + q[0] * cs - q[1] * sn, d1[1] + q[0] * sn + q[1] * cs];
-  };
-}
-function doAlign(c, doScale) { const f = alignXform(c.pts, doScale); selEnts().forEach(e => xf(e, f)); }
-function alignPreview(c, pts) { const f = alignXform(pts, true); return (c.src || []).map(e => xf(clone(e), f)); }
-
 defc('explode', {
   needSel: true, group: 'modify',
   init(c) {
@@ -15316,32 +15711,6 @@ defc('pedit', {
     else if (k === 'd') { c.e.t = 'pline'; if (c.e.fit) c.e.pts = c.e.fit; }
     else { rollback(); return false; }
     commit('Polyline edit'); draw(); return true;
-  },
-  done() { SEL.clear(); },
-});
-defc('break', {
-  group: 'modify', hint: 'Pick the object, then two break points · <em>F</em> break at one point',
-  init: c => { c.e = null; c.pts = []; },
-  text(c, s) { if (/^f$/i.test(s)) { c.single = true; echo('Break at a single point'); return true; } return false; },
-  point(c, p) {
-    if (!c.e) {
-      const e = pickAt(p, 10, x => !GEOM[x.t]); if (!e) return;
-      c.e = e; SEL.clear(); SEL.add(e.id); hint('First break point'); return;
-    }
-    c.pts.push(p);
-    if (c.single && c.pts.length === 1) c.pts.push(p);
-    if (c.pts.length === 2) {
-      let t0 = paramOf(c.e, c.pts[0]), t1 = paramOf(c.e, c.pts[1]);
-      if (t0 > t1) { const s = t0; t0 = t1; t1 = s; }
-      const e = c.e, meta = { layer: e.layer, color: e.color, lt: e.lt, lw: e.lw };
-      begin();
-      if (e.t === 'circle' && Math.abs(t1 - t0) > 1e-6) addEnt(Object.assign(subEnt(e, t1, t0 + 1), meta));
-      else {
-        if (t0 > 1e-4) addEnt(Object.assign(subEnt(e, 0, t0), meta));
-        if (t1 < 1 - 1e-4) addEnt(Object.assign(subEnt(e, t1, 1), meta));
-      }
-      delEnt(e.id); commit('Break'); endCmd();
-    } else hint('Second break point');
   },
   done() { SEL.clear(); },
 });
@@ -24688,7 +25057,7 @@ function renderPromptKeys() {
   const base = p.base.replace(/:\s*$/, '');
   if (base) txt(base);
   if (p.keys.length) {
-    txt(base ? ' or [' : '[');
+    txt(base ? (/\?$/.test(base) ? ' [' : ' or [') : '[');
     p.keys.forEach((k, i) => {
       if (i) txt('/');
       const b = el('button', 'kw', kwLabelHTML(k));

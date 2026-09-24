@@ -117,6 +117,50 @@ module.exports = ({ scene, ok, eq }) => {
     eq('and without Multiple the command is done', r.running, false);
   });
 
+  scene('STRETCH: a crossing window dragged right to left moves the ends inside it', async (page) => {
+    await page.evaluate(() => {
+      OG.reset();
+      begin();
+      addEnt({ t: 'pline', pts: [[0, 0], [3000, 0], [3000, 2000], [0, 2000]], closed: true });
+      commit('box');
+      OG.stage(1800, 1000, 0.12);
+    });
+    await command(page, 'S');
+    /* right to left over the right-hand side: a crossing */
+    const a = await at(page, 3600, 2500), b = await at(page, 2500, -500);
+    await page.mouse.move(a.x, a.y);
+    await page.mouse.down();
+    await page.mouse.move(b.x, b.y, { steps: 6 });
+    await page.mouse.up();
+    await page.keyboard.press('Enter');
+    await page.evaluate(() => OG.settle());
+    const shown = await page.evaluate(() => PROMPT.text);
+    eq('it asks for the base point, offering Displacement', shown, 'Specify base point or [Displacement] <Displacement>:');
+    const p1 = await at(page, 3000, 1000), p2 = await at(page, 4000, 1000);
+    await page.mouse.click(p1.x, p1.y);
+    await page.mouse.move(p2.x, p2.y, { steps: 4 });
+    await page.mouse.click(p2.x, p2.y);
+    const pts = await page.evaluate(() => [...DOC.ents.values()][0].pts.map(p => p.map(Math.round)));
+    eq('the right-hand corners moved a metre; the left ones stayed', pts, [[0, 0], [4000, 0], [4000, 2000], [0, 2000]]);
+  });
+
+  scene('BREAK: the pick is the first point, the next click the second', async (page) => {
+    await page.evaluate(() => {
+      OG.reset();
+      begin(); addEnt({ t: 'line', a: [0, 0], b: [4000, 0] }); commit('l');
+      OG.stage(2000, 0, 0.15);
+    });
+    await command(page, 'BR');
+    const p1 = await at(page, 1000, 0), p2 = await at(page, 2500, 0);
+    await page.mouse.click(p1.x, p1.y);
+    await page.mouse.move(p2.x, p2.y, { steps: 4 });
+    const pv = await page.evaluate(() => (ST.preview || []).length);
+    ok('the gap about to open is previewed', pv > 0, String(pv));
+    await page.mouse.click(p2.x, p2.y);
+    const r = await page.evaluate(() => [...DOC.ents.values()].map(e => [Math.round(e.a[0]), Math.round(e.b[0])]));
+    eq('two pieces either side of the gap', r, [[0, 1000], [2500, 4000]]);
+  });
+
   scene('TRIM: hovering shows the piece a click would take, with a pick box and no snap', async (page) => {
     await page.evaluate(grid);
     await command(page, 'TR');

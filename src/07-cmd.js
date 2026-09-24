@@ -484,7 +484,8 @@ function parsePrompt(s) {
 function promptText(p) {
   if (!p.base && !p.keys.length) return 'Command:';
   let s = p.base || 'Specify option';
-  if (p.keys.length) s += (p.base ? ' or ' : ' ') + '[' + p.keys.map(k => k.word).join('/') + ']';
+  /* a question takes its answers straight after it: "...points? [Yes/No]" */
+  if (p.keys.length) s += (p.base ? (/\?$/.test(p.base) ? ' ' : ' or ') : ' ') + '[' + p.keys.map(k => k.word).join('/') + ']';
   if (p.dflt) s += ' <' + p.dflt + '>';
   return s.replace(/:\s*$/, '') + ':';
 }
@@ -2036,10 +2037,13 @@ function acSuggest(text, limit) {
     let rank = -1;
     if (lo.startsWith(q)) rank = 0;
     else if (mid && lo.indexOf(q) > 0) rank = 2;
-    /* an alias typed in full offers its command straight away */
+    /* An alias typed in full offers its command straight away, and FIRST:
+       S Enter is STRETCH and E Enter is ERASE, as they are in AutoCAD, not
+       whichever command happens to sort ahead of them (SAVE, ELLIPSE). */
     const al = (USERALIAS[q] || ALIAS[q] || '').toUpperCase();
-    if (al && al === c.name) rank = Math.min(rank < 0 ? 9 : rank, 1);
-    if (rank < 0 || seen.has(c.name)) continue;
+    const aliasHit = !!al && al === c.name;
+    if ((rank < 0 && !aliasHit) || seen.has(c.name)) continue;
+    if (aliasHit) rank = -1;
     seen.add(c.name);
     const m = CLI.mru.indexOf(c.name);
     out.push({ name: c.name, kind: c.kind, key: c.key, alias: aliasFor(c.name), rank, mru: m < 0 ? 999 : m });
