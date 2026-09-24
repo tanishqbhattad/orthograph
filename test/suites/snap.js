@@ -547,24 +547,37 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(r[1] > 100, 'the sweep should have hit plenty of snaps');
   });
 
-  t('a snap never lands outside the aperture', () => {
+  /* AutoCAD's rule, which replaced "never outside the aperture": the aperture
+     finds the OBJECT, and a point outside it is only ever one of that
+     object's own defined points — its end, its middle, its centre. With
+     nearest on, nothing need leave the aperture at all; with it off, a jump
+     is allowed only to such a point, and only from an object the aperture is
+     actually on. Anything else is a snap from nowhere. */
+  t('a snap outside the aperture is only ever a defined point of the object under it', () => {
     const r = R(`${SETUP}
       addEnt({t:'line',a:[0,0],b:[200,0]});
       addEnt({t:'circle',c:[500,500],r:120});
-      let bad = null;
-      for (let sx = 0; sx < 1200; sx += 13) for (let sy = 0; sy < 800; sy += 13) {
-        const raw = s2w(sx, sy);
-        snapPoint(sx, sy, null);
-        if (!ST.snap) continue;
-        if (dist(raw, ST.snap.p) <= px(14) + 1e-9) continue;
-        /* The one sanctioned exception, and it is AutoCAD's: hovering a
-           circle's rim offers its centre. There is nothing to hover at the
-           centre of a big circle, so the reach is the whole point. */
-        if (ST.snap.k === 'cen') continue;
-        bad = [sx, sy, ST.snap.k];
-      }
-      return bad;`);
-    eq(r, null, 'a snap outside the aperture is a jump');
+      const sweep = () => {
+        let bad = null, far = 0;
+        for (let sx = 0; sx < 1200; sx += 13) for (let sy = 0; sy < 800; sy += 13) {
+          const raw = s2w(sx, sy);
+          snapPoint(sx, sy, null);
+          if (!ST.snap) continue;
+          if (dist(raw, ST.snap.p) <= px(10) + 1e-9) continue;
+          far++;
+          const own = ST.snap.k === 'end' || ST.snap.k === 'mid' || ST.snap.k === 'cen';
+          const under = nearEnts(raw, apertureR()).some(h => h.d <= apertureR() + 1e-9);
+          if (!own || !under) bad = [sx, sy, ST.snap.k];
+        }
+        return { bad, far };
+      };
+      const withNear = sweep();
+      ST.osnapOn.near = 0;
+      const without = sweep();
+      return { withNear, without };`);
+    eq(r.withNear.bad, null, 'with nearest on');
+    eq(r.without.bad, null, 'with nearest off');
+    ok(r.without.far > 0, 'and with nearest off the far defined points really are offered');
   });
 
   t('degenerate geometry does not throw', () => {

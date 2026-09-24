@@ -85,6 +85,35 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(JSON.stringify(r.p), '[100,0]');
   });
 
+  t('every override AutoCAD accepts at a point prompt is understood', () => {
+    const r = R(`${SETUP}
+      const words = ['end','mid','cen','gcen','gce','int','app','ext','per','tan','nea','qua','nod','ins','par','non',
+                     '_endp','_mid','_appint','fro','from','m2p','mtp'];
+      const got = {};
+      for (const w of words) {
+        startCmd('line');
+        const handled = cmdText(w);
+        got[w] = handled ? (ST.ptMod ? 'mod:' + ST.ptMod.mode : (ST.osnapOne || '?')) : 'no';
+        cancelCmd();
+      }
+      return got;`);
+    eq(JSON.stringify(r), JSON.stringify({ end: 'end', mid: 'mid', cen: 'cen', gcen: 'gcen', gce: 'gcen', int: 'int',
+      app: 'appint', ext: 'ext', per: 'perp', tan: 'tan', nea: 'near', qua: 'quad', nod: 'node', ins: 'ins', par: 'par',
+      non: 'none', _endp: 'end', _mid: 'mid', _appint: 'appint', fro: 'mod:from', from: 'mod:from', m2p: 'mod:m2p', mtp: 'mod:m2p' }));
+  });
+
+  t('NON: the next point is taken exactly where it is picked, even on an endpoint', () => {
+    const r = R(`${SETUP}
+      onlyModes('end', 'mid');
+      addEnt({t:'line', a:[0,0], b:[400,0]});
+      startCmd('line'); runInput('non');
+      const hist = last();
+      pick(3, 2);
+      return { hist, p: CMD.pts[0] };`);
+    eq(r.hist, 'Specify first point: non');
+    eq(JSON.stringify(r.p), '[3,2]');
+  });
+
   t('QUA, then a click on the rim, takes the nearest quadrant', () => {
     const r = R(`${SETUP}
       addEnt({t:'circle', c:[500,400], r:150});
@@ -308,6 +337,27 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     close(r.x[0], 300, 1e-9); close(r.x[1], 400 - Math.sqrt(30000), 1e-9);
   });
 
+  t('the same snap comes out bit-for-bit the same at any zoom and any view angle', () => {
+    const r = R(`${SETUP}
+      onlyModes('int', 'end', 'mid', 'cen', 'quad');
+      addEnt({t:'arc', c:[400.123,300.456], r:250.789, a0:0.1, a1:3.0});
+      addEnt({t:'line', a:[100.5,380.25], b:[900.75,430.125]});
+      const X = [], views = [[1, 0], [0.5, 0], [37, 0], [1, 0.7], [3.3, -2.1]];
+      let want = null;
+      for (const [z, rot] of views) {
+        V.z = z; V.rot = rot;
+        /* find the crossing once, then put the crosshair a pixel off it */
+        if (!want) { for (let x = 100; x < 900 && !want; x += 0.5) { const s = w2s([x, 380.25 + (x - 100.5) * (49.875 / 800.25)]); snapPoint(s[0], s[1], null); if (ST.snap && ST.snap.k === 'int') want = ST.snap.p; } }
+        const s = w2s(want);
+        snapPoint(s[0] + 1, s[1] - 1, null);
+        X.push(ST.snap && ST.snap.k === 'int' ? ST.snap.p : null);
+      }
+      V.z = 1; V.rot = 0;
+      return { want, X };`);
+    ok(r.want, 'the crossing was found');
+    for (const p of r.X) eq(JSON.stringify(p), JSON.stringify(r.want), 'identical at every zoom and angle');
+  });
+
   t('the geometric centre of a polyline with an arc span is its true centre of area', () => {
     const r = R(`${SETUP}
       onlyModes('gcen');
@@ -375,6 +425,52 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       at(700, 450);
       return { k: ST.snap && ST.snap.k, p: ST.snap && ST.snap.p };`);
     eq(r.k, 'ins'); eq(JSON.stringify(r.p), '[500,400]');
+  });
+
+  t('a door: its insertion point on the wall centreline, and the corners of its reveal', () => {
+    const r = R(`${SETUP}
+      const w = addEnt({t:'wall', a:[0,0], b:[4000,0], wt:'gen100', layer:'A-WALL'});
+      const d = addOpening('door', w, 2000, DOC.doorTypes[0].id);
+      const F = openFrame(d);
+      startCmd('line'); runInput('ins');
+      /* point at the leaf, well away from the wall */
+      const leaf = shapes(d).find(s => s.role === 'leaf');
+      const q = mid(leaf.pts[0], leaf.pts[1]);
+      pick(q[0] + 2, q[1]);
+      const ins = CMD.pts[0].slice();
+      cancelCmd();
+      onlyModes('end');
+      const jamb = shapes(d).find(s => s.role === 'jamb');
+      at(jamb.pts[0][0] + 2, jamb.pts[0][1] + 1);
+      return { ins, c: F.c, jk: ST.snap && ST.snap.k, jp: ST.snap && ST.snap.p, want: jamb.pts[0] };`);
+    eq(JSON.stringify(r.ins), JSON.stringify(r.c), 'INS is the opening centre');
+    eq(r.jk, 'end');
+    close(r.jp[0], r.want[0], 1e-9); close(r.jp[1], r.want[1], 1e-9);
+  });
+
+  t('a window is placed by its insertion point too', () => {
+    const r = R(`${SETUP}
+      const w = addEnt({t:'wall', a:[0,400], b:[4000,400], wt:'gen100', layer:'A-WALL'});
+      const o = addOpening('window', w, 1200, DOC.winTypes[0].id);
+      onlyModes('ins');
+      /* point at a glazing line, away from the centre */
+      const g = shapes(o).find(s => s.role === 'glaz');
+      const q = [g.pts[0][0] * 0.8 + g.pts[1][0] * 0.2, g.pts[0][1] * 0.8 + g.pts[1][1] * 0.2];
+      at(q[0], q[1] + 2);
+      return { k: ST.snap && ST.snap.k, p: ST.snap && ST.snap.p, c: openFrame(o).c };`);
+    eq(r.k, 'ins'); eq(JSON.stringify(r.p), JSON.stringify(r.c));
+  });
+
+  t('a room boundary: its corners, the middle of an edge, its centre of area', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'room', pts:[[100,100],[900,100],[900,600],[100,600]], name:'OFFICE'});
+      onlyModes('end'); at(897, 103); const e = ST.snap && ST.snap.p;
+      onlyModes('mid'); at(600, 103); const m = ST.snap && ST.snap.p;
+      onlyModes('gcen'); at(600, 102); const g = ST.snap && ST.snap.p;
+      return { e, m, g };`);
+    eq(JSON.stringify(r.e), '[900,100]');
+    eq(JSON.stringify(r.m), '[500,100]');
+    ok(r.g, 'centre of area'); close(r.g[0], 500, 1e-9); close(r.g[1], 350, 1e-9);
   });
 
   t('an xline: nearest along it, and its midpoint is the point it was drawn through', () => {
