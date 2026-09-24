@@ -1921,8 +1921,12 @@ function drawSnapAcquired() {
   }
   ctx.restore();
 }
-/** the AutoSnap tooltip: a small boxed label that names the mode, flipped
-    back inside the viewport when the cursor is near an edge */
+/** The AutoSnap tooltip: a small boxed label that names the mode. It sits
+    ABOVE and to the right of the marker, because below and to the right is
+    where the dynamic input fields are — drawn on the canvas under an HTML
+    overlay, the label used to vanish behind them whenever DYN was on. Flipped
+    back inside the viewport near an edge. Paper-coloured and opaque in every
+    theme, so it reads on light and dark alike. */
 function drawSnapTip(x, y, r, text) {
   ctx.save();
   ctx.font = "500 11px 'JetBrains Mono',ui-monospace,monospace";
@@ -1930,14 +1934,14 @@ function drawSnapTip(x, y, r, text) {
   let w = 60;
   try { w = ctx.measureText(text).width; } catch (e) { }
   const padX = 6, h = 18, bw = w + padX * 2, gap = r + 6;
-  let tx = x + gap, ty = y + gap;
+  let tx = x + gap, ty = y - gap - h;
   if (tx + bw > V.w - 2) tx = x - gap - bw;
-  if (ty + h > V.h - 2) ty = y - gap - h;
-  tx = devRound(Math.max(2, tx)); ty = devRound(Math.max(2, ty));
+  if (ty < 2) ty = y + gap + 22;
+  tx = devRound(Math.max(2, tx)); ty = devRound(clamp(ty, 2, Math.max(2, V.h - h - 2)));
   ctx.beginPath();
   roundRectPath(tx, ty, bw, h, 3);
-  ctx.fillStyle = '#0b0e14ee'; ctx.fill();
-  ctx.strokeStyle = CO.snap + '66'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = CO.bg; ctx.fill();
+  ctx.strokeStyle = CO.snap; ctx.lineWidth = 1; ctx.stroke();
   ctx.fillStyle = CO.snap;
   ctx.fillText(text, tx + padX, ty + h / 2 + 0.5);
   ctx.restore();

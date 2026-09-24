@@ -6969,8 +6969,12 @@ function drawSnapAcquired() {
   }
   ctx.restore();
 }
-/** the AutoSnap tooltip: a small boxed label that names the mode, flipped
-    back inside the viewport when the cursor is near an edge */
+/** The AutoSnap tooltip: a small boxed label that names the mode. It sits
+    ABOVE and to the right of the marker, because below and to the right is
+    where the dynamic input fields are — drawn on the canvas under an HTML
+    overlay, the label used to vanish behind them whenever DYN was on. Flipped
+    back inside the viewport near an edge. Paper-coloured and opaque in every
+    theme, so it reads on light and dark alike. */
 function drawSnapTip(x, y, r, text) {
   ctx.save();
   ctx.font = "500 11px 'JetBrains Mono',ui-monospace,monospace";
@@ -6978,14 +6982,14 @@ function drawSnapTip(x, y, r, text) {
   let w = 60;
   try { w = ctx.measureText(text).width; } catch (e) { }
   const padX = 6, h = 18, bw = w + padX * 2, gap = r + 6;
-  let tx = x + gap, ty = y + gap;
+  let tx = x + gap, ty = y - gap - h;
   if (tx + bw > V.w - 2) tx = x - gap - bw;
-  if (ty + h > V.h - 2) ty = y - gap - h;
-  tx = devRound(Math.max(2, tx)); ty = devRound(Math.max(2, ty));
+  if (ty < 2) ty = y + gap + 22;
+  tx = devRound(Math.max(2, tx)); ty = devRound(clamp(ty, 2, Math.max(2, V.h - h - 2)));
   ctx.beginPath();
   roundRectPath(tx, ty, bw, h, 3);
-  ctx.fillStyle = '#0b0e14ee'; ctx.fill();
-  ctx.strokeStyle = CO.snap + '66'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = CO.bg; ctx.fill();
+  ctx.strokeStyle = CO.snap; ctx.lineWidth = 1; ctx.stroke();
   ctx.fillStyle = CO.snap;
   ctx.fillText(text, tx + padX, ty + h / 2 + 0.5);
   ctx.restore();
@@ -8080,9 +8084,16 @@ const SNAP_ALIAS = {
   non: 'none', none: 'none',
   wcen: 'wcen', wface: 'wface',
 };
-/** the list a right-click menu or the settings dialog renders: [{kind,label,on}] */
+/* The Shift+right-click menu is not in the dialog's order: AutoCAD groups it
+   by what the modes do — the ends and middle, then the crossings, then the
+   curve points, then the ones that point at something — and has kept that
+   order for years, so a hand finds Intersection without reading. */
+const SNAP_MENU_ORDER = ['end', 'mid', 'int', 'appint', 'ext', 'cen', 'gcen', 'quad', 'tan',
+  'perp', 'par', 'node', 'ins', 'near', 'wcen', 'wface'];
+/** the list the Shift+right-click menu renders, in AutoCAD's menu order: [{kind,label,on}] */
 function snapMenuItems() {
-  return SNAP_KINDS.map(s => ({ kind: s.k, label: s.label, on: !!ST.osnapOn[s.k] }));
+  return SNAP_MENU_ORDER.map(k => SNAP_TOK[k]).filter(Boolean)
+    .map(s => ({ kind: s.k, label: s.label, on: !!ST.osnapOn[s.k] }));
 }
 /** flip one snap kind; 'all' / 'none' set every kind at once. Returns the new state. */
 function toggleSnap(kind) {
@@ -8107,6 +8118,17 @@ function setOsmode(m) {
   for (const s of SNAP_KINDS) ST.osnapOn[s.k] = (m & s.bit) ? 1 : 0;
   ST.osnap = !(m & OSMODE_OFF);
   return osmode();
+}
+/* The OSMODE system variable speaks AutoCAD's bits only. Somebody typing
+   OSMODE 4133 means AutoCAD's four modes and has never heard of a wall face,
+   so the two Orthograph modes are neither reported nor switched off by it. */
+const OSMODE_ACAD = 0x3fff;
+function osmodeVar() { return osmode() & (OSMODE_ACAD | OSMODE_OFF); }
+function setOsmodeVar(v) {
+  v = v | 0;
+  for (const s of SNAP_KINDS) if (s.bit <= OSMODE_ACAD) ST.osnapOn[s.k] = (v & s.bit) ? 1 : 0;
+  ST.osnap = !(v & OSMODE_OFF);
+  return osmodeVar();
 }
 
 /* ---------------- running vs one-shot ----------------
@@ -10874,20 +10896,16 @@ function varParse(v, s) {
   return v.type === 'int' ? Math.round(n) : n;
 }
 
-/* OSMODE is a bit code and always has been. 64 (insertion), 1024, 2048
-   (apparent intersection) and 8192 (parallel) have no snap in this app, so
-   they round-trip as zero rather than pretending. 16384 suppresses the lot,
-   which is exactly what our osnap toggle does. */
-const OSBITS = [[1, 'end'], [2, 'mid'], [4, 'cen'], [8, 'node'], [16, 'quad'],
-  [32, 'int'], [128, 'perp'], [256, 'tan'], [512, 'near'], [4096, 'ext']];
-
+/* OSMODE is a bit code and always has been. The bit table lives with the
+   snap engine (06-snap: SNAP_KINDS), which is the one place that knows every
+   mode — insertion 64, geometric centre 1024, apparent intersection 2048 and
+   parallel 8192 all exist now, and a second table here had quietly dropped
+   them. 16384 suppresses the lot, which is exactly what our osnap toggle does. */
 defvar('OSMODE', {
   desc: 'Running object snap modes, bit coded',
-  get() { let v = 0; for (const [b, k] of OSBITS) if (ST.osnapOn[k]) v |= b; if (!ST.osnap) v |= 16384; return v; },
+  get() { return osmodeVar(); },
   set(v) {
-    v = v | 0;
-    ST.osnap = !(v & 16384);
-    for (const [b, k] of OSBITS) ST.osnapOn[k] = (v & b) ? 1 : 0;
+    setOsmodeVar(v);
     if (typeof syncToggles === 'function') syncToggles();
     draw();
   },

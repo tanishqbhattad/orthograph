@@ -312,6 +312,64 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
   });
 
   /* ============================================================ */
+  group('A2 markers and the tooltip');
+
+  t('the tooltip sits above the marker, clear of the dynamic input fields below it', () => {
+    const r = R(`${SETUP}
+      const got = [], fills = [];
+      ctx.fillText = (s, x, y) => got.push([s, x, y]);
+      const realFill = ctx.fill;
+      drawSnapTip(600, 400, 6, 'Endpoint');
+      delete ctx.fillText;
+      const sets = ctx.__trace.sets.filter(s => s[0] === 'fillStyle').map(s => s[1]);
+      return { got, bg: CO.bg, lastFills: sets.slice(-2) };`);
+    ok(r.got.length === 1, 'the label was written once');
+    const [s, x, y] = r.got[0];
+    eq(s, 'Endpoint');
+    ok(y < 400 - 6, 'above the marker, got y=' + y);
+    ok(x > 600, 'and to its right, got x=' + x);
+    eq(r.lastFills[0], r.bg, 'on an opaque paper-coloured ground, not a hard-coded near-black');
+  });
+
+  t('every AutoCAD mode has its own marker, and the unfinished ones trail an ellipsis', () => {
+    const r = R(`${SETUP}
+      const kinds = ['end','mid','cen','gcen','node','quad','int','ext','ins','perp','tan','near','appint','par',
+                     'perpd','tand','xint1','xapp1','xint','xapp','extx'];
+      const shapes = {};
+      for (const k of kinds) {
+        const t = ctx.__trace; const n0 = t.pts.length, c0 = (t.counts.rect || 0), a0 = (t.counts.arc || 0);
+        SNAP_GLYPH[k](100, 100, 6);
+        shapes[k] = [t.pts.length - n0, (t.counts.rect || 0) - c0, (t.counts.arc || 0) - a0].join('/');
+      }
+      return shapes;`);
+    const k = Object.keys(r);
+    eq(k.length, 21);
+    ok(r.gcen !== r.cen, 'Geometric Centre is not the circle of Centre: ' + r.gcen + ' vs ' + r.cen);
+    eq(r.gcen, '8/0/0', 'an eight-pointed asterisk: four strokes');
+    ok(r.tand !== r.tan && r.perpd !== r.perp && r.xint1 !== r.int, 'deferred and first-pick marks differ from the finished ones');
+    const rects = s => +s.split('/')[1];
+    eq(rects(r.tand) - rects(r.tan), 3, 'three dots after the tangent mark');
+  });
+
+  t('an acquired extension end carries a small +, and so is drawn', () => {
+    const r = R(`${SETUP}
+      onlyModes('ext');
+      addEnt({t:'line', a:[100,100], b:[400,100]});
+      startCmd('line'); cmdPoint([100, 500]);
+      at(400, 101);                 /* pause over the end: acquired */
+      at(600, 101);                 /* and run on past it */
+      const k = ST.snap && ST.snap.k, tip = ST.snapTip, acq = extAcquired();
+      const t = ctx.__trace; const n0 = t.pts.length;
+      drawSnapAcquired();
+      const plus = t.pts.slice(n0);
+      return { k, tip, acq, plus };`);
+    eq(r.k, 'ext');
+    eq(r.tip, 'Extension: 200 < 0°');
+    eq(JSON.stringify(r.acq), '[[400,100]]');
+    eq(r.plus.length, 4, 'two strokes of a + at the acquired end');
+  });
+
+  /* ============================================================ */
   group('A2 extended intersection');
 
   t('INT on one line, then another: where they would meet if both ran on', () => {
@@ -343,6 +401,25 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       return { a, b };`);
     eq(r.a.gcen, 1); eq(r.a.end, 1); eq(r.a.quad, 0); eq(r.a.os, true);
     eq(r.b.os, false); eq(r.b.back, 16385);
+  });
+
+  t('OSMODE typed at the command line reaches every AutoCAD mode, and leaves the wall modes alone', () => {
+    const r = R(`${SETUP}
+      ST.osnapOn.wface = 1; ST.osnapOn.wcen = 1;
+      runInput('osmode ' + (64 | 1024 | 2048 | 8192));
+      const on = { ins: ST.osnapOn.ins, gcen: ST.osnapOn.gcen, app: ST.osnapOn.appint, par: ST.osnapOn.par,
+                   end: ST.osnapOn.end, wface: ST.osnapOn.wface, wcen: ST.osnapOn.wcen };
+      const v = getvar('OSMODE');
+      runInput('osmode 4133');
+      return { on, v, back: getvar('OSMODE') };`);
+    eq(JSON.stringify(r.on), JSON.stringify({ ins: 1, gcen: 1, app: 1, par: 1, end: 0, wface: 1, wcen: 1 }));
+    eq(r.v, 64 | 1024 | 2048 | 8192, 'and reads back as the number that was typed');
+    eq(r.back, 4133);
+  });
+
+  t('the Shift+right-click menu lists the modes in AutoCAD\'s menu order', () => {
+    const r = R(`${SETUP} return snapMenuItems().map(i => i.kind).join(',');`);
+    eq(r, 'end,mid,int,appint,ext,cen,gcen,quad,tan,perp,par,node,ins,near,wcen,wface');
   });
 
   t('APERTURE is the aperture the snap actually uses', () => {

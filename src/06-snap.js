@@ -241,9 +241,16 @@ const SNAP_ALIAS = {
   non: 'none', none: 'none',
   wcen: 'wcen', wface: 'wface',
 };
-/** the list a right-click menu or the settings dialog renders: [{kind,label,on}] */
+/* The Shift+right-click menu is not in the dialog's order: AutoCAD groups it
+   by what the modes do — the ends and middle, then the crossings, then the
+   curve points, then the ones that point at something — and has kept that
+   order for years, so a hand finds Intersection without reading. */
+const SNAP_MENU_ORDER = ['end', 'mid', 'int', 'appint', 'ext', 'cen', 'gcen', 'quad', 'tan',
+  'perp', 'par', 'node', 'ins', 'near', 'wcen', 'wface'];
+/** the list the Shift+right-click menu renders, in AutoCAD's menu order: [{kind,label,on}] */
 function snapMenuItems() {
-  return SNAP_KINDS.map(s => ({ kind: s.k, label: s.label, on: !!ST.osnapOn[s.k] }));
+  return SNAP_MENU_ORDER.map(k => SNAP_TOK[k]).filter(Boolean)
+    .map(s => ({ kind: s.k, label: s.label, on: !!ST.osnapOn[s.k] }));
 }
 /** flip one snap kind; 'all' / 'none' set every kind at once. Returns the new state. */
 function toggleSnap(kind) {
@@ -268,6 +275,17 @@ function setOsmode(m) {
   for (const s of SNAP_KINDS) ST.osnapOn[s.k] = (m & s.bit) ? 1 : 0;
   ST.osnap = !(m & OSMODE_OFF);
   return osmode();
+}
+/* The OSMODE system variable speaks AutoCAD's bits only. Somebody typing
+   OSMODE 4133 means AutoCAD's four modes and has never heard of a wall face,
+   so the two Orthograph modes are neither reported nor switched off by it. */
+const OSMODE_ACAD = 0x3fff;
+function osmodeVar() { return osmode() & (OSMODE_ACAD | OSMODE_OFF); }
+function setOsmodeVar(v) {
+  v = v | 0;
+  for (const s of SNAP_KINDS) if (s.bit <= OSMODE_ACAD) ST.osnapOn[s.k] = (v & s.bit) ? 1 : 0;
+  ST.osnap = !(v & OSMODE_OFF);
+  return osmodeVar();
 }
 
 /* ---------------- running vs one-shot ----------------

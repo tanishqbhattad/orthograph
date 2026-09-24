@@ -68,20 +68,16 @@ function varParse(v, s) {
   return v.type === 'int' ? Math.round(n) : n;
 }
 
-/* OSMODE is a bit code and always has been. 64 (insertion), 1024, 2048
-   (apparent intersection) and 8192 (parallel) have no snap in this app, so
-   they round-trip as zero rather than pretending. 16384 suppresses the lot,
-   which is exactly what our osnap toggle does. */
-const OSBITS = [[1, 'end'], [2, 'mid'], [4, 'cen'], [8, 'node'], [16, 'quad'],
-  [32, 'int'], [128, 'perp'], [256, 'tan'], [512, 'near'], [4096, 'ext']];
-
+/* OSMODE is a bit code and always has been. The bit table lives with the
+   snap engine (06-snap: SNAP_KINDS), which is the one place that knows every
+   mode — insertion 64, geometric centre 1024, apparent intersection 2048 and
+   parallel 8192 all exist now, and a second table here had quietly dropped
+   them. 16384 suppresses the lot, which is exactly what our osnap toggle does. */
 defvar('OSMODE', {
   desc: 'Running object snap modes, bit coded',
-  get() { let v = 0; for (const [b, k] of OSBITS) if (ST.osnapOn[k]) v |= b; if (!ST.osnap) v |= 16384; return v; },
+  get() { return osmodeVar(); },
   set(v) {
-    v = v | 0;
-    ST.osnap = !(v & 16384);
-    for (const [b, k] of OSBITS) ST.osnapOn[k] = (v & b) ? 1 : 0;
+    setOsmodeVar(v);
     if (typeof syncToggles === 'function') syncToggles();
     draw();
   },
