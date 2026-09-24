@@ -818,8 +818,8 @@ defc('offset', {
    Each object keeps the part the pick was on. Two lines that cross
    have four corners and the one both picks lie in is the one made;
    anything with a curve takes the fillet whose tangent points sit
-   nearest the picks, preferring one that keeps the part picked. A
-   circle is never trimmed. Two parallel lines get the half circle
+   nearest the picks, and each object keeps the part that runs on
+   smoothly from it. A circle is never trimmed. Two parallel lines get the half circle
    that joins them, at the end of the first nearer its pick. Radius
    0 — or a Shift-pick — makes a sharp corner. Two segments of one
    polyline, or a polyline and a line, come out as one polyline.
@@ -850,7 +850,15 @@ function keepFrom(P, T, k) {
   else { const v = norm(sub(T, s.c)); tan = s.sw < 0 ? [v[1], -v[0]] : [-v[1], v[0]]; }
   const fwd = dot(k, tan) > 0;
   let u = sgU(s, T);
-  if (s.k === 'a' && fwd && u > 1 + 1e-9) u -= TAU / Math.abs(s.sw);   /* before the start */
+  if (s.k === 'a' && u > 1 + 1e-9) {
+    /* Off the arc: just past its end, or just before its start — whichever
+       is nearer, never the long way round the circle. Then it must be on the
+       side the object carries on from, or there is nothing left to keep. */
+    const full = TAU / Math.abs(s.sw);
+    const pastEnd = (u - 1) <= (full - u);
+    if (pastEnd === fwd) return { err: TOOBIG };
+    if (!pastEnd) u -= full;
+  }
   if (fwd) {
     if (i !== 0) return { err: 'That polyline segment is not at an end of it' };
     const n = crvSub(C, u, C.n);
@@ -868,12 +876,6 @@ function cornerProps(a, b) {
   if (a.lt === b.lt) o.lt = a.lt;
   if (a.lw === b.lw) o.lw = a.lw;
   return o;
-}
-/** does the kept object still contain the place that was picked? */
-function keepsPick(ent, p) {
-  if (!ent) return true;
-  const C = curveOf(ent);
-  return !!C && crvNear(C, p).d < Math.max(px(12), 1e-6);
 }
 /** half a circle joining two parallel lines, at the end of the first nearer its pick */
 function parallelFit(A, B) {
@@ -922,24 +924,21 @@ function filletPlan(A, B, r) {
   }
   const cands = filletCands(A.s, A.p, B.s, B.p, r);
   if (!cands.length) return { err: 'Radius is too large' };
-  /* The best-placed fillet that can actually be made, preferring one that
-     keeps the part of each object that was picked. Two lines are already in
-     AutoCAD's order; with a curve the order is only by distance, so an arc
-     whose kept part would lose the pick is passed over for one that keeps it. */
-  let best = null, bestRank = -1, err = null;
+  /* Two lines: the corner the picks are in, or nothing — never another one.
+     With a curve: the fillet whose tangent points sit nearest the picks, of
+     those that can be made. Each object then keeps the part that runs on
+     smoothly from its tangent point, which is what makes the corner a fillet
+     rather than a kink — so the pick chooses the fillet, not the part kept. */
   if (lines) {
-    /* two lines: the corner the picks are in, or nothing — never another one */
     const out = cornerFinish(A, B, cands[0]);
     return out.err ? { err: out.err === TOOBIG ? 'Radius is too large' : out.err } : out;
   }
+  let err = null;
   for (const F of cands) {
     const out = cornerFinish(A, B, F);
-    if (out.err) { err = err || out.err; continue; }
-    const rank = (keepsPick(out.A, A.p) ? 1 : 0) + (keepsPick(out.B, B.p) ? 1 : 0);
-    if (rank > bestRank) { best = out; bestRank = rank; }
-    if (rank === 2) break;
+    if (!out.err) return out;
+    err = err || out.err;
   }
-  if (best) return best;
   return { err: err === TOOBIG || !err ? 'Radius is too large' : err };
 }
 /** the two chamfer distances for a pair of lines meeting at angle theta */

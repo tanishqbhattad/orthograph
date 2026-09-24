@@ -93,6 +93,28 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     close(r.bigEnd[1], 1500 - 12000 / 13, 1e-6);
   });
 
+  /* Found driving the real program: two arcs a gap apart, picked on their
+     upper halves, came back as two nearly-whole CIRCLES. A tangent point just
+     outside an arc was reached the long way round. */
+  t('two arcs a gap apart fillet across the gap, and neither grows round its circle', () => {
+    const r = R(`${SETUP}
+      begin();
+      addEnt({t:'arc', c:[0,0], r:1000, a0:-0.5, a1:1.2});
+      addEnt({t:'arc', c:[2200,0], r:1000, a0:1.9, a1:3.6});
+      commit('x');
+      startCmd('fillet'); dispatch('R'); dispatch('300');
+      cmdPoint([1000*Math.cos(0.4), 1000*Math.sin(0.4)]);
+      cmdPoint([2200 + 1000*Math.cos(2.7), 1000*Math.sin(2.7)]);
+      const arcs = ${ents}.filter(e => e.t === 'arc');
+      const f = arcs.find(a => Math.abs(a.r - 300) < 1e-9);
+      const big = arcs.filter(a => Math.abs(a.r - 1000) < 1e-9).map(a => deg(arcSweep(a)));
+      const t1 = f && arcPt(f, 0), t2 = f && arcPt(f, 1);
+      return { c: f && f.c, big, onA: f && Math.abs(dist(t1, [0,0]) - 1000) + Math.abs(dist(t2, [2200,0]) - 1000) };`);
+    eq(JSON.stringify(r.c.map(v => Math.round(v))), '[1100,693]', 'the fillet nearer the picks, over the gap');
+    ok(r.big.every(s => s < 97.5), 'each arc is cut back, not wrapped round: sweeps ' + r.big.map(s => s.toFixed(1)));
+    close(r.onA, 0, 1e-6, 'and the fillet ends on both');
+  });
+
   t('a circle is never trimmed', () => {
     const r = R(`${SETUP}
       begin(); addEnt({t:'line', a:[-3000,0], b:[3000,0]}); addEnt({t:'circle', c:[0,1500], r:1000}); commit('x');
