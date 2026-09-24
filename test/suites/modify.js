@@ -184,12 +184,15 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.ys.join(','), '0,500,500', 'each offset is taken from the object picked');
   });
 
+  /* AutoCAD asks both at the distance prompt, and both stay set until
+     changed; at "Select object to offset" an E means Exit. */
   t('OFFSET Erase removes the source, Layer chooses where it lands', () => {
     const r = R(`${SETUP}
+      MODSET.offErase = false; MODSET.offLayerCur = false;
       addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'});
       const srcId = [...DOC.ents.values()][0].id;
       cancelCmd();
-      startCmd('offset'); dispatch('300'); dispatch('E');
+      startCmd('offset'); dispatch('E'); dispatch('Y'); dispatch('300');
       cmdPoint([2500,0]); cmdPoint([2500,100]);
       endCmd(true);
       const erased = { n: DOC.ents.size, gone: !DOC.ents.get(srcId) };
@@ -199,7 +202,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       addEnt({t:'line', a:[0,0], b:[5000,0], layer:'A-WALL'});
       DOC.cur = '0';
       cancelCmd();
-      startCmd('offset'); dispatch('300'); dispatch('L');
+      startCmd('offset'); dispatch('E'); dispatch('N'); dispatch('L'); dispatch('C'); dispatch('300');
       cmdPoint([2500,0]); cmdPoint([2500,100]);
       endCmd(true);
       const onCur = [...DOC.ents.values()].find(e => e.a[1] !== 0);
@@ -209,7 +212,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       addEnt({t:'line', a:[0,0], b:[5000,0], layer:'A-WALL'});
       DOC.cur = '0';
       cancelCmd();
-      startCmd('offset'); dispatch('300');
+      startCmd('offset'); dispatch('L'); dispatch('S'); dispatch('300');
       cmdPoint([2500,0]); cmdPoint([2500,100]);
       endCmd(true);
       const onSrc = [...DOC.ents.values()].find(e => e.a[1] !== 0);

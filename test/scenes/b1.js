@@ -24,6 +24,9 @@ module.exports = ({ scene, ok, eq }) => {
     await page.evaluate(() => { const c = document.getElementById('cmd'); c && c.focus(); });
     await page.keyboard.type(word);
     await page.keyboard.press('Enter');
+    /* a command that prints a line grows the command line and shrinks the
+       canvas under it: let that land before turning world points into pixels */
+    await page.evaluate(() => OG.settle());
   };
   const at = (page, x, y) => page.evaluate(([x, y]) => OG.at(x, y), [x, y]);
 
@@ -55,6 +58,35 @@ module.exports = ({ scene, ok, eq }) => {
     await page.mouse.click(c.x, c.y);
     const r = await page.evaluate(tops);
     eq('the two stubs the fence crossed are gone, the others stay', r, [2000, 2000, 2500, 2500]);
+    await page.keyboard.press('Escape');
+  });
+
+  scene('OFFSET: the prompt offers its default, and the side is shown before it is clicked', async (page) => {
+    await page.evaluate(() => {
+      OG.reset(); MODSET.offDist = -1;
+      begin();
+      addEnt({ t: 'pline', pts: [[0, 0], [2000, 0], [3000, 1000], [3000, 3000]], bulges: [0, Math.tan(Math.PI / 8), 0] });
+      commit('p');
+      OG.stage(1500, 1500, 0.15);
+    });
+    await command(page, 'O');
+    const shown = await page.evaluate(() => document.getElementById('hint').textContent);
+    eq('the command line reads as AutoCAD\'s does', shown, 'Specify offset distance or [Through/Erase/Layer] <Through>:');
+    await page.keyboard.type('200');
+    await page.keyboard.press('Enter');
+    await page.evaluate(() => OG.settle());
+    const on = await at(page, 1000, 0);
+    await page.mouse.click(on.x, on.y);
+    const side = await at(page, 1000, 600);
+    await page.mouse.move(side.x, side.y, { steps: 4 });
+    const pv = await page.evaluate(() => (ST.preview || []).map(e => e.t + ':' + (e.pts || []).length));
+    eq('the offset is previewed on the side the cursor is on', pv, ['pline:4']);
+    await page.mouse.click(side.x, side.y);
+    const r = await page.evaluate(() => {
+      const o = [...DOC.ents.values()][1];
+      return o && { n: o.pts.length, y: Math.round(o.pts[0][1]), b: +o.bulges[1].toFixed(9) };
+    });
+    eq('and the click makes it: the arc still an arc', r, { n: 4, y: 200, b: +Math.tan(Math.PI / 8).toFixed(9) });
     await page.keyboard.press('Escape');
   });
 

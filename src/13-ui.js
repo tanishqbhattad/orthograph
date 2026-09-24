@@ -2053,7 +2053,7 @@ function renderPromptKeys() {
       n.appendChild(b);
       PROMPT_KW.push(b);
     });
-    txt(']:');
+    txt(p.dflt ? '] <' + p.dflt + '>:' : ']:');
   } else if (!/[.?!:]$/.test(base)) txt(':');
   if (p.extra) txt(' · ' + p.extra);
   n.style.display = '';

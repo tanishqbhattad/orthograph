@@ -165,74 +165,6 @@ defc('mirror', {
     return (c.src || []).map(e => xf(clone(e), T.mirror(c.pts[0], p)));
   },
 });
-defc('offset', {
-  group: 'modify',
-  hint: 'Offset distance · <em>T</em>hrough · <em>M</em>ultiple · <em>E</em>rase source · <em>L</em>ayer',
-  init: c => { c.d = null; c.e = null; c.thru = false;
-               c.multiple = false; c.erase = false; c.layerCur = false; },
-  text(c, s) {
-    const k = String(s).trim().toLowerCase();
-    if (k === 't') { c.thru = true; c.d = 0; hint('Select the object to offset'); return true; }
-    /* Multiple keeps offsetting from the object just made, which is how a run
-       of parallel lines actually gets drawn. */
-    if (k === 'm') { c.multiple = !c.multiple;
-      echo(c.multiple ? 'Multiple: each offset continues from the last' : 'Multiple off'); return true; }
-    if (k === 'e') { c.erase = !c.erase;
-      echo(c.erase ? 'The source will be erased' : 'The source will be kept'); return true; }
-    if (k === 'l') { c.layerCur = !c.layerCur;
-      echo(c.layerCur ? 'Offsets go on the current layer' : 'Offsets keep the source layer'); return true; }
-    if (c.d === null || c.thru === false) {
-      const v = parseLen(s);
-      if (!isNaN(v) && v > 0) { c.d = v; c.thru = false; hint('Select the object to offset'); return true; }
-    }
-    return false;
-  },
-  point(c, p) {
-    if (c.d === null) { echo('Type a distance first'); return; }
-    if (!c.e) {
-      const e = pickAt(p, 10, x => !GEOM[x.t] && x.t !== 'dim' && x.t !== 'text');
-      if (!e) return;
-      c.e = e; SEL.clear(); SEL.add(e.id);
-      hint(c.thru ? 'Through point' : 'Side to offset');
-      return;
-    }
-    const d = c.thru ? entDist(p, c.e) : c.d;
-    const n = offsetEnt(c.e, d, offsetSide(c.e, p));
-    if (!n) { c.e = null; SEL.clear(); hint('Select the object to offset'); return; }
-    begin();
-    /* Layer: AutoCAD's OFFSETLAYER chooses between the source's layer and the
-       current one. Everything else about appearance follows the source, since
-       an offset is meant to be the same kind of line as what it came from. */
-    const meta = c.layerCur
-      ? { layer: DOC.cur, color: c.e.color, lt: c.e.lt, lw: c.e.lw }
-      : { layer: c.e.layer, color: c.e.color, lt: c.e.lt, lw: c.e.lw };
-    const made = addEnt(Object.assign(n, meta));
-    const src = c.e;
-    if (c.erase) { eraseEnt(src.id); }
-    commit('Offset');
-    SEL.clear();
-    if (c.multiple && made) {
-      /* continue from what was just made, so a second click steps out again */
-      c.e = made; SEL.add(made.id);
-      hint('Side to offset again · <em>Enter</em> to stop');
-    } else {
-      c.e = null;
-      hint('Select the object to offset');
-    }
-  },
-  enter(c) {
-    /* Enter finishes a multiple run, or ends the command when idle */
-    if (c.multiple && c.e) { c.e = null; SEL.clear(); hint('Select the object to offset'); return; }
-    endCmd();
-  },
-  preview(c, p) {
-    if (!c.e || c.d === null) return null;
-    const d = c.thru ? entDist(p, c.e) : c.d;
-    const n = offsetEnt(c.e, d, offsetSide(c.e, p));
-    return n ? [Object.assign(n, { layer: c.layerCur ? DOC.cur : c.e.layer })] : null;
-  },
-  done() { SEL.clear(); },
-});
 /* ============================================================
    THE EDITING COMMANDS
    ------------------------------------------------------------
@@ -723,6 +655,152 @@ function trimPreview(c, p0) {
 }
 defc('trim', trimLike(false));
 defc('extend', trimLike(true));
+/* ============================================================
+   OFFSET
+   ------------------------------------------------------------
+     Specify offset distance or [Through/Erase/Layer] <Through>:
+     Select object to offset or [Exit/Undo] <Exit>:
+     Specify point on side to offset or [Exit/Multiple/Undo] <Exit>:
+
+   The distance is remembered (OFFSETDIST, -1 meaning Through) and
+   offered back as the default, and can be shown by two points.
+   Erase and Layer are settings that stay set, as they do in
+   AutoCAD. Multiple keeps offsetting from the object just made,
+   which is how a run of parallel lines is drawn; Enter then goes
+   on to the next object. Undo takes back one offset at a time.
+   ============================================================ */
+function offWord() { return MODSET.offDist < 0 ? 'Through' : fmt(MODSET.offDist); }
+function offAskDist(c) {
+  c.stage = 'dist'; c.p1 = null; c.sub = null;
+  hint('Specify offset distance or [Through/Erase/Layer] <' + offWord() + '>:');
+}
+function offAskObj(c) {
+  c.stage = 'select'; c.src = null; c.multi = !!c.multiArm; SEL.clear();
+  hint('Select object to offset or [Exit/Undo] <Exit>:');
+}
+function offAskSide(c) {
+  c.stage = 'side';
+  const thru = MODSET.offDist < 0;
+  const ask = thru ? 'Specify through point' : 'Specify point on side to offset';
+  hint(ask + (c.multi ? ' or [Exit/Undo] <next object>:' : ' or [Exit/Multiple/Undo] <Exit>:'));
+}
+/** the offsets a click at p would make from the current source */
+function offPlan(c, p) {
+  const src = c.src && DOC.ents.get(c.src.id) ? DOC.ents.get(c.src.id) : c.src;
+  if (!src) return null;
+  const C = curveOf(src);
+  if (!C) return null;
+  const d = MODSET.offDist < 0 ? crvNear(C, p).d : MODSET.offDist;
+  if (!(d > SLIVER)) return null;
+  const made = offsetEnts(src, d, offsetSide(src, p));
+  for (const m of made) if (MODSET.offLayerCur) m.layer = DOC.cur;
+  return { src, made };
+}
+defc('offset', {
+  group: 'modify',
+  objPick: c => c.stage === 'select',
+  init(c) {
+    c.ops = []; c.multiArm = false; c.erased = false;
+    cliPrint('Current settings: Erase source=' + (MODSET.offErase ? 'Yes' : 'No') +
+             '  Layer=' + (MODSET.offLayerCur ? 'Current' : 'Source') +
+             '  OFFSETGAPTYPE=' + (VS.offsetgaptype | 0));
+    offAskDist(c);
+  },
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (c.sub) return c.sub(k);
+    if (c.stage === 'dist') {
+      if (k === 't' || k === 'through') { MODSET.offDist = -1; offAskObj(c); return true; }
+      if (k === 'e' || k === 'erase') {
+        hint('Erase source object after offsetting? [Yes/No] <' + (MODSET.offErase ? 'Yes' : 'No') + '>:');
+        c.sub = a => {
+          if (a === 'y' || a === 'yes') MODSET.offErase = true;
+          else if (a === 'n' || a === 'no') MODSET.offErase = false;
+          else if (a !== '') return false;
+          offAskDist(c); return true;
+        };
+        return true;
+      }
+      if (k === 'l' || k === 'layer') {
+        hint('Enter layer option for offset objects [Current/Source] <' + (MODSET.offLayerCur ? 'Current' : 'Source') + '>:');
+        c.sub = a => {
+          if (a === 'c' || a === 'current') MODSET.offLayerCur = true;
+          else if (a === 's' || a === 'source') MODSET.offLayerCur = false;
+          else if (a !== '') return false;
+          offAskDist(c); return true;
+        };
+        return true;
+      }
+      const v = parseLen(s);
+      if (isFinite(v) && v > 0) { MODSET.offDist = v; offAskObj(c); return true; }
+      if (isFinite(v)) { cliPrint('Value must be positive and nonzero.', 'err'); return true; }
+      return false;
+    }
+    if (k === 'e' || k === 'exit') { endCmd(); return true; }
+    if (k === 'u' || k === 'undo') {
+      if (opUndo(c)) {
+        if (c.stage === 'side' && c.multi && c.chain && c.chain.length) {
+          c.chain.pop();
+          c.src = c.chain.length ? c.chain[c.chain.length - 1] : c.src0;
+        }
+      }
+      return true;
+    }
+    if (k === 'm' || k === 'multiple') {
+      if (c.stage === 'select') { c.multiArm = true; return true; }
+      c.multi = true; offAskSide(c); return true;
+    }
+    return false;
+  },
+  point(c, p0) {
+    if (c.stage === 'dist') {
+      if (!c.p1) { c.p1 = p0; hint('Specify second point:'); return; }
+      const d = dist(c.p1, p0);
+      if (!(d > 0)) { cliPrint('Value must be positive and nonzero.', 'err'); c.p1 = null; return; }
+      MODSET.offDist = d; offAskObj(c); return;
+    }
+    if (c.stage === 'select') {
+      const p = rawPick(p0);
+      const e = pickEditable(p);
+      if (!e) return;
+      c.src = e; c.src0 = e; c.chain = []; c.multi = !!c.multiArm;
+      SEL.clear(); SEL.add(e.id);
+      offAskSide(c); modRefresh(c); return;
+    }
+    if (c.stage === 'side') {
+      const P = offPlan(c, p0);
+      if (!P || !P.made.length) { cliPrint('Cannot offset that object by that distance.', 'err'); return; }
+      const made = opRun(c, 'Offset', () => {
+        const out = P.made.map(m => addEnt(m));
+        if (MODSET.offErase && !c.erased && DOC.ents.get(P.src.id)) { eraseEnt(P.src.id); c.erased = true; }
+        return out;
+      });
+      if (c.multi) {
+        /* the next offset steps out from the one just made */
+        c.src = made[0]; c.chain.push(made[0]);
+        SEL.clear(); SEL.add(made[0].id);
+        offAskSide(c);
+      } else offAskObj(c);
+      modRefresh(c);
+    }
+  },
+  enter(c) {
+    if (c.sub) { c.sub(''); return; }
+    if (c.stage === 'dist') {
+      if (c.p1) { c.p1 = null; offAskDist(c); return; }
+      offAskObj(c); return;                            /* the default: last distance or Through */
+    }
+    if (c.stage === 'side' && c.multi) { offAskObj(c); modRefresh(c); return; }   /* <next object> */
+    endCmd();
+  },
+  preview(c, p) {
+    if (c.stage === 'dist' && c.p1) { ST.tracks = [[c.p1, p]]; return null; }
+    if (c.stage !== 'side') return null;
+    const P = offPlan(c, p);
+    return P ? P.made : null;
+  },
+  done() { SEL.clear(); },
+});
 /** consecutive pairs of a point run, for drawing a path as it is built */
 function pairs(pts) {
   const out = [];
