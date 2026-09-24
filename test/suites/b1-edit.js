@@ -204,6 +204,23 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.b[0], 0.5, 'and the polyline arc keeps its bulge');
   });
 
+  /* A window from some earlier selection is not this STRETCH's window: an
+     object picked at the Select objects prompt, with no crossing drawn there,
+     is moved whole, whatever box happened to be drawn before. */
+  t('a crossing from an earlier selection is not the one STRETCH uses', () => {
+    const r = R(`${SETUP}
+      begin(); const a = addEnt({t:'line', a:[0,0], b:[1000,0]}); commit('x');
+      ST.lastBandPoly = [[900,-100],[1100,-100],[1100,100],[900,100]];   /* stale */
+      startCmd('stretch');
+      const phase = CMD.phase;
+      SEL.add(a.id); cmdEnter();
+      cmdPoint([0, 0]); cmdPoint([0, 500]);
+      const e = DOC.ents.get(a.id);
+      return { phase, a: e.a, b: e.b };`);
+    eq(r.phase, 'sel');
+    eq(JSON.stringify([r.a, r.b]), '[[0,500],[1000,500]]', 'moved whole, not stretched by the old box');
+  });
+
   t('Displacement takes a vector; Enter after a point uses it as the vector', () => {
     const r = R(`${SETUP}
       begin(); const a = addEnt({t:'line', a:[0,0], b:[1000,0]}); commit('x');

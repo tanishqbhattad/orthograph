@@ -113,6 +113,64 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     close(r.end[1], 0, 1e-9);
   });
 
+  group('B1 kernel — tangency, near-parallels and degenerate input');
+
+  const finite = `const fin = o => JSON.stringify(o, (k, v) => typeof v === 'number' && !isFinite(v) ? 'BAD' : v).indexOf('BAD') < 0;`;
+
+  t('a line tangent to a circle cuts it at exactly one point', () => {
+    const r = R(`${SETUP} ${finite}
+      const e = { t:'circle', c:[0,0], r:500, id: 1 };
+      const tan = { t:'line', a:[-900,500], b:[900,500], id: 2 };       /* touches at the top */
+      const sec = { t:'line', a:[200,-900], b:[200,900], id: 3 };
+      const S = trimSplit(e, [curveOf(tan), curveOf(sec)], false);
+      const k = trimAt(e, [500, 0], [tan, sec]);
+      return { cuts: S.ts.length, ok: fin(k), n: k && k.length, t: k && k[0].t };`);
+    eq(r.cuts, 3, 'two where the secant crosses and one where the tangent touches — not two a hair apart');
+    eq(r.ok, true); eq(r.n, 1); eq(r.t, 'arc');
+  });
+
+  t('an extension that just touches a circle reaches the tangent point', () => {
+    const r = R(`${SETUP}
+      const e = { t:'line', a:[-2000,500], b:[-1000,500], id: 1 };
+      const b = { t:'circle', c:[0,0], r:500, id: 2 };
+      const n = extendTo(e, [-1100, 500], [b]);
+      return n && n.b;`);
+    close(r[0], 0, 1e-6); close(r[1], 500, 1e-9);
+  });
+
+  t('lines a thousandth of a degree apart fillet to finite geometry or not at all', () => {
+    const r = R(`${SETUP} ${finite}
+      cancelCmd(); VS.trimmode = 1;
+      begin();
+      addEnt({t:'line', a:[0,0], b:[10000,0]});
+      addEnt({t:'line', a:[0,50], b:[10000, 50 + 10000 * Math.tan(rad(0.001))]});
+      commit('x');
+      startCmd('fillet'); dispatch('R'); dispatch('100');
+      cmdPoint([5000, 0]); cmdPoint([5000, 50]);
+      endCmd(true);
+      return { ok: fin([...DOC.ents.values()]), n: DOC.ents.size };`);
+    eq(r.ok, true, 'no NaN and no Infinity anywhere');
+    ok(r.n === 2 || r.n === 3, 'either the two lines untouched, or two lines and an arc');
+  });
+
+  t('a repeated vertex does not throw a spike or a NaN into an offset', () => {
+    const r = R(`${SETUP} ${finite}
+      const e = { t:'pline', pts:[[0,0],[1000,0],[1000,0],[1000,1000]], id: 1 };
+      const o = offsetEnts(e, 100, offsetSide(e, [500, 500]));
+      return { ok: fin(o), n: o.length, far: Math.max(...o[0].pts.map(p => Math.hypot(p[0] - 1000, p[1]))) };`);
+    eq(r.ok, true); eq(r.n, 1);
+    ok(r.far < 1500, 'the corner stays near the corner: ' + r.far);
+  });
+
+  t('a cutter through a polyline vertex cuts there once, leaving no sliver', () => {
+    const r = R(`${SETUP}
+      const e = { t:'line', a:[0,0], b:[2000,0], id: 1 };
+      const pl = { t:'pline', pts:[[1000,-500],[1000,0],[1500,500]], id: 2 };   /* its vertex is ON the line */
+      const S = trimSplit(e, [curveOf(pl)], false);
+      return S.ts.length;`);
+    eq(r, 1);
+  });
+
   group('B1 kernel — OFFSET the way AutoCAD makes it');
 
   t('an arc segment of a polyline offsets to an arc about the same centre', () => {

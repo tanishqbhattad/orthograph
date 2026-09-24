@@ -1902,11 +1902,25 @@ function stretchApply(c, d) {
   endCmd();
 }
 defc('stretch', {
-  needSel: true, group: 'modify',
-  selHint: 'Select objects to stretch by crossing-window or crossing-polygon...',
+  group: 'modify',
   init(c) {
-    c.win = stretchWindow(); c.base = null; c.disp = false; c.pts = []; c.ops = [];
-    hint('Specify base point or [Displacement] <Displacement>:');
+    if (c.back) { c.back(c); return; }
+    const go = cc => {
+      cc.back = null;
+      if (!SEL.size) { endCmd(); return; }
+      cc.win = stretchWindow(); cc.base = null; cc.disp = false; cc.pts = []; cc.ops = [];
+      hint('Specify base point or [Displacement] <Displacement>:');
+    };
+    /* A selection made beforehand brings its own window. Otherwise the window
+       is the one drawn at THIS prompt — a box left over from some earlier
+       selection says nothing about what should stretch now. */
+    if (SEL.size) { go(c); return; }
+    ST.lastBandPoly = null; ST.lastBand = null;
+    cliPrint('Select objects to stretch by crossing-window or crossing-polygon...');
+    c.phase = 'sel';
+    if (typeof selPromptReset === 'function') selPromptReset();
+    c.back = go;
+    hint('Select objects:');
   },
   text(c, s) {
     const k = String(s).trim().toLowerCase();
