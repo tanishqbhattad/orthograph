@@ -164,6 +164,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     const r = R(`${SETUP}
       onlyModes('end', 'mid');
       addEnt({t:'line', a:[0,0], b:[400,0]});
+      startCmd('line');
       at(90, 2); const k1 = ST.snap && ST.snap.k, p1 = ST.snap && ST.snap.p;
       at(160, 2); const k2 = ST.snap && ST.snap.k, p2 = ST.snap && ST.snap.p;
       at(160, 40); const none = ST.snap;
@@ -171,6 +172,18 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.k1, 'end'); eq(JSON.stringify(r.p1), '[0,0]');
     eq(r.k2, 'mid'); eq(JSON.stringify(r.p2), '[200,0]');
     eq(r.none, null, 'off the line, nothing is under the aperture');
+  });
+
+  t('with no command asking for a point, the cursor is not thrown to the far end of what it crosses', () => {
+    const r = R(`${SETUP}
+      onlyModes('end', 'mid');
+      addEnt({t:'line', a:[0,0], b:[400,0]});
+      const idle = at(90, 2), k = ST.snap && ST.snap.k;
+      const near = at(3, 2), kn = ST.snap && ST.snap.k;
+      return { idle, k, near, kn };`);
+    eq(r.k, null, 'nothing within the aperture, and no command: no snap');
+    eq(JSON.stringify(r.idle), '[90,2]', 'the crosshair stays where the hand put it');
+    eq(r.kn, 'end', 'a snap right under the cursor still works, which grips rely on');
   });
 
   t('a point inside the aperture always beats a far one', () => {
@@ -325,6 +338,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     const r = R(`${SETUP}
       addEnt({t:'pline', pts:[[0,400],[400,400]], bulges:[1]});
       addEnt({t:'line', a:[300,0], b:[300,800]});
+      startCmd('line');
       onlyModes('mid'); at(210, 205); const mid = ST.snap && ST.snap.p, mk = ST.snap && ST.snap.k;
       onlyModes('cen'); at(200, 202); const cen = ST.snap && ST.snap.p, ck = ST.snap && ST.snap.k;
       onlyModes('int'); at(302, 400 - Math.sqrt(30000) + 3); const x = ST.snap && ST.snap.p;
@@ -362,6 +376,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     const r = R(`${SETUP}
       onlyModes('gcen');
       addEnt({t:'pline', pts:[[0,100],[400,100],[400,300],[0,300]], bulges:[0,1,0,0], closed:true});
+      startCmd('line');
       at(200, 102);
       return { k: ST.snap && ST.snap.k, p: ST.snap && ST.snap.p };`);
     eq(r.k, 'gcen');
@@ -377,9 +392,10 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
   t('an elliptical arc offers its two ends, and quadrants only on its sweep', () => {
     const r = R(`${SETUP}
       addEnt({t:'ellipse', c:[500,400], rx:300, ry:150, rot:0, a0:0, a1:Math.PI/2});
+      startCmd('line');
       onlyModes('end'); at(790, 440); const e1 = ST.snap && ST.snap.p;
       onlyModes('quad'); at(502, 548); const q1 = ST.snap && ST.snap.p;
-      startCmd('line'); runInput('qua'); at(200 + 2, 400); const q2 = ST.snap;
+      cancelCmd(); startCmd('line'); runInput('qua'); at(200 + 2, 400); const q2 = ST.snap;
       return { e1, q1, q2 };`);
     ok(r.e1, 'an end'); close(r.e1[0], 800, 1e-9); close(r.e1[1], 400, 1e-9);
     ok(r.q1, 'the top quadrant'); close(r.q1[0], 500, 1e-9); close(r.q1[1], 550, 1e-9);
@@ -390,6 +406,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     const r = R(`${SETUP}
       DOC.blocks.ARCB = { base:[0,0], ents:[{t:'arc', c:[0,0], r:100, a0:0, a1:Math.PI}] };
       addEnt({t:'insert', name:'ARCB', p:[600,400], rot:Math.PI/2, sx:2, sy:2});
+      startCmd('line');
       onlyModes('cen'); at(402, 400); const c = ST.snap && ST.snap.p;
       onlyModes('end'); at(405, 430); const e = ST.snap && ST.snap.p;
       onlyModes('ins'); at(402, 400); const i = ST.snap && ST.snap.p;
@@ -422,6 +439,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     const r = R(`${SETUP}
       onlyModes('ins');
       addEnt({t:'column', p:[500,400], w:400, d:400});
+      startCmd('line');
       at(700, 450);
       return { k: ST.snap && ST.snap.k, p: ST.snap && ST.snap.p };`);
     eq(r.k, 'ins'); eq(JSON.stringify(r.p), '[500,400]');
@@ -453,6 +471,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       const w = addEnt({t:'wall', a:[0,400], b:[4000,400], wt:'gen100', layer:'A-WALL'});
       const o = addOpening('window', w, 1200, DOC.winTypes[0].id);
       onlyModes('ins');
+      startCmd('line');
       /* point at a glazing line, away from the centre */
       const g = shapes(o).find(s => s.role === 'glaz');
       const q = [g.pts[0][0] * 0.8 + g.pts[1][0] * 0.2, g.pts[0][1] * 0.8 + g.pts[1][1] * 0.2];
@@ -464,6 +483,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
   t('a room boundary: its corners, the middle of an edge, its centre of area', () => {
     const r = R(`${SETUP}
       addEnt({t:'room', pts:[[100,100],[900,100],[900,600],[100,600]], name:'OFFICE'});
+      startCmd('line');
       onlyModes('end'); at(897, 103); const e = ST.snap && ST.snap.p;
       onlyModes('mid'); at(600, 103); const m = ST.snap && ST.snap.p;
       onlyModes('gcen'); at(600, 102); const g = ST.snap && ST.snap.p;

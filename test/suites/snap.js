@@ -140,9 +140,16 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       addEnt({t:'circle',c:[0,0],r:100});
       const q = Math.SQRT1_2 * 100;
       const _s = w2s([q, q]);
+      /* at a point prompt — idle, the crosshair stays on the rim (see below) */
+      startCmd('line');
       const _p = snapPoint(_s[0], _s[1], null);
-      return { k: ST.snap && ST.snap.k, p: _p, kinds: (ST.snapCands||[]).map(c=>c.k) };`);
+      const out = { k: ST.snap && ST.snap.k, p: _p, kinds: (ST.snapCands||[]).map(c=>c.k) };
+      cancelCmd();
+      snapPoint(_s[0], _s[1], null);
+      out.idle = ST.snap && ST.snap.k;
+      return out;`);
     eq(r.k, 'cen'); pt(r, 0, 0, 1e-9);
+    ok(r.idle !== 'cen', 'with no command running the rim is not thrown to the centre, got ' + r.idle);
   });
 
   t('nearest is last resort: it only wins when nothing else is in reach', () => {
@@ -557,6 +564,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     const r = R(`${SETUP}
       addEnt({t:'line',a:[0,0],b:[200,0]});
       addEnt({t:'circle',c:[500,500],r:120});
+      startCmd('line');
       const sweep = () => {
         let bad = null, far = 0;
         for (let sx = 0; sx < 1200; sx += 13) for (let sy = 0; sy < 800; sy += 13) {
@@ -574,6 +582,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       const withNear = sweep();
       ST.osnapOn.near = 0;
       const without = sweep();
+      cancelCmd();
       return { withNear, without };`);
     eq(r.withNear.bad, null, 'with nearest on');
     eq(r.without.bad, null, 'with nearest off');

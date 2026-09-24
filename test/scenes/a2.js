@@ -78,6 +78,26 @@ module.exports = ({ scene, ok, eq }) => {
     await page.evaluate(() => setOsmode(4133 | 2 | 8 | 16 | 128 | 131072 | 262144));
   });
 
+  /* With no command running, a click on the rim of a big circle snapped to
+     its CENTRE — and then looked for something to select there, where there
+     is nothing — so the circle could not be picked by clicking on it. */
+  scene('clicking the rim of a big circle with no command selects the circle', async (page) => {
+    await page.evaluate(() => {
+      OG.reset();
+      begin(); addEnt({ t: 'circle', c: [0, 0], r: 300 }); commit('c');
+      OG.stage(0, 0, 1);
+    });
+    await page.evaluate(() => OG.settle());
+    const q = 300 * Math.SQRT1_2;
+    await moveTo(page, q, q, 1, 0);
+    const cur = await page.evaluate(() => ST.cur);
+    ok('the crosshair stays on the rim', Math.hypot(cur[0], cur[1]) > 250, JSON.stringify(cur));
+    await clickAt(page, q, q, 1, 0);
+    const sel = await page.evaluate(() => [...SEL].map(id => DOC.ents.get(id).t));
+    eq('and the click selects the circle', sel, ['circle']);
+    await page.evaluate(() => { SEL.clear(); draw(); });
+  });
+
   scene('LINE, TAN, TAN draws the tangent common to two circles', async (page) => {
     await board(page);
     await type(page, 'line');

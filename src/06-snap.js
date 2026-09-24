@@ -1386,6 +1386,13 @@ function snapPoint(sx, sy, ref, now) {
      from it: the line's far end is found first and the near end follows */
   const deferred = deferLive();
   if (deferred) ref = null;
+  /* The far points of tier 2 are an answer to a point prompt. With no
+     command asking — the cursor idling over the drawing, picking objects —
+     a crosshair that leapt to the end of whatever line it crossed would be
+     noise, and the click would select at the leapt-to point rather than
+     where it was aimed. AutoCAD shows no AutoSnap at the Command prompt at
+     all; this keeps the near snaps grips have always used and no more. */
+  const farOK = !!one || (typeof CMD !== 'undefined' && !!CMD && CMD.phase === 'run');
 
   /* Tab cycling survives a jittery hand but not a real move */
   if (!ST.snapScr || hyp(sx - ST.snapScr[0], sy - ST.snapScr[1]) > SNAP_CYCLE_RESET) {
@@ -1410,6 +1417,10 @@ function snapPoint(sx, sy, ref, now) {
     if (d == null) d = dp;
     const inside = dp <= r;
     if (!inside && !allowFar) return;
+    /* idle, nothing may pull the cursor off where it is pointing — not a far
+       end, and not a big circle's centre either, which used to turn a click
+       on the rim into a pick at the middle of the circle, where nothing is */
+    if (!inside && !farOK && k !== 'grid') return;
     if (!allowFar && !(d <= r)) return;
     /* allowFar 1: admitted as if it were under the crosshair (a centre found
        from its rim, an aimed override, the grid); 2: a defined point of the
