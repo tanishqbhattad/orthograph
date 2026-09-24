@@ -1801,6 +1801,17 @@ function quickDist(e, p, cut) {
       if (P.length < 2) return P.length ? dist(p, P[0]) : Infinity;
       return polyDist(p, P, !!e.closed);
     }
+    case 'wall': {
+      /* its body, from the centreline and half the thickness — widened by
+         the mitre allowance, so that a face corner reaching past the end of
+         the centreline is never measured as further away than it is. The
+         pieces measure the faces exactly afterwards; this only has to keep
+         every wall that COULD be under the aperture, cheaply, on a plan of
+         forty thousand of them. */
+      if (!e.a || !e.b) return Infinity;
+      let t = 0; try { t = wallT(e); } catch (err) { t = 0; }
+      return Math.max(0, segDist(p, e.a, e.b) - t * 0.7072);
+    }
     case 'ellipse': {
       if (!(e.rx > 0 && e.ry > 0)) return Infinity;
       /* a cheap bound first: nothing on the ellipse is nearer than this */

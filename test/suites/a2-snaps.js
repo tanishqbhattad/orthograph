@@ -759,4 +759,40 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(r.p95 < 8, 'working zoom, 95th percentile ' + r.p95.toFixed(2) + 'ms (p50 ' + r.p50.toFixed(2) + ')');
     ok(r.fp95 < 12, 'zoomed out, 95th percentile ' + r.fp95.toFixed(2) + 'ms (p50 ' + r.fp50.toFixed(2) + ')');
   });
+
+  /* The project's own yardstick is a plan of forty thousand walls. A wall has
+     no cheap distance of its own — its faces come from its joins — and asking
+     for the exact one on every wall under a zoomed-out aperture cost 110µs a
+     wall: 33ms a move, two frames, at a zoom where hundreds are in reach. */
+  t('forty thousand walls: the snap stays well under a frame at any zoom', () => {
+    const r = R(`${SETUP}
+      ensureLayer('A-WALL');
+      setOsmode(4133 | 2 | 8 | 16 | 128); ST.osnapOn.wcen = 1; ST.osnapOn.wface = 1;
+      let n = 0;
+      for (let i = 0; i < 100; i++) for (let j = 0; j < 100; j++) {
+        const x = i * 5000, y = j * 4000;
+        const P = [[x, y], [x + 4500, y], [x + 4500, y + 3500], [x, y + 3500]];
+        for (let k = 0; k < 4; k++, n++) addEnt({t:'wall', a:P[k], b:P[(k + 1) % 4], wt:'gen100', layer:'A-WALL'});
+      }
+      query(0, 0, 1, 1);                      /* the first paint builds the index; so does this */
+      const clk = () => (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      const out = { n };
+      startCmd('line');
+      for (const z of [0.2, 0.01, 0.002]) {
+        V.z = z; V.px = 600 - 250000 * z; V.py = 400 + 200000 * z;
+        cmdPoint(s2w(600, 400));
+        const ts = [];
+        for (let k = 0; k < 120; k++) {
+          const sx = 40 + (k * 97) % 1120, sy = 40 + (k * 61) % 720;
+          const a = clk(); snapPoint(sx, sy, CMD.pts[CMD.pts.length - 1]); ts.push(clk() - a);
+        }
+        ts.sort((a, b) => a - b);
+        out['z' + z] = { p50: ts[60], p95: ts[114] };
+      }
+      cancelCmd();
+      return out;`);
+    eq(r.n, 40000);
+    for (const z of ['z0.2', 'z0.01', 'z0.002'])
+      ok(r[z].p95 < 10, z + ': 95th percentile ' + r[z].p95.toFixed(2) + 'ms (p50 ' + r[z].p50.toFixed(2) + ')');
+  });
 };
