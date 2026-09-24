@@ -710,7 +710,13 @@ function trimFence(e, fence, edges, edge) {
   if (S.C.closed && S.ts.length < 2) return null;
   const gone = S.pieces.map(() => false);
   for (const h of hits) gone[pieceOf(S.C, S.pieces, h.t1)] = true;
-  return { keep: keepPieces(S.C, S.pieces, gone) };
+  return { keep: keepPieces(S.C, S.pieces, gone), gone: gonePieces(S, gone) };
+}
+/** the pieces a trim takes, as objects — what a preview shows going */
+function gonePieces(S, gone) {
+  const out = [];
+  S.pieces.forEach(([a, b], i) => { if (gone[i]) { const q = crvSub(S.C, a, b); if (q) out.push(q); } });
+  return out;
 }
 /** The trim of every piece inside or crossing a window (a closed ring). */
 function trimWindow(e, ring, edges, edge) {
@@ -724,7 +730,7 @@ function trimWindow(e, ring, edges, edge) {
   if (!gone.some(Boolean)) return null;
   if (!S.ts.length) return { erase: true };
   if (S.C.closed && S.ts.length < 2) return null;
-  return { keep: keepPieces(S.C, S.pieces, gone) };
+  return { keep: keepPieces(S.C, S.pieces, gone), gone: gonePieces(S, gone) };
 }
 /** EXTEND: the object with the end nearer `pick` run on to the first
     boundary it meets, or null. An arc goes on round its circle, an

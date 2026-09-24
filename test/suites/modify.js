@@ -547,27 +547,31 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
 
   /* Edge mode is the difference between trimming to a line that nearly reaches
      and having to draw a longer one. */
+  /* Edge is a Standard-mode option in AutoCAD, so this runs there: choose the
+     edges, then trim. (In Quick mode an object nothing crosses is erased —
+     see b1-trim.) */
   t('Edge mode trims to a boundary that stops short', () => {
     const r = R(`${SETUP}
-      VS.edgemode = 0;
+      VS.edgemode = 0; VS.trimextendmode = 0;
       begin();
       addEnt({t:'line', a:[0,0], b:[0,3000], layer:'0'});      /* the object */
       /* a boundary that stops 500 short of it */
       addEnt({t:'line', a:[500,2000], b:[3000,2000], layer:'0'});
       commit('x');
-      cancelCmd(); startCmd('trim');
+      cancelCmd(); SEL.clear(); startCmd('trim');
+      cmdEnter();                                              /* <select all> */
       cmdPoint([0, 2600]);                                     /* above the boundary */
       const offTop = Math.max(...[...DOC.ents.values()]
         .filter(e => Math.abs(e.a[0]) < 1e-9).map(e => Math.max(e.a[1], e.b[1])));
-      dispatch('E');
+      dispatch('E'); dispatch('E');
       const mode = VS.edgemode;
       cmdPoint([0, 2600]);
       const onTop = Math.max(...[...DOC.ents.values()]
         .filter(e => Math.abs(e.a[0]) < 1e-9).map(e => Math.max(e.a[1], e.b[1])));
-      endCmd(true); VS.edgemode = 0;
+      endCmd(true); VS.edgemode = 0; VS.trimextendmode = 1;
       return { offTop, mode, onTop };`);
     eq(r.offTop, 3000, 'with Edge off the boundary misses, so nothing is cut');
-    eq(r.mode, 1, 'E turns it on');
+    eq(r.mode, 1, 'E, Extend turns it on');
     eq(r.onTop, 2000, 'and now it cuts at the extended boundary, got ' + r.onTop);
   });
 

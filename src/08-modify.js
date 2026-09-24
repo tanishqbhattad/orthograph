@@ -233,148 +233,505 @@ defc('offset', {
   },
   done() { SEL.clear(); },
 });
-/* ---------------- trim and extend ----------------
-   Clicking one object at a time is fine for a stray line and hopeless for a
-   grid of them. Fence drags a line through everything to cut, and Crossing
-   does the same with a box — between them they are most of what TRIM is used
-   for on a real drawing. A crossing window is just a closed fence, so both go
-   through one path.
+/* ============================================================
+   THE EDITING COMMANDS
+   ------------------------------------------------------------
+   TRIM, EXTEND, OFFSET, FILLET, CHAMFER, BREAK, BREAKATPOINT,
+   JOIN, LENGTHEN, STRETCH and ALIGN, asking what AutoCAD 2025
+   asks, in its order, with its keywords and its defaults. The
+   geometry is the curve kernel in 03-solve; what lives here is
+   the conversation — what each prompt accepts, what a keyword
+   means where it is typed, and what one U takes back.
 
-   The cutting edges stay implicit: every visible object is a boundary, which
-   is what AutoCAD's Quick mode does and has been its default since 2021. */
-function trimBoundaries(exceptId) {
-  return [...DOC.ents.values()].filter(x => x.id !== exceptId && visible(x) && !GEOM[x.t]);
+   Three rules hold for all of them:
+     · a pick at a prompt that wants an OBJECT means the cursor,
+       not wherever object snap pulled it (rawPick)
+     · every operation inside a command can be taken back by the
+       command's own Undo, one at a time, and the whole command is
+       still ONE step for U afterwards
+     · a piece of an object keeps everything the object had —
+       layer, colour, linetype, lineweight, storey
+   ============================================================ */
+/** where a pick really lands: the cursor, not the snap it was pulled to */
+function rawPick(p) {
+  const r = ST.raw;
+  if (r && ST.snap && ST.snap.p && dist(ST.snap.p, p) < 1e-9 && dist(r, p) < px(60)) return r.slice();
+  return p;
 }
-/** every object a fence polyline crosses, with the point it crosses at */
-function fenceHits(pts, closed) {
-  const fence = { t: 'pline', pts: closed ? pts.concat([pts[0]]) : pts, id: -1 };
+/** Is the running command asking for an object rather than a point? The snap
+    engine asks, so a pick prompt shows AutoCAD's pick box and no snap
+    markers rather than offering endpoints nobody asked for. */
+function cmdPicksObjects() {
+  return !!(typeof CMD !== 'undefined' && CMD && CMD.phase === 'run' && CMD.def.objPick && CMD.def.objPick(CMD));
+}
+/** objects the editing commands can change */
+function editable(e) { return !!e && pickable(e) && !GEOM[e.t] && !!curveOf(e); }
+/* construction lines and rays have no extent the spatial index can hold, so
+   the few there are listed separately — rebuilt only when the drawing moves */
+const UNBOUNDED = { v: -1, list: [] };
+function unboundedEnts() {
+  if (UNBOUNDED.v !== DOCV) {
+    UNBOUNDED.v = DOCV; UNBOUNDED.list = [];
+    for (const e of DOC.ents.values()) if (e.t === 'xline' || e.t === 'ray') UNBOUNDED.list.push(e);
+  }
+  return UNBOUNDED.list;
+}
+/** the editable object under a pick, construction lines included */
+function pickEditable(p, filter) {
+  const f = x => editable(x) && (!filter || filter(x));
+  let best = pickAt(p, 10, f);
+  let bd = best ? entDist(p, best) : Infinity;
+  const r = px(10 * (pickBoxPx() / 8));
+  for (const x of unboundedEnts()) {
+    if (!f(x)) continue;
+    const q = crvNear(curveOf(x), p);
+    if (q && q.d <= r && q.d < bd) { best = x; bd = q.d; }
+  }
+  return best;
+}
+/* ---- one operation inside a command, and taking it back ---- */
+function opRun(c, label, fn) {
+  if (!c.ops) c.ops = [];
+  const seq = HIST.seq;
+  begin();
+  let out;
+  try { out = fn(); } catch (err) { rollback(); throw err; }
+  commit(label);
+  if (HIST.seq !== seq) c.ops.push(seq);
+  draw();
+  return out;
+}
+function opUndo(c) {
+  if (!c.ops || !c.ops.length) { cliPrint('Command has been completely undone.'); return false; }
+  const seq = c.ops.pop();
+  while (HIST.past.length && HIST.past[HIST.past.length - 1].seq > seq) undoOne(HIST.past, HIST.future, false);
+  SEL.clear(); syncUI(); modRefresh(c);
+  return true;
+}
+/** Redo the preview for where the cursor is NOW. The engine refreshes it on
+    a mouse move; after an edit, the one on screen describes a drawing that
+    no longer exists — the piece just trimmed, still drawn as about to go. */
+function modRefresh(c) {
+  if (typeof CMD === 'undefined' || CMD !== c) { draw(); return; }
+  ST.preview = null;
+  if (c.phase === 'run' && c.def.preview) {
+    try { ST.preview = c.def.preview(c, ST.cur || [0, 0]) || null; } catch (err) { ST.preview = null; }
+  }
+  if (typeof syncDyn === 'function') syncDyn();
+  draw();
+}
+/** Put `keep` in place of `e`. The first piece IS the object — same id, so
+    anything that refers to it still does — and the rest are new. */
+function replaceWith(e, keep) {
+  if (!keep || !keep.length) { eraseEnt(e.id); return []; }
+  const id = e.id;
+  mut(e);
+  for (const k of Object.keys(e)) if (k !== 'id') delete e[k];
+  Object.assign(e, keep[0]); e.id = id;
+  const made = [e];
+  for (let i = 1; i < keep.length; i++) made.push(addEnt(keep[i]));
+  return made;
+}
+/** A piece drawn as a screen-sized dash pattern in the preview colour. The
+    linetype dashes are drawing units, which at a plan's zoom are too small to
+    see; a trim preview has to read at any zoom. */
+function dashPreview(ent, on, off) {
+  const C = curveOf(ent);
+  if (!C) return [];
+  const L = crvLen(C);
+  let a = px(on || 7), b = px(off || 5);
+  const per = a + b;
+  if (!(L > 0)) return [];
+  if (L / per > 400) { const k = L / per / 400; a *= k; b *= k; }
   const out = [];
-  for (const e of DOC.ents.values()) {
-    if (!visible(e) || GEOM[e.t] || e.t === 'dim' || e.t === 'text') continue;
-    let xs = [];
-    try { xs = intersect(e, fence, false) || []; } catch (err) { xs = []; }
-    if (xs.length) out.push({ e, at: xs[0] });
+  for (let l = 0; l < L - 1e-12; l += a + b) {
+    const q = crvSub(C, crvAtLen(C, l), crvAtLen(C, Math.min(L, l + a)));
+    if (q) out.push(q);
+  }
+  if (!out.length) out.push(clone(ent));
+  /* heavier than the line it lies on, so it reads over it rather than as it */
+  for (const q of out) { q.lw = 0.6; q.lt = null; }
+  return out;
+}
+
+/* ---------------- system variables of the editing commands ---------------- */
+const MODSET = {
+  offDist: -1,          /* OFFSETDIST: -1 is Through                    */
+  offErase: false,      /* OFFSET Erase option                          */
+  offLayerCur: false,   /* OFFSET Layer option: current, not source     */
+  chamD2: null,         /* CHAMFERB, null = same as CHAMFERA            */
+  chamL: 0,             /* CHAMFERC: chamfer length for the angle method */
+  chamAng: 0,           /* CHAMFERD: angle for the angle method, radians */
+  chamAngle: false,     /* CHAMMODE: 0 distance, 1 angle                */
+  lenMode: 'de',        /* LENGTHEN's option, remembered between runs   */
+  lenDelta: 0, lenPct: 100, lenTotal: 1000, lenAngle: false,
+};
+if (VS.trimextendmode == null) VS.trimextendmode = 1;
+if (VS.offsetgaptype == null) VS.offsetgaptype = 0;
+defvar('TRIMEXTENDMODE', {
+  desc: 'TRIM and EXTEND: 1 Quick (every object is an edge), 0 Standard (pick the edges)',
+  get: () => VS.trimextendmode ? 1 : 0, set(v) { VS.trimextendmode = v ? 1 : 0; },
+});
+defvar('OFFSETGAPTYPE', {
+  desc: 'Closing the gaps of an offset polyline: 0 extend, 1 fillet, 2 chamfer',
+  get: () => VS.offsetgaptype | 0, set(v) { v |= 0; VS.offsetgaptype = v === 1 || v === 2 ? v : 0; },
+});
+defvar('OFFSETDIST', {
+  type: 'real', desc: 'Default offset distance; negative means Through',
+  get: () => MODSET.offDist, set(v) { MODSET.offDist = v < 0 ? -1 : v; },
+});
+defvar('CHAMFERB', {
+  type: 'real', desc: 'Second chamfer distance',
+  get: () => MODSET.chamD2 == null ? (DOC.chamD || 0) : MODSET.chamD2, set(v) { MODSET.chamD2 = Math.max(0, v); },
+});
+defvar('CHAMFERC', {
+  type: 'real', desc: 'Chamfer length for the angle method',
+  get: () => MODSET.chamL, set(v) { MODSET.chamL = Math.max(0, v); },
+});
+defvar('CHAMFERD', {
+  type: 'real', desc: 'Chamfer angle for the angle method, degrees',
+  get: () => deg(MODSET.chamAng), set(v) { MODSET.chamAng = rad(clamp(v, 0, 90)); },
+});
+defvar('CHAMMODE', {
+  desc: 'Chamfer method: 0 two distances, 1 a length and an angle',
+  get: () => MODSET.chamAngle ? 1 : 0, set(v) { MODSET.chamAngle = !!v; },
+});
+
+/* ---- pointer state a command can read: is the button down, has it moved ----
+   TRIM's freehand fence is a press-drag-release, and the engine hands a
+   command its press (as a point) and its moves (as previews) but not its
+   release. So this listens for itself, on the window, and tells the command. */
+const MODPTR = { down: false, moved: false, x: 0, y: 0 };
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('pointerdown', ev => {
+    MODPTR.down = ev.button === 0; MODPTR.moved = false; MODPTR.x = ev.clientX; MODPTR.y = ev.clientY;
+  }, true);
+  window.addEventListener('pointermove', ev => {
+    if (MODPTR.down && Math.hypot(ev.clientX - MODPTR.x, ev.clientY - MODPTR.y) > 4) MODPTR.moved = true;
+  }, true);
+  window.addEventListener('pointerup', () => {
+    const was = MODPTR.down;
+    MODPTR.down = false;
+    const c = typeof CMD !== 'undefined' ? CMD : null;
+    if (was && c && c.phase === 'run' && c.def.release) {
+      try { c.def.release(c, MODPTR.moved); } catch (err) { cmdFail(err, c.def.key); }
+      draw();
+    }
+  });
+}
+
+/* ============================================================
+   TRIM and EXTEND
+   ------------------------------------------------------------
+   Quick mode, AutoCAD's default since 2021: every object is a
+   cutting edge (or boundary) without being asked for. Click a
+   piece and it goes; press and drag a freehand path, or click two
+   empty places, and every piece the path crosses goes; an object
+   that nothing crosses is erased outright. Shift swaps the sense.
+   As the cursor moves, the piece that a click would take is shown.
+
+   Standard mode is the older conversation: choose the edges first
+   (Enter takes them all), then pick. It keeps Fence, Crossing and
+   Edge — where a boundary that stops short is treated as running on.
+   ============================================================ */
+const TRIM_WORD = { trim: 'Trim', extend: 'Extend' };
+function trimPrompt(c) {
+  const ext = c.ext;
+  const q = c.quick;
+  hint(ext
+    ? 'Select object to extend or shift-select to trim or [' + (q ? 'Boundary edges/' : 'Fence/') +
+      'Crossing/mOde/Project/' + (q ? '' : 'Edge/') + 'Undo]:'
+    : 'Select object to trim or shift-select to extend or [' + (q ? 'cuTting edges/' : 'Fence/') +
+      'Crossing/mOde/Project/' + (q ? '' : 'Edge/') + 'eRase/Undo]:');
+}
+function trimSettings(c) {
+  cliPrint('Current settings: Projection=UCS, Edge=' + (VS.edgemode ? 'Extend' : 'None') +
+           ', Mode=' + (c.quick ? 'Quick' : 'Standard'));
+}
+/** ask for the edges: the engine's own Select objects prompt, all of its grammar */
+function trimAskEdges(c) {
+  cliPrint(c.ext ? 'Select boundary edges ...' : 'Select cutting edges ...');
+  c.phase = 'sel';
+  SEL.clear();
+  if (typeof selPromptReset === 'function') selPromptReset();
+  c.back = cc => {
+    cc.back = null;
+    const ids = SEL.size ? [...SEL] : [...DOC.ents.values()].filter(x => visible(x) && edgeCurves(x).length).map(x => x.id);
+    cc.edges = ids; cc.quick = false;
+    SEL.clear();
+    cliPrint(ids.length + ' found');
+    cc.stage = 'pick'; trimPrompt(cc);
+  };
+  hint('Select objects or <select all>:');
+}
+/** the edges that can matter to `e` (whole drawing when `reach` or edge mode) */
+function trimEdges(c, e, reach) {
+  if (!c.ecache || c.ecache.v !== DOCV) c.ecache = { v: DOCV, m: new Map() };
+  const cache = c.ecache.m;
+  const out = [], seen = new Set([e.id]);
+  const take = x => {
+    if (!x || seen.has(x.id)) return;
+    seen.add(x.id);
+    if (!visible(x)) return;
+    let K = cache.get(x.id);
+    if (!K) { K = edgeCurves(x); cache.set(x.id, K); }
+    for (const k of K) out.push(k);
+  };
+  if (c.edges) { for (const id of c.edges) take(DOC.ents.get(id)); return out; }
+  const b = bbox(e);
+  if (reach || trimEdgeOn(c) || e.t === 'xline' || e.t === 'ray') {
+    for (const x of DOC.ents.values()) take(x);
+    return out;
+  }
+  const m = 1e-6 + (b[2] - b[0] + b[3] - b[1]) * 1e-9;
+  for (const x of query(b[0] - m, b[1] - m, b[2] + m, b[3] + m)) take(x);
+  for (const x of unboundedEnts()) take(x);
+  return out;
+}
+/** Edge mode is a Standard-mode setting, as it is in AutoCAD */
+function trimEdgeOn(c) { return !c.quick && !!VS.edgemode; }
+/** whether this click trims or extends */
+function trimSense(c, shift) { return c.ext ? !shift : !!shift; }
+/** what one pick would do: { ext, e, n } or { e, r } */
+function trimPlanAt(c, p, shift) {
+  const e = pickEditable(p);
+  if (!e) return null;
+  const doExt = trimSense(c, shift);
+  if (doExt) return { ext: true, e, n: extendPick(e, p, trimEdges(c, e, true), trimEdgeOn(c)) };
+  return { ext: false, e, r: trimPick(e, p, trimEdges(c, e), trimEdgeOn(c)) };
+}
+function trimDoPick(c, p, shift) {
+  const P = trimPlanAt(c, p, shift);
+  if (!P) return false;
+  if (P.ext) {
+    if (!P.n) { cliPrint('No edge in that direction.'); return true; }
+    opRun(c, 'Extend', () => replaceWith(P.e, [P.n]));
+    return true;
+  }
+  const r = P.r;
+  if (r.stuck) { cliPrint(r.stuck + '.'); return true; }
+  if (r.erase) {
+    if (!c.quick) { cliPrint('Object does not intersect an edge.'); return true; }
+    opRun(c, 'Trim', () => eraseEnt(P.e.id));
+    return true;
+  }
+  opRun(c, 'Trim', () => replaceWith(P.e, r.keep));
+  return true;
+}
+/** the objects a stroke or window could touch */
+function strokeCands(pts) {
+  const b = ptsBox(pts);
+  const out = new Set();
+  for (const e of query(b[0], b[1], b[2], b[3])) if (editable(e)) out.add(e);
+  for (const e of unboundedEnts()) if (editable(e)) out.add(e);
+  return [...out];
+}
+/** Plan a fence (open path) or window (closed ring) across the drawing. Every
+    plan is made against the drawing as it stands, then applied together, so
+    the order objects happen to be stored in never changes the answer. */
+function trimStrokePlans(c, pts, ring, doExt) {
+  const plans = [];
+  if (!pts || pts.length < 2) return plans;
+  const F = ring ? curveOf({ t: 'pline', pts, closed: true }) : curveOf({ t: 'pline', pts });
+  if (!F) return plans;
+  for (const e of strokeCands(pts)) {
+    const C = curveOf(e);
+    const hits = crvHits(C, F, null, null);
+    const inside = ring && pointInPoly(crvPt(C, C.closed ? 0 : C.n / 2), pts);
+    if (!hits.length && !inside) continue;
+    if (doExt) {
+      if (ring) continue;                          /* a window has no near end */
+      const n = extendPick(e, hits[0].p, trimEdges(c, e, true), trimEdgeOn(c));
+      if (n) plans.push({ e, keep: [n], gone: [] });
+      continue;
+    }
+    const edges = trimEdges(c, e);
+    const r = ring ? trimWindow(e, pts, edges, trimEdgeOn(c)) : trimFence(e, F, edges, trimEdgeOn(c));
+    if (!r) continue;
+    if (r.erase) { if (c.quick) plans.push({ e, keep: [], gone: [e] }); continue; }
+    plans.push({ e, keep: r.keep, gone: r.gone || [] });
+  }
+  return plans;
+}
+function trimStroke(c, pts, ring, doExt) {
+  const plans = trimStrokePlans(c, pts, ring, doExt);
+  if (!plans.length) { cliPrint(ring ? 'Nothing crossed that window.' : 'The fence crossed nothing.'); return 0; }
+  opRun(c, doExt ? 'Extend' : 'Trim', () => { for (const P of plans) replaceWith(P.e, P.keep); });
+  echo((doExt ? 'Extended ' : 'Trimmed ') + plans.length + ' object' + (plans.length > 1 ? 's' : ''));
+  return plans.length;
+}
+/** what a stroke would do, drawn: the path, and the pieces it would take */
+function strokePreview(c, pts, ring, doExt) {
+  const out = [];
+  const path = ring ? pts.concat([pts[0]]) : pts;
+  if (path.length >= 2) for (const q of dashPreview({ t: 'pline', pts: path, layer: DOC.cur }, 5, 4)) out.push(q);
+  let plans = [];
+  try { plans = trimStrokePlans(c, pts, ring, doExt); } catch (err) { plans = []; }
+  for (const P of plans.slice(0, 300)) {
+    if (doExt) { for (const k of P.keep) out.push(k); continue; }
+    for (const g of P.gone) for (const q of dashPreview(g)) out.push(q);
   }
   return out;
 }
-/** the rectangle of a crossing window, as a fence */
-function boxFence(p0, p1) {
-  return [[p0[0], p0[1]], [p1[0], p0[1]], [p1[0], p1[1]], [p0[0], p1[1]]];
-}
-/** Trim or extend everything a fence touches, in one undo step. Returns how
-    many objects actually changed, so the command can say something useful
-    rather than leaving you guessing whether it did anything. */
-function applyFence(hits, extending) {
-  if (!hits.length) return 0;
-  let n = 0;
-  begin();
-  for (const { e, at } of hits) {
-    if (!DOC.ents.get(e.id)) continue;             /* already consumed by a trim */
-    const others = trimBoundaries(e.id);
-    if (extending) {
-      const nx = extendTo(e, at, others);
-      if (nx) { mut(e); Object.assign(e, nx); n++; }
-    } else {
-      const parts = trimAt(e, at, others);
-      if (!parts) continue;
-      const meta = { layer: e.layer, color: e.color, lt: e.lt, lw: e.lw };
-      delEnt(e.id);
-      parts.forEach(x => addEnt(Object.assign(x, meta)));
-      n++;
-    }
-  }
-  commit(extending ? 'Extend' : 'Trim');
-  return n;
-}
-/* TRIM and EXTEND are the same command with the sense reversed, so they are
-   built from one definition rather than two that drift apart. */
-function trimLike(extending) {
+function trimLike(ext) {
+  const WORD = ext ? 'Extend' : 'Trim';
   return {
     group: 'modify',
-    hint: extending
-      ? 'Click near the end to extend · <em>F</em>ence · <em>C</em>rossing · <em>E</em>dge · hold <em>Shift</em> to trim'
-      : 'Click the piece to remove · <em>F</em>ence · <em>C</em>rossing · <em>E</em>dge · e<em>R</em>ase · hold <em>Shift</em> to extend',
-    init(c) { c.mode = null; c.fence = []; },
+    objPick: c => c.stage === 'pick',
+    init(c) {
+      if (c.back) { c.back(c); return; }             /* back from choosing edges */
+      c.ext = ext; c.ops = []; c.edges = null; c.fence = null; c.corner = null; c.sub = null;
+      c.stage = 'pick';
+      c.quick = VS.trimextendmode !== 0;
+      const pre = SEL.size ? [...SEL] : null;
+      SEL.clear();
+      trimSettings(c);
+      if (!c.quick) {
+        if (pre) { c.edges = pre; cliPrint(pre.length + ' found'); trimPrompt(c); }
+        else trimAskEdges(c);
+        return;
+      }
+      trimPrompt(c);
+    },
     text(c, s) {
       const k = String(s).trim().toLowerCase();
-      if (k === 'f') { c.mode = 'fence'; c.fence = []; hint('Draw a line through what you want to cut · <em>Enter</em> to apply'); return true; }
-      if (k === 'c') { c.mode = 'cross'; c.fence = []; hint('First corner of the crossing window'); return true; }
-      if (!extending && k === 'r') { c.mode = 'erase'; hint('Pick objects to erase outright · <em>Enter</em> to stop'); return true; }
-      if (k === 'e' || k === 'edge') {
-        /* AutoCAD's Edge mode. Extend: a boundary that does not reach the
-           object is treated as if it did, so you can trim to a line that stops
-           short. No extend: only a real crossing counts. */
-        VS.edgemode = VS.edgemode ? 0 : 1;
-        echo(VS.edgemode ? 'Edge: boundaries are extended to meet the object'
-                         : 'Edge: only a real crossing cuts');
+      if (c.sub) return c.sub(k);
+      if (c.stage === 'fence' && k === 'u') {
+        c.fence.pts.pop();
+        if (!c.fence.pts.length) { c.stage = 'pick'; trimPrompt(c); }
         return true;
       }
-      if (k === 'u') {
-        /* Undo inside the command takes back the last cut without leaving it */
-        undo(); hint('Taken back — carry on'); return true;
+      if (k === 'u' || k === 'undo') { opUndo(c); return true; }
+      if (k === 'c' || k === 'crossing') { c.stage = 'cross'; c.corner = null; hint('Specify first corner:'); return true; }
+      if (k === 'f' || k === 'fence') { c.stage = 'fence'; c.fence = { pts: [], shift: false }; hint('Specify first fence point:'); return true; }
+      if ((!ext && k === 't') || (ext && k === 'b')) { trimAskEdges(c); return true; }
+      if (k === 'o' || k === 'mode') {
+        hint('Enter a ' + (ext ? 'extend' : 'trim') + ' mode option [Quick/Standard] <' + (c.quick ? 'Quick' : 'Standard') + '>:');
+        c.sub = a => {
+          if (a === '') { c.sub = null; trimPrompt(c); return true; }
+          if (a !== 'q' && a !== 's') return false;
+          c.sub = null;
+          VS.trimextendmode = a === 'q' ? 1 : 0;
+          c.quick = a === 'q';
+          if (c.quick) { c.edges = null; trimPrompt(c); } else trimAskEdges(c);
+          return true;
+        };
+        return true;
+      }
+      if (k === 'p' || k === 'project') {
+        hint('Enter a projection option [None/Ucs/View] <Ucs>:');
+        c.sub = a => { if (a === '' || a === 'n' || a === 'u' || a === 'v') { c.sub = null; trimPrompt(c); return true; } return false; };
+        return true;
+      }
+      if (k === 'e' || k === 'edge') {
+        hint('Enter an implied edge extension mode [Extend/No extend] <' + (VS.edgemode ? 'Extend' : 'No extend') + '>:');
+        c.sub = a => {
+          if (a === 'e' || a === 'extend') VS.edgemode = 1;
+          else if (a === 'n' || a === 'no extend') VS.edgemode = 0;
+          else if (a !== '') return false;
+          c.sub = null; trimPrompt(c); return true;
+        };
+        return true;
+      }
+      if (!ext && (k === 'r' || k === 'erase')) {
+        cliPrint('Select objects to erase or <exit>:');
+        c.phase = 'sel';
+        SEL.clear();
+        if (typeof selPromptReset === 'function') selPromptReset();
+        c.back = cc => {
+          cc.back = null;
+          const ids = [...SEL];
+          SEL.clear();
+          if (ids.length) opRun(cc, 'Erase', () => { for (const id of ids) if (DOC.ents.get(id)) eraseEnt(id); });
+          cc.stage = 'pick'; trimPrompt(cc);
+        };
+        hint('Select objects to erase or <exit>:');
+        return true;
       }
       return false;
     },
-    point(c, p) {
-      const shift = ST.shift;
-      const ext = extending ? !shift : shift;
-      if (c.mode === 'fence') { c.fence.push(p); hint('Another fence point · <em>Enter</em> to apply'); draw(); return; }
-      if (c.mode === 'cross') {
-        c.fence.push(p);
-        if (c.fence.length < 2) { hint('Opposite corner'); return; }
-        const hits = fenceHits(boxFence(c.fence[0], c.fence[1]), true);
-        const n = applyFence(hits, ext);
-        echo(n ? (ext ? 'Extended ' : 'Trimmed ') + n : 'Nothing crossed that window');
-        c.fence = []; hint('First corner of the crossing window');
-        return;
-      }
-      if (c.mode === 'erase') {
-        const e = pickAt(p, 10, x => !GEOM[x.t]);
-        if (!e) return;
-        begin(); eraseEnt(e.id); commit('Erase');
-        return;
-      }
-      const e = pickAt(p, 10, x => !GEOM[x.t]);
-      if (!e) return;
-      const others = trimBoundaries(e.id);
-      if (ext) {
-        const n = extendTo(e, p, others);
-        if (n) { begin(); mut(e); Object.assign(e, n); commit('Extend'); }
-        else echo('No boundary in that direction');
-        return;
-      }
-      const parts = trimAt(e, p, others);
-      if (!parts) return echo('No cutting edge crosses that object');
-      begin();
-      const meta = { layer: e.layer, color: e.color, lt: e.lt, lw: e.lw };
-      delEnt(e.id);
-      parts.forEach(n => addEnt(Object.assign(n, meta)));
-      commit('Trim');
+    point(c, p0) { trimPoint(c, p0); modRefresh(c); },
+    release(c) {
+      if (c.stage !== 'qfence' || !c.fence || !c.fence.free) return;
+      const f = c.fence;
+      c.fence = null; c.stage = 'pick';
+      if (f.pts.length >= 2) trimStroke(c, f.pts, false, trimSense(c, f.shift));
+      trimPrompt(c);
+      modRefresh(c);
     },
-    enter(c) {
-      if (c.mode === 'fence' && c.fence.length >= 2) {
-        const hits = fenceHits(c.fence, false);
-        const n = applyFence(hits, extending);
-        echo(n ? (extending ? 'Extended ' : 'Trimmed ') + n : 'The fence crossed nothing');
-        c.fence = [];
-        hint('Draw another fence · <em>Enter</em> again to finish');
-        return;
-      }
-      endCmd();
-    },
-    preview(c) {
-      if (c.mode === 'fence' && c.fence.length) ST.tracks = pairs(c.fence);
-      return null;
-    },
+    enter(c) { trimEnter(c); if (CMD === c) modRefresh(c); },
+    preview(c, p0) { return trimPreview(c, p0); },
+    done() { SEL.clear(); },
   };
+}
+function trimPoint(c, p0) {
+  const p = rawPick(p0);
+  if (c.stage === 'cross') {
+    if (!c.corner) { c.corner = p; hint('Specify opposite corner:'); return; }
+    trimStroke(c, boxFence(c.corner, p), true, trimSense(c, ST.shift));
+    c.corner = null; c.stage = 'pick'; trimPrompt(c); return;
+  }
+  if (c.stage === 'fence') { c.fence.pts.push(p); hint('Specify next fence point or [Undo]:'); return; }
+  if (c.stage === 'qfence') {
+    /* the second of two clicks in empty space: a straight fence */
+    trimStroke(c, [c.fence.pts[0], p], false, trimSense(c, c.fence.shift));
+    c.fence = null; c.stage = 'pick'; trimPrompt(c); return;
+  }
+  if (trimDoPick(c, p, ST.shift)) return;
+  /* nothing under the pick */
+  if (c.quick) {
+    c.stage = 'qfence';
+    c.fence = { pts: [p], shift: !!ST.shift, free: false };
+    hint('Specify end point of the fence, or drag a freehand path:');
+  } else {
+    c.stage = 'cross'; c.corner = p; hint('Specify opposite corner:');
+  }
+}
+function trimEnter(c) {
+  if (c.sub) { c.sub(''); return; }
+  if (c.stage === 'fence') {
+    const pts = c.fence.pts;
+    if (pts.length >= 2) trimStroke(c, pts, false, trimSense(c, false));
+    c.fence = null; c.stage = 'pick'; trimPrompt(c); return;
+  }
+  if (c.stage === 'cross' || c.stage === 'qfence') { c.fence = null; c.corner = null; c.stage = 'pick'; trimPrompt(c); return; }
+  endCmd();
+}
+function trimPreview(c, p0) {
+  const p = rawPick(p0);
+  ST.tracks = null;
+  if (c.stage === 'qfence' && c.fence) {
+    const f = c.fence;
+    if (MODPTR.down && MODPTR.moved) {
+      f.free = true;
+      const last = f.pts[f.pts.length - 1];
+      if (dist(last, p) > px(3)) f.pts.push(p);
+    }
+    return strokePreview(c, f.free ? f.pts : [f.pts[0], p], false, trimSense(c, f.shift));
+  }
+  if (c.stage === 'fence' && c.fence) return strokePreview(c, c.fence.pts.concat([p]), false, trimSense(c, false));
+  if (c.stage === 'cross' && c.corner) return strokePreview(c, boxFence(c.corner, p), true, trimSense(c, ST.shift));
+  if (c.stage !== 'pick') return null;
+  let P = null;
+  try { P = trimPlanAt(c, p, ST.shift); } catch (err) { P = null; }
+  if (!P) return null;
+  if (P.ext) return P.n ? [P.n] : null;
+  const r = P.r;
+  if (r.stuck) return null;
+  if (r.erase) return c.quick ? dashPreview(P.e) : null;
+  return r.gone ? dashPreview(r.gone) : null;
 }
 defc('trim', trimLike(false));
 defc('extend', trimLike(true));
-/** consecutive pairs of a point run, for drawing the fence as it is built */
+/** consecutive pairs of a point run, for drawing a path as it is built */
 function pairs(pts) {
   const out = [];
   for (let i = 1; i < pts.length; i++) out.push([pts[i - 1], pts[i]]);
   return out;
+}
+/** the rectangle of a crossing window, as a ring */
+function boxFence(p0, p1) {
+  return [[p0[0], p0[1]], [p1[0], p0[1]], [p1[0], p1[1]], [p0[0], p1[1]]];
 }
 defc('lengthen', {
   group: 'modify', hint: 'Type <em>DE</em> delta, <em>T</em> total, <em>P</em> percent — then pick an object end',

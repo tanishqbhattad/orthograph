@@ -670,7 +670,9 @@ function dynCommit() {
 }
 function syncDyn() {
   syncTouch();
-  if (!ST.dyn || !CMD || CMD.phase !== 'run' || !ST.cur) { dynKill(); return; }
+  /* a prompt for an OBJECT takes no coordinates, so it gets no coordinate fields */
+  if (!ST.dyn || !CMD || CMD.phase !== 'run' || !ST.cur ||
+      (typeof cmdPicksObjects === 'function' && cmdPicksObjects())) { dynKill(); return; }
   const ref = refPoint();
   const mode = ref ? 'polar' : 'abs';
   if (dynEl && dynMode !== mode) dynKill();        /* the fields mean something else now */

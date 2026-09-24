@@ -84,7 +84,9 @@ const ST = {
   selMode: 'add',         /* the A / R switch inside a Select objects prompt   */
 };
 /** the pick box only shows when no command is running (AutoCAD behaviour) */
-function showPickBox() { return !CMD || CMD.phase === 'sel'; }
+/* A prompt that asks for an OBJECT (TRIM's "Select object to trim") is a
+   selection prompt too, and shows the pick box; cmdPicksObjects is 08-modify's */
+function showPickBox() { return !CMD || CMD.phase === 'sel' || (typeof cmdPicksObjects === 'function' && cmdPicksObjects()); }
 let SNAP_R = 14;                                  /* aperture, screen px — the APERTURE system variable */
 const SNAP_CYCLE_RESET = 4;                       /* px of travel that resets Tab cycling */
 const TRACK_DWELL_MS = 260;                       /* hover time before a point is acquired */
@@ -539,7 +541,8 @@ function snapPoint(sx, sy, ref, now) {
   ST.raw = raw;
   const r = apertureR();
   const on = activeModes();
-  const osOn = osnapActive();
+  /* ...and object snap has nothing to offer a pick that wants an object */
+  const osOn = osnapActive() && !(typeof cmdPicksObjects === 'function' && cmdPicksObjects());
   const tracks = [];
   ST.snapLimited = false;
   /* FROM measures its offset from the base point, and MID-BETWEEN-2 rubber
