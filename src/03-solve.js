@@ -1169,6 +1169,11 @@ function armDir(K, x, p) {
 /** Fillet arc of radius r between carriers A (picked at p1) and B (at p2).
     Returns { C, T1, T2, k1, k2, arc } or null when none fits. */
 function filletFit(A, p1, B, p2, r) {
+  const all = filletCands(A, p1, B, p2, r);
+  return all.length ? all[0] : null;
+}
+/** every fillet that fits, best first by the rules above */
+function filletCands(A, p1, B, p2, r) {
   const cands = [];
   for (const oa of carrierOff(A, r)) for (const ob of carrierOff(B, r)) for (const C of sgCross(oa, ob)) {
     const T1 = carrierFoot(A, C), T2 = carrierFoot(B, C);
@@ -1185,16 +1190,17 @@ function filletFit(A, p1, B, p2, r) {
       score: dist(T1, p1) + dist(T2, p2),
     });
   }
-  if (!cands.length) return null;
-  if (A.k === 'l' && B.k === 'l') {
+  cands.sort((a, b) => a.score - b.score);
+  if (cands.length && A.k === 'l' && B.k === 'l') {
     const X = sgCross(A, B)[0];
     if (X) {
+      /* the quadrant both picks are in comes first */
       const u1 = armDir(A, X, p1), u2 = armDir(B, X, p2);
-      const hit = cands.filter(c => dot(c.k1, u1) > 0 && dot(c.k2, u2) > 0);
-      if (hit.length) return hit.sort((a, b) => a.score - b.score)[0];
+      const inq = c => dot(c.k1, u1) > 0 && dot(c.k2, u2) > 0;
+      return cands.filter(inq).concat(cands.filter(c => !inq(c)));
     }
   }
-  return cands.sort((a, b) => a.score - b.score)[0];
+  return cands;
 }
 /** The sharp corner (radius 0) between two carriers, nearest the picks. */
 function cornerFit(A, p1, B, p2) {

@@ -90,6 +90,33 @@ module.exports = ({ scene, ok, eq }) => {
     await page.keyboard.press('Escape');
   });
 
+  scene('FILLET: the arc is previewed on the second object, and made by the click', async (page) => {
+    await page.evaluate(() => {
+      OG.reset(); VS.trimmode = 1; DOC.filletR = 0;
+      begin();
+      addEnt({ t: 'line', a: [0, 0], b: [2000, 0] });
+      addEnt({ t: 'line', a: [2500, 500], b: [2500, 2500] });
+      commit('corner');
+      OG.stage(1250, 1250, 0.15);
+    });
+    await command(page, 'F');
+    await page.keyboard.type('R'); await page.keyboard.press('Enter');
+    await page.keyboard.type('400'); await page.keyboard.press('Enter');
+    await page.evaluate(() => OG.settle());
+    const p1 = await at(page, 1000, 0), p2 = await at(page, 2500, 1500);
+    await page.mouse.click(p1.x, p1.y);
+    await page.mouse.move(p2.x, p2.y, { steps: 5 });
+    const pv = await page.evaluate(() => (ST.preview || []).map(e => e.t).sort());
+    eq('hovering the second line previews both trimmed lines and the arc', pv, ['arc', 'line', 'line']);
+    await page.mouse.click(p2.x, p2.y);
+    const r = await page.evaluate(() => {
+      const arc = [...DOC.ents.values()].find(e => e.t === 'arc');
+      return { arc: arc && [Math.round(arc.c[0]), Math.round(arc.c[1]), arc.r], running: !!CMD };
+    });
+    eq('the fillet fills the corner the lines were run on to', r.arc, [2100, 400, 400]);
+    eq('and without Multiple the command is done', r.running, false);
+  });
+
   scene('TRIM: hovering shows the piece a click would take, with a pick box and no snap', async (page) => {
     await page.evaluate(grid);
     await command(page, 'TR');

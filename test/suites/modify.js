@@ -389,7 +389,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
   t('TRIMMODE off adds the arc and leaves the lines alone', () => {
     const r = R(`${SETUP}${CORNER}
       VS.trimmode = 1;
-      startCmd('fillet'); dispatch('300'); dispatch('T');
+      startCmd('fillet'); dispatch('300'); dispatch('T'); dispatch('N');   /* AutoCAD asks: Trim/No trim */
       const mode = VS.trimmode;
       cmdPoint([1000,0]); cmdPoint([2000,1000]);
       const lines = [...DOC.ents.values()].filter(e => e.t === 'line');
@@ -486,18 +486,20 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.pts, 3, 'keeping the corner point');
   });
 
-  t('a run that doubles back on itself is not called straight', () => {
+  /* Out to 1000 and back to 400. The old join chained end to end and came
+     back with a line from 0 to 400 — losing 600 of the drawing. AutoCAD joins
+     collinear lines into the one line they cover, overlaps and all. */
+  t('a run that doubles back on itself is not cut short', () => {
     const r = R(`${SETUP}
-      /* out to 1000 and back to 400: every point IS on the line, but the run
-         is not a single segment and must not be flattened into one */
       addEnt({t:'line', a:[0,0], b:[1000,0], layer:'0'});
       addEnt({t:'line', a:[1000,0], b:[400,0], layer:'0'});
       SEL.clear(); for (const e of DOC.ents.values()) SEL.add(e.id);
       cancelCmd();
       startCmd('join'); endCmd(true);
       const all = [...DOC.ents.values()];
-      return { t: all[0] && all[0].t };`);
-    eq(r.t, 'pline', 'doubling back is a polyline, not a line from 0 to 400');
+      return { n: all.length, t: all[0] && all[0].t, x: all[0] && [all[0].a[0], all[0].b[0]].sort((a,b)=>a-b) };`);
+    eq(r.n, 1); eq(r.t, 'line');
+    eq(JSON.stringify(r.x), '[0,1000]', 'spanning everything the two covered');
   });
 
   group('B2 — joining arcs, and Edge mode');
