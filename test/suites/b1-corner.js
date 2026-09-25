@@ -327,6 +327,27 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.t, 'circle');
   });
 
+  /* Round-1 critic: arcs 0-90 and 180-270 joined into 180 -> 90. AutoCAD
+     joins counter-clockwise from the source: 0 -> 270. */
+  t('arcs across gaps join counter-clockwise from the source arc', () => {
+    const r = R(`${SETUP}
+      const go = first => {
+        resetDoc(); cancelCmd(); SEL.clear();
+        begin();
+        const a = addEnt({t:'arc', c:[0,0], r:500, a0:0, a1:Math.PI/2});
+        const b = addEnt({t:'arc', c:[0,0], r:500, a0:Math.PI, a1:3*Math.PI/2});
+        commit('x');
+        const [s, o] = first === 'a' ? [a, b] : [b, a];
+        SEL.add(s.id); SEL.add(o.id);
+        startCmd('join');
+        const e = [...DOC.ents.values()][0];
+        return [e.t, Math.round(deg(e.a0)), Math.round(deg(e.a1))];
+      };
+      return { a: go('a'), b: go('b') };`);
+    eq(JSON.stringify(r.a), JSON.stringify(['arc', 0, 270]), 'source 0-90: from 0 round to 270');
+    eq(JSON.stringify(r.b), JSON.stringify(['arc', 180, 90]), 'source 180-270: from 180 round to 90');
+  });
+
   t('a closed run comes back closed, and what cannot join is reported', () => {
     const r = R(`${SETUP}
       begin();

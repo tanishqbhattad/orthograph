@@ -1444,16 +1444,13 @@ function joinCocircular(arcs, gaps) {
       }
     }
     if (gaps && spans.length > 1) {
-      /* across gaps: everything but the widest gap */
-      let widest = -1, at = 0;
-      spans.sort((x, y) => x.a - y.a);
-      for (let i = 0; i < spans.length; i++) {
-        const A = spans[i], B = spans[(i + 1) % spans.length];
-        const g = wrap(B.a - (A.a + A.s));
-        if (g > widest) { widest = g; at = (i + 1) % spans.length; }
-      }
-      const a = spans[at].a;
-      spans = [{ a, s: TAU - widest, members: spans.flatMap(x => x.members) }];
+      /* Across gaps, AutoCAD joins counter-clockwise from the SOURCE — the
+         first arc selected — to the end of the last arc met going round. */
+      const src = G.items[0];
+      const a = wrap(src.a0);
+      let s = 0;
+      for (const e of G.items) s = Math.max(s, wrap(e.a0 - a) + arcSweep(e));
+      spans = [{ a, s: Math.min(TAU, s), members: spans.flatMap(x => x.members) }];
     }
     for (const S of spans) out.push({ c: G.c, r: G.r, a: S.a, s: S.s, members: S.members });
   }
