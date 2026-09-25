@@ -20,11 +20,23 @@ module.exports = ({ scene, ok, eq }) => {
     });
     await page.evaluate(() => OG.settle());
   };
+  /* Starting a command grows the command panel and shrinks the canvas, and
+     the resize lands a frame or two later. So the aim is taken, the pointer
+     moved, and the aim taken again once the frame has settled — a move
+     measured against the old canvas is a move to the wrong place. */
   const moveTo = async (page, x, y, dx = 0, dy = 0) => {
-    const a = await page.evaluate(([x, y]) => OG.at(x, y), [x, y]);
-    if (!a.on) throw new Error('off the canvas: ' + x + ',' + y);
-    await page.mouse.move(a.x + dx + 6, a.y + dy + 4);
-    await page.mouse.move(a.x + dx, a.y + dy);
+    let a = null;
+    for (let i = 0; i < 3; i++) {
+      await page.evaluate(() => OG.settle());
+      const b = await page.evaluate(([x, y]) => OG.at(x, y), [x, y]);
+      if (!b.on) throw new Error('off the canvas: ' + x + ',' + y);
+      await page.mouse.move(b.x + dx + 6, b.y + dy + 4);
+      await page.mouse.move(b.x + dx, b.y + dy);
+      const stable = a && Math.abs(a.x - b.x) < 0.01 && Math.abs(a.y - b.y) < 0.01;
+      a = b;
+      if (stable) break;
+    }
+    await page.evaluate(() => OG.settle());
     return a;
   };
   const clickAt = async (page, x, y, dx = 0, dy = 0) => {
@@ -35,6 +47,7 @@ module.exports = ({ scene, ok, eq }) => {
     await page.click('#cmd');
     await page.keyboard.type(s);
     await page.keyboard.press('Enter');
+    await page.evaluate(() => OG.settle());
   };
 
   scene('END, then a click near the end you want, takes that end', async (page) => {
