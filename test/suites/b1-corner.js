@@ -5,7 +5,7 @@
 const SETUP = `
   resetDoc();
   DOC.units = 'mm'; VS.trimmode = 1; DOC.filletR = 0; DOC.chamD = 0;
-  MODSET.chamD2 = null; MODSET.chamL = 0; MODSET.chamAng = 0; MODSET.chamAngle = false;
+  DOC.chamD2 = null; DOC.chamL = 0; DOC.chamAng = 0; DOC.chamMode = 0;
   V.w = 1200; V.h = 800; V.z = 0.2; V.px = 200; V.py = 600; V.rot = 0;
   ST.snap = null; ST.raw = null; ST.shift = false;
   cancelCmd(); SEL.clear(); DOC.cur = '0';
@@ -269,6 +269,23 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     const pts = [r.a, r.b].sort((p, q) => p[1] - q[1]);
     close(pts[0][0], 400, 1e-9); close(pts[0][1], 0, 1e-9);
     close(Math.hypot(pts[1][0], pts[1][1]), 400, 1e-9);
+  });
+
+  /* Round-1 critic: after a new drawing CHAMFER said Dist1 = 0, Dist2 = 250
+     — the second distance left over from the drawing before. They are all
+     drawing settings, saved with it and reset for a new one. */
+  t('a new drawing starts with its own chamfer settings, all of them', () => {
+    const r = R(`${SETUP}
+      startCmd('chamfer'); dispatch('D'); dispatch('100'); dispatch('250'); endCmd(true);
+      startCmd('chamfer'); dispatch('A'); dispatch('300'); dispatch('30'); endCmd(true);
+      const saved = docSettings();
+      resetDoc(); cancelCmd();
+      startCmd('chamfer');
+      const said = CLI.lines[CLI.lines.length - 1].t;
+      endCmd(true);
+      return { said, saved: [saved.chamD, saved.chamD2, saved.chamL, saved.chamAng != null && +deg(saved.chamAng).toFixed(6), saved.chamMode] };`);
+    eq(r.said, '(TRIM mode) Current chamfer Dist1 = 0, Dist2 = 0');
+    eq(JSON.stringify(r.saved), JSON.stringify([100, 250, 300, 30, 1]), 'and they travel with the drawing that set them');
   });
 
   t('Polyline chamfers every corner', () => {

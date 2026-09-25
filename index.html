@@ -1067,6 +1067,10 @@ const DOC_SETTINGS = {
   altArea: false,         /* show a second area unit                         */
   filletR: null,          /* last fillet radius                              */
   chamD: null,            /* last chamfer distance                           */
+  chamD2: null,           /* CHAMFERB — second distance; null: as the first  */
+  chamL: null,            /* CHAMFERC — length on the first line (angle method) */
+  chamAng: null,          /* CHAMFERD — angle from the first line, radians   */
+  chamMode: null,         /* CHAMMODE — 0 two distances, 1 length and angle  */
   dimScale: null,         /* DIMSCALE — every size on a plain dimension      */
   /* the current object properties: what the next thing drawn will take.
      AutoCAD keeps CECOLOR/CELTYPE/CELWEIGHT in the drawing, and so should we —
@@ -13979,10 +13983,9 @@ const MODSET = {
   offDist: -1,          /* OFFSETDIST: -1 is Through                    */
   offErase: false,      /* OFFSET Erase option                          */
   offLayerCur: false,   /* OFFSET Layer option: current, not source     */
-  chamD2: null,         /* CHAMFERB, null = same as CHAMFERA            */
-  chamL: 0,             /* CHAMFERC: chamfer length for the angle method */
-  chamAng: 0,           /* CHAMFERD: angle for the angle method, radians */
-  chamAngle: false,     /* CHAMMODE: 0 distance, 1 angle                */
+  /* CHAMFERB, C, D and CHAMMODE are drawing settings beside CHAMFERA: they
+     live on DOC (01-doc DOC_SETTINGS), are saved with it and reset for a new
+     drawing — as DOC.chamD2, chamL, chamAng (radians) and chamMode */
   lenMode: 'de',        /* LENGTHEN's option, remembered between runs   */
   lenDelta: 0, lenPct: 100, lenTotal: 1000, lenAngle: false,
 };
@@ -14002,19 +14005,19 @@ defvar('OFFSETDIST', {
 });
 defvar('CHAMFERB', {
   type: 'real', desc: 'Second chamfer distance',
-  get: () => MODSET.chamD2 == null ? (DOC.chamD || 0) : MODSET.chamD2, set(v) { MODSET.chamD2 = Math.max(0, v); },
+  get: () => DOC.chamD2 == null ? (DOC.chamD || 0) : DOC.chamD2, set(v) { DOC.chamD2 = Math.max(0, v); },
 });
 defvar('CHAMFERC', {
   type: 'real', desc: 'Chamfer length for the angle method',
-  get: () => MODSET.chamL, set(v) { MODSET.chamL = Math.max(0, v); },
+  get: () => DOC.chamL || 0, set(v) { DOC.chamL = Math.max(0, v); },
 });
 defvar('CHAMFERD', {
   type: 'real', desc: 'Chamfer angle for the angle method, degrees',
-  get: () => deg(MODSET.chamAng), set(v) { MODSET.chamAng = rad(clamp(v, 0, 90)); },
+  get: () => deg(DOC.chamAng || 0), set(v) { DOC.chamAng = rad(clamp(v, 0, 90)); },
 });
 defvar('CHAMMODE', {
   desc: 'Chamfer method: 0 two distances, 1 a length and an angle',
-  get: () => MODSET.chamAngle ? 1 : 0, set(v) { MODSET.chamAngle = !!v; },
+  get: () => DOC.chamMode ? 1 : 0, set(v) { DOC.chamMode = v ? 1 : 0; },
 });
 
 /* ---- pointer state a command can read: is the button down, has it moved ----
@@ -14627,8 +14630,8 @@ function filletPlan(A, B, r) {
 }
 /** the two chamfer distances for a pair of lines meeting at angle theta */
 function chamferDists(theta) {
-  if (!MODSET.chamAngle) return [DOC.chamD || 0, MODSET.chamD2 == null ? (DOC.chamD || 0) : MODSET.chamD2];
-  const L = MODSET.chamL, a = MODSET.chamAng;
+  if (!DOC.chamMode) return [DOC.chamD || 0, DOC.chamD2 == null ? (DOC.chamD || 0) : DOC.chamD2];
+  const L = DOC.chamL || 0, a = DOC.chamAng || 0;
   const g = Math.PI - a - theta;                         /* the angle the chamfer meets the second line at */
   if (!(g > 1e-9)) return null;
   return [L, L * Math.sin(a) / Math.sin(g)];
@@ -14891,33 +14894,33 @@ defc('chamfer', {
         c.sub = (a2, raw2) => {
           const w = a2 === '' ? v : parseLen(raw2);
           if (!isFinite(w) || w < 0) { cliPrint('Requires a distance of 0 or more.', 'err'); return true; }
-          MODSET.chamD2 = w; MODSET.chamAngle = false; c.sub = null; back(); return true;
+          DOC.chamD2 = w; DOC.chamMode = 0; c.sub = null; back(); return true;
         };
         return true;
       };
       return true;
     }
     if (k === 'a' || k === 'angle') {
-      hint('Specify chamfer length on the first line <' + fmt(MODSET.chamL) + '>:');
+      hint('Specify chamfer length on the first line <' + fmt(DOC.chamL || 0) + '>:');
       c.sub = (a, raw) => {
-        const v = a === '' ? MODSET.chamL : parseLen(raw);
+        const v = a === '' ? DOC.chamL || 0 : parseLen(raw);
         if (!isFinite(v) || v < 0) { cliPrint('Requires a distance of 0 or more.', 'err'); return true; }
-        MODSET.chamL = v;
-        hint('Specify chamfer angle from the first line <' + +deg(MODSET.chamAng).toFixed(4) + '>:');
+        DOC.chamL = v;
+        hint('Specify chamfer angle from the first line <' + +deg(DOC.chamAng || 0).toFixed(4) + '>:');
         c.sub = (a2, raw2) => {
-          const t = a2 === '' ? deg(MODSET.chamAng) : parseFloat(raw2);
+          const t = a2 === '' ? deg(DOC.chamAng || 0) : parseFloat(raw2);
           if (!isFinite(t) || t <= 0 || t >= 90) { cliPrint('Requires an angle between 0 and 90 degrees.', 'err'); return true; }
-          MODSET.chamAng = rad(t); MODSET.chamAngle = true; c.sub = null; back(); return true;
+          DOC.chamAng = rad(t); DOC.chamMode = 1; c.sub = null; back(); return true;
         };
         return true;
       };
       return true;
     }
     if (k === 'e' || k === 'method') {
-      hint('Enter trim method [Distance/Angle] <' + (MODSET.chamAngle ? 'Angle' : 'Distance') + '>:');
+      hint('Enter trim method [Distance/Angle] <' + (DOC.chamMode ? 'Angle' : 'Distance') + '>:');
       c.sub = a => {
-        if (a === 'd' || a === 'distance') MODSET.chamAngle = false;
-        else if (a === 'a' || a === 'angle') MODSET.chamAngle = true;
+        if (a === 'd' || a === 'distance') DOC.chamMode = 0;
+        else if (a === 'a' || a === 'angle') DOC.chamMode = 1;
         else if (a !== '') return false;
         c.sub = null; back(); return true;
       };
@@ -14938,7 +14941,7 @@ defc('chamfer', {
         return true;
       }
       const v = parseLen(s);
-      if (isFinite(v) && v >= 0) { DOC.chamD = v; MODSET.chamD2 = v; MODSET.chamAngle = false; chamSettings(); chamFirst(c); return true; }
+      if (isFinite(v) && v >= 0) { DOC.chamD = v; DOC.chamD2 = v; DOC.chamMode = 0; chamSettings(); chamFirst(c); return true; }
     }
     return false;
   },
@@ -14984,10 +14987,10 @@ defc('chamfer', {
   done() { SEL.clear(); },
 });
 function chamSettings() {
-  cliPrint(MODSET.chamAngle
-    ? '(' + (VS.trimmode ? 'TRIM' : 'NOTRIM') + ' mode) Current chamfer Length = ' + fmt(MODSET.chamL) + ', Angle = ' + +deg(MODSET.chamAng).toFixed(4)
+  cliPrint(DOC.chamMode
+    ? '(' + (VS.trimmode ? 'TRIM' : 'NOTRIM') + ' mode) Current chamfer Length = ' + fmt(DOC.chamL || 0) + ', Angle = ' + +deg(DOC.chamAng || 0).toFixed(4)
     : '(' + (VS.trimmode ? 'TRIM' : 'NOTRIM') + ' mode) Current chamfer Dist1 = ' + fmt(DOC.chamD || 0) +
-      ', Dist2 = ' + fmt(MODSET.chamD2 == null ? (DOC.chamD || 0) : MODSET.chamD2));
+      ', Dist2 = ' + fmt(DOC.chamD2 == null ? (DOC.chamD || 0) : DOC.chamD2));
 }
 function chamFirst(c) { c.stage = 'first'; c.A = null; SEL.clear(); hint('Select first line or [Undo/Polyline/Distance/Angle/Trim/mEthod/Multiple]:'); }
 function chamSecond(c) { c.stage = 'second'; hint('Select second line or shift-select to apply corner or [Distance/Angle/Method]:'); }
