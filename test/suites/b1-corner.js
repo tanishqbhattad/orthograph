@@ -145,6 +145,43 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.bz, false);
   });
 
+  /* Round-1 critic: two adjacent segments of one polyline filleted only when
+     the later one was picked first, and never across a closed polyline's
+     closing segment. */
+  t('two segments of one polyline fillet at their vertex, picked in either order', () => {
+    const r = R(`${SETUP}
+      const go = (pts, closed, p1, p2) => {
+        resetDoc(); cancelCmd(); SEL.clear();
+        begin(); addEnt({t:'pline', pts, closed}); commit('x');
+        startCmd('fillet'); dispatch('R'); dispatch('500'); cmdPoint(p1); cmdPoint(p2);
+        const e = [...DOC.ents.values()][0];
+        return { n: e.pts.length, arcs: (e.bulges || []).filter(Boolean).length, said: CLI.lines[CLI.lines.length - 1].t };
+      };
+      const L = [[0,0],[3000,0],[3000,3000]], Q = [[0,0],[3000,0],[3000,3000],[0,3000]];
+      return {
+        fwd: go(L, false, [1500, 0], [3000, 1500]),
+        back: go(L, false, [3000, 1500], [1500, 0]),
+        seamA: go(Q, true, [1500, 0], [0, 1500]),        /* across the closing segment */
+        seamB: go(Q, true, [0, 1500], [1500, 0]),
+      };`);
+    for (const k of ['fwd', 'back', 'seamA', 'seamB'])
+      ok(r[k].arcs === 1 && r[k].n === (k.startsWith('seam') ? 5 : 4), k + ': ' + JSON.stringify(r[k]));
+  });
+
+  t('and CHAMFER does the same', () => {
+    const r = R(`${SETUP}
+      const go = (pts, closed, p1, p2) => {
+        resetDoc(); cancelCmd(); SEL.clear();
+        begin(); addEnt({t:'pline', pts, closed}); commit('x');
+        startCmd('chamfer'); dispatch('D'); dispatch('300'); dispatch('300'); cmdPoint(p1); cmdPoint(p2);
+        return [...DOC.ents.values()][0].pts.length;
+      };
+      const L = [[0,0],[3000,0],[3000,3000]], Q = [[0,0],[3000,0],[3000,3000],[0,3000]];
+      return [go(L, false, [1500, 0], [3000, 1500]), go(L, false, [3000, 1500], [1500, 0]),
+              go(Q, true, [1500, 0], [0, 1500]), go(Q, true, [0, 1500], [1500, 0])];`);
+    eq(r.join(','), '4,4,5,5');
+  });
+
   t('a line filleted to the end of a polyline becomes part of it', () => {
     const r = R(`${SETUP}
       begin(); addEnt({t:'pline', pts:[[0,0],[1000,0],[2000,0]]}); addEnt({t:'line', a:[2500,500], b:[2500,2000]}); commit('x');

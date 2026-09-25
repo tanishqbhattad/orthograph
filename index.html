@@ -14695,10 +14695,14 @@ function plAllCorners(e, how) {
 function vertexPlan(A, B, how) {
   const e = A.e;
   if (e.t !== 'pline') return { err: 'Cannot ' + how.kind + ' an object to itself' };
+  /* by index: each pick read the polyline afresh, so its segment objects are
+     not the other pick's, and comparing them never matched */
   const C = A.C, n = C.n;
+  const follows = (x, y) => (x.i + 1 < n || C.closed) && (x.i + 1) % n === y.i;
   let first = A, second = B;
-  if (C.segs[(B.i + 1) % n] === A.s && (C.closed || B.i + 1 < n)) { first = B; second = A; }
-  else if (!(C.segs[(A.i + 1) % n] === B.s && (C.closed || A.i + 1 < n))) return { err: 'Those segments of the polyline are not next to each other' };
+  if (follows(B, A)) { first = B; second = A; }
+  else if (!follows(A, B)) return { err: 'Those segments of the polyline are not next to each other' };
+  second = Object.assign({}, second, { s: C.segs[second.i] });
   if (first.s.k !== 'l' || second.s.k !== 'l') return { err: 'Only straight segments can be cornered this way' };
   if (how.kind === 'fillet' && !(how.r > 0)) return { err: 'They already meet in a corner' };
   const { P, B: Bl } = plArrays(e);

@@ -204,6 +204,26 @@ module.exports = ({ scene, ok, eq }) => {
     ok('and none on the chord it used to draw', r.chord > r.paper - 10, JSON.stringify(r));
   });
 
+  scene('FILLET: two segments of one polyline, first one then the next', async (page) => {
+    await page.evaluate(() => { OG.reset(); OG.stage(1500, 1500, 0.15); });
+    await command(page, 'PLINE');
+    for (const p of ['0,0', '3000,0', '3000,3000']) { await page.keyboard.type(p); await page.keyboard.press('Enter'); }
+    await page.keyboard.press('Enter');
+    await command(page, 'FILLET');
+    await page.keyboard.type('R'); await page.keyboard.press('Enter');
+    await page.keyboard.type('500'); await page.keyboard.press('Enter');
+    await page.evaluate(() => OG.settle());
+    const a = await at(page, 1500, 0), b = await at(page, 3000, 1500);
+    await page.mouse.click(a.x, a.y);
+    await page.mouse.move(b.x, b.y, { steps: 4 });
+    await page.mouse.click(b.x, b.y);
+    const r = await page.evaluate(() => {
+      const e = [...DOC.ents.values()][0];
+      return { n: e.pts.length, arcs: (e.bulges || []).filter(Boolean).length, T1: e.pts[1].map(Math.round), T2: e.pts[2].map(Math.round) };
+    });
+    eq('the corner is a 500 arc from 2500,0 to 3000,500', r, { n: 4, arcs: 1, T1: [2500, 0], T2: [3000, 500] });
+  });
+
   scene('TRIM: hovering shows the piece a click would take, with a pick box and no snap', async (page) => {
     await page.evaluate(grid);
     await command(page, 'TR');
