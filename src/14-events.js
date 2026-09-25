@@ -323,6 +323,11 @@ function startBandGesture(scr, kind, sense, keep) {
 }
 stage.addEventListener('pointerdown', ev => {
   if (ev.target.closest('.dyn')) return;
+  /* A2 (snaps): the right button is AutoCAD's Enter / shortcut menu, and
+     Shift+right-click the object snap menu — all handled on contextmenu.
+     Its press used to run down the left button's path and hand a running
+     command a POINT first, so asking for the snap menu drew a segment. */
+  if (ev.button === 2) return;
   /* a pointer that has already been released throws here, and losing the
      capture must never cost us the whole press */
   try { stage.setPointerCapture(ev.pointerId); } catch (_) { }

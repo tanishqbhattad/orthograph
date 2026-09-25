@@ -1714,8 +1714,15 @@ function showSnapMenu(sx, sy) {
      <button class="smi" data-s="1"><span class="smg"></span><span class="smt">Object snap settings…</span></button>`);
   document.body.appendChild(SNAPMENU);
   const H = (window.innerHeight || 800), W = (window.innerWidth || 1200);
-  SNAPMENU.style.left = Math.max(4, Math.min(sx, W - 232)) + 'px';
-  SNAPMENU.style.top = Math.max(4, Math.min(sy, H - 470)) + 'px';
+  /* A2 (snaps): placed by its MEASURED size, not a guessed 470px — the menu
+     is taller than that, and opened low on the drawing it ran off the bottom
+     of the window with Insertion, Nearest, None and the settings cut off.
+     Taller than the window itself, it scrolls rather than overflowing. */
+  let mh = 470, mw = 228;
+  try { const b = SNAPMENU.getBoundingClientRect(); if (b.height > 0) mh = b.height; if (b.width > 0) mw = b.width; } catch (e) { }
+  if (mh > H - 8) { SNAPMENU.style.maxHeight = (H - 8) + 'px'; SNAPMENU.style.overflowY = 'auto'; mh = H - 8; }
+  SNAPMENU.style.left = Math.max(4, Math.min(sx, W - mw - 4)) + 'px';
+  SNAPMENU.style.top = Math.max(4, Math.min(sy, H - mh - 4)) + 'px';
   SNAPMENU.querySelectorAll('.smi').forEach(b => {
     b.onclick = ev => {
       ev.stopPropagation();

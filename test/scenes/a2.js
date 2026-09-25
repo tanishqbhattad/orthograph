@@ -160,6 +160,58 @@ module.exports = ({ scene, ok, eq }) => {
     await page.evaluate(() => { ST.otrack = true; setOsmode(4133 | 2 | 8 | 16 | 128 | 131072 | 262144); });
   });
 
+  /* Shift+right-click at a point prompt opens the object snap menu and does
+     nothing else; a plain right-click is Enter. Both used to pick a point on
+     the way — the press went down the left button's path — so LINE after a
+     first point grew a segment to wherever the menu was asked for. */
+  scene('Shift+right-click opens the snap menu without picking, and the menu fits the window', async (page) => {
+    await board(page);
+    await type(page, 'line');
+    await clickAt(page, 0, 0, 3, 2);
+    const before = await page.evaluate(() => CMD.pts.length);
+    /* low down the drawing, where a tall menu has to open upward to fit */
+    const low = await page.evaluate(() => { const b = document.getElementById('cv').getBoundingClientRect(); return { x: b.left + b.width * 0.6, y: b.bottom - 30 }; });
+    await page.mouse.move(low.x + 5, low.y - 4); await page.mouse.move(low.x, low.y);
+    const q = low;
+    await page.keyboard.down('Shift');
+    await page.mouse.click(q.x, q.y, { button: 'right' });
+    await page.keyboard.up('Shift');
+    await page.evaluate(() => OG.settle());
+    const r = await page.evaluate(() => {
+      const m = document.querySelector('.snapmenu');
+      const b = m && m.getBoundingClientRect();
+      const rows = m ? [...m.querySelectorAll('.smt')].map(n => n.textContent) : [];
+      const last = m ? [...m.querySelectorAll('.smi')].pop().getBoundingClientRect() : null;
+      return { pts: CMD.pts.length, lines: [...DOC.ents.values()].filter(e => e.t === 'line').length,
+               open: !!m, rows, box: b && { top: b.top, bottom: b.bottom, left: b.left, right: b.right },
+               last: last && { top: last.top, bottom: last.bottom }, H: innerHeight, W: innerWidth };
+    });
+    eq('no point was picked', r.pts, before);
+    eq('no segment was drawn', r.lines, 1);
+    eq('the menu is open', r.open, true);
+    ok('the whole menu is inside the window', r.box.top >= 0 && r.box.bottom <= r.H && r.box.right <= r.W,
+      JSON.stringify(r.box) + ' in ' + r.W + 'x' + r.H);
+    ok('down to its last row', r.last.bottom <= r.H, JSON.stringify(r.last));
+    /* pick Endpoint from it: the one-shot is armed and the prompt says "of" */
+    await page.click('.snapmenu .smi[data-k="end"]');
+    const armed = await page.evaluate(() => ({ one: ST.osnapOne, base: PROMPT.base, pts: CMD.pts.length }));
+    eq('Endpoint is armed for the next point', [armed.one, armed.base, armed.pts], ['end', 'of', before]);
+    await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+
+    /* a plain right-click after two points is Enter: the line ends, nothing is added */
+    await board(page);
+    await type(page, 'line');
+    await clickAt(page, 0, 0, 3, 2);
+    await clickAt(page, 300, 400);
+    const q2 = await moveTo(page, 600, 300);
+    await page.mouse.click(q2.x, q2.y, { button: 'right' });
+    await page.evaluate(() => OG.settle());
+    const e = await page.evaluate(() => ({ cmd: CMD ? CMD.def.key : null,
+      lines: [...DOC.ents.values()].filter(e => e.t === 'line').map(l => [l.a, l.b]) }));
+    eq('a plain right-click ends the command', e.cmd, null);
+    eq('and adds no segment', e.lines.length, 2);
+  });
+
   scene('LINE, TAN, TAN draws the tangent common to two circles', async (page) => {
     await board(page);
     await type(page, 'line');
