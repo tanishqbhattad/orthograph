@@ -322,7 +322,9 @@ function startBandGesture(scr, kind, sense, keep) {
   return ST.band;
 }
 stage.addEventListener('pointerdown', ev => {
-  if (ev.target.closest('.dyn')) return;
+  /* A2 (snaps): only the input FIELDS of the dynamic input take a press —
+     a press on its labels or its gaps is a pick on the drawing, never lost */
+  if (ev.target.closest('.dyn input')) return;
   /* A2 (snaps): the right button is AutoCAD's Enter / shortcut menu, and
      Shift+right-click the object snap menu — all handled on contextmenu.
      Its press used to run down the left button's path and hand a running
@@ -687,7 +689,11 @@ function syncDyn() {
   const ref = refPoint();
   const mode = ref ? 'polar' : 'abs';
   if (dynEl && dynMode !== mode) dynKill();        /* the fields mean something else now */
-  const s = w2s(ST.cur);
+  /* A2 (snaps): anchored at the HAND, not at the snapped point. A snap can sit
+     up and to the left of the pointer — a line's midpoint while the cursor is
+     further along it — and a box anchored there lay under the pointer and
+     swallowed the click. Off the pointer's own position it never can. */
+  const s = w2s(ST.raw || ST.cur);
   if (!isFinite(s[0]) || !isFinite(s[1])) { dynKill(); return; }
   if (!dynEl) {
     dynMode = mode;

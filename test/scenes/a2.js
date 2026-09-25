@@ -212,6 +212,38 @@ module.exports = ({ scene, ok, eq }) => {
     eq('and adds no segment', e.lines.length, 2);
   });
 
+  /* The dynamic input box was anchored at the SNAPPED point. When the snap
+     is up and to the left of the hand — a line's midpoint while the cursor is
+     further along it — the box sat under the physical cursor and the click
+     landed on its LENGTH label and was thrown away. */
+  scene('a pick is never swallowed by the dynamic input box', async (page) => {
+    await page.evaluate(() => {
+      OG.reset();
+      begin(); addEnt({ t: 'line', a: [0, 0], b: [1000, 0] }); commit('l');
+      OG.stage(1000, 300, 0.3);
+      ST.polar = false; ST.otrack = false; ST.dyn = true;
+      setOsmode(4133 | 2 | 8 | 16 | 128 | 131072 | 262144);
+    });
+    await page.evaluate(() => OG.settle());
+    await type(page, 'line');
+    await type(page, '700,1500');
+    const a = await moveTo(page, 600, 0, 0, 3);
+    const q = { x: a.x, y: a.y + 3 };              /* where the hand actually is */
+    const r = await page.evaluate(([x, y]) => {
+      const n = document.elementFromPoint(x, y);
+      const d = document.querySelector('.dyn'); const b = d && d.getBoundingClientRect();
+      return { k: ST.snap && ST.snap.k, p: ST.snap && ST.snap.p, under: n ? (n.id || n.tagName) : null,
+               dyn: b && [b.left, b.top, b.right, b.bottom] };
+    }, [q.x, q.y]);
+    eq('the midpoint is what is offered', [r.k, r.p], ['mid', [500, 0]]);
+    eq('and the drawing, not the input box, is under the cursor', r.under, 'cv');
+    await page.mouse.click(q.x, q.y);
+    await page.evaluate(() => OG.settle());
+    const pts = await page.evaluate(() => CMD && CMD.pts.map(p => p.slice()));
+    eq('the click is taken, at the midpoint', pts, [[700, 1500], [500, 0]]);
+    await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+  });
+
   scene('LINE, TAN, TAN draws the tangent common to two circles', async (page) => {
     await board(page);
     await type(page, 'line');
