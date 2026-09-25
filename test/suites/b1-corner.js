@@ -296,6 +296,31 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.said, '4 lines were chamfered'); eq(r.n, 8);
   });
 
+  group('B1 EXPLODE');
+
+  t('exploding a curved polyline gives its arcs as arcs', () => {
+    const r = R(`${SETUP}
+      begin(); const e = addEnt({t:'pline', pts:[[0,0],[1000,0],[1000,1000],[0,1000]], bulges:[0,1,0,0], closed:true, color:'#ff0000'}); commit('x');
+      SEL.add(e.id); startCmd('explode');
+      const all = ${ents};
+      const arc = all.find(q => q.t === 'arc');
+      return { kinds: all.map(q => q.t).sort().join(','), c: arc && arc.c.map(v => +v.toFixed(6)), r: arc && arc.r,
+               mid: arc && arcPt(arc, 0.5).map(v => +v.toFixed(6)), col: all.every(q => q.color === '#ff0000') };`);
+    eq(r.kinds, 'arc,line,line,line');
+    eq(JSON.stringify(r.c), '[1000,500]'); close(r.r, 500, 1e-9);
+    eq(JSON.stringify(r.mid), '[1500,500]', 'bowing out, as it did in the polyline');
+    eq(r.col, true, 'each piece keeps the pen of the polyline');
+  });
+
+  t('PEDIT Decurve straightens the arcs of a polyline', () => {
+    const r = R(`${SETUP}
+      begin(); const e = addEnt({t:'pline', pts:[[0,0],[1000,0],[1000,1000]], bulges:[0,1,0]}); commit('x');
+      startCmd('pedit'); cmdPoint([500, 0]); dispatch('D'); endCmd(true);
+      const q = DOC.ents.get(e.id);
+      return { b: !!q.bulges && q.bulges.some(Boolean), L: entLength(q) };`);
+    eq(r.b, false); close(r.L, 2000, 1e-9);
+  });
+
   group('B1 JOIN');
 
   t('lines and arcs that meet end to end become one polyline, arcs kept', () => {

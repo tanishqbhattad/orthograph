@@ -15765,7 +15765,16 @@ defc('explode', {
     begin(); let n = 0;
     for (const e of selEnts()) {
       const meta = { layer: e.layer, color: e.color, lt: e.lt, lw: e.lw };
-      if (e.t === 'pline' || e.t === 'spline') {
+      if (e.t === 'pline') {
+        /* each span becomes what it is: a line, or an ARC for a curved one */
+        const C = curveOf(e);
+        for (const s of (C ? C.segs : [])) {
+          if (s.k === 'l') addEnt(Object.assign({ t: 'line', a: s.a.slice(), b: s.b.slice() }, meta));
+          else addEnt(Object.assign({ t: 'arc', c: s.c.slice(), r: s.r,
+            a0: wrap(s.sw > 0 ? s.a0 : s.a0 + s.sw), a1: wrap(s.sw > 0 ? s.a0 + s.sw : s.a0) }, meta));
+        }
+        delEnt(e.id); n++;
+      } else if (e.t === 'spline') {
         const P = e.closed ? [...e.pts, e.pts[0]] : e.pts;
         for (let i = 1; i < P.length; i++) addEnt(Object.assign({ t: 'line', a: P[i - 1], b: P[i] }, meta));
         delEnt(e.id); n++;
@@ -15824,7 +15833,8 @@ defc('pedit', {
     if (k === 'c') c.e.closed = true;
     else if (k === 'o') c.e.closed = false;
     else if (k === 's') { c.e.fit = c.e.fit || c.e.pts.slice(); c.e.t = 'spline'; c.e.pts = fitSpline(c.e.fit, c.e.closed); }
-    else if (k === 'd') { c.e.t = 'pline'; if (c.e.fit) c.e.pts = c.e.fit; }
+    /* Decurve straightens every segment, the bulges included, as AutoCAD's does */
+    else if (k === 'd') { c.e.t = 'pline'; if (c.e.fit) c.e.pts = c.e.fit; delete c.e.bulges; }
     else { rollback(); return false; }
     commit('Polyline edit'); draw(); return true;
   },
