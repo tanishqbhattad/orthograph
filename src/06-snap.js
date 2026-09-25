@@ -513,6 +513,43 @@ function snapRefresh() {
     rather than the point (the keyboard crosshair) */
 function snapAt(sx, sy, ref) { snapPoint(sx, sy, ref); return ST.snap; }
 
+/* ---------------- a distance typed on an alignment path ----------------
+   With an Extension or a tracking path showing, AutoCAD measures a typed
+   distance from the ACQUIRED point along the path — the tooltip says
+   "Extension: 500 < 0°", and 500 means 500 from that end. Direct distance
+   entry measures from the last point toward the cursor, which on a path is
+   a point the tooltip was never describing. Parallel and polar need nothing:
+   their path already runs out of the last point. */
+/** the straight path the crosshair is on, as {o, a, L}, or null */
+function snapPathBase() {
+  const s = ST.snap;
+  if (!s || !s.meta || ST.snapV !== DOCV) return null;
+  const m = s.meta;
+  if (s.k === 'ext' && !m.arc && m.o && isFinite(m.a)) return { o: m.o, a: m.a, L: m.L, k: 'ext' };
+  if (s.k === 'track' && m.o && isFinite(m.a)) return { o: m.o, a: m.a, L: dist(m.o, s.p), k: 'track' };
+  return null;
+}
+/** a prompt that wants a location — not a radius, a length or a count */
+function snapPointPrompt() {
+  if (typeof PROMPT === 'undefined' || !PROMPT) return true;
+  const b = String(PROMPT.base || '');
+  return /point|corner/i.test(b) && !/radius|diameter|distance|length|angle/i.test(b);
+}
+/** a typed distance, placed along the path the crosshair is on; null when
+    there is no path, or the text is not a bare distance */
+function snapTypedPoint(txt) {
+  const t = String(txt == null ? '' : txt).trim();
+  if (!t || /[,<@#]/.test(t) || ST.angOverride != null) return null;
+  const P = snapPathBase();
+  if (!P || !snapPointPrompt()) return null;
+  const d = typeof parseLen === 'function' ? parseLen(t) : parseFloat(t);
+  if (!isFinite(d)) return null;
+  return snapPathAt(P, d);
+}
+function snapPathAt(P, d) { return [P.o[0] + Math.cos(P.a) * d, P.o[1] + Math.sin(P.a) * d]; }
+/** the path the dynamic-input fields should measure along, at a point prompt */
+function snapDynPath() { return snapPointPrompt() ? snapPathBase() : null; }
+
 /* ---------------- snap tracking ---------------- */
 let _dwellPt = null, _dwellT0 = 0, _dwellUsed = false;
 let _parEnt = null, _parT0 = 0, _parUsed = false;

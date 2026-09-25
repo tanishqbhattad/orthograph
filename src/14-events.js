@@ -641,6 +641,10 @@ function dynApply(p) {
     const y = dynLock.f2 ? parseLen(f2.value) : p[1];
     return [isNaN(x) ? p[0] : x, isNaN(y) ? p[1] : y];
   }
+  /* A2 (snaps): a length typed while an Extension or tracking path is
+     showing runs along that path from its acquired point — snapDynPath */
+  const P = !dynLock.f2 && typeof snapDynPath === 'function' ? snapDynPath() : null;
+  if (P && dynLock.f1 && !isNaN(parseLen(f1.value))) return snapPathAt(P, parseLen(f1.value));
   let L = dynLock.f1 ? parseLen(f1.value) : dist(ref, p);
   let A = dynLock.f2 ? rad(parseFloat(f2.value)) : ang(ref, p);
   if (isNaN(L)) L = dist(ref, p);
@@ -661,7 +665,11 @@ function dynCommit() {
     const L = parseLen(f1.value);
     const A = f2.value.trim() === '' ? ang(ref, ST.cur) : rad(parseFloat(f2.value));
     if (isNaN(L)) return;
-    out = [ref[0] + Math.cos(isNaN(A) ? ang(ref, ST.cur) : A) * L,
+    /* A2 (snaps): on an Extension or tracking path the length is measured
+       along the path from its acquired point, unless an angle was typed */
+    const P = !dynLock.f2 && typeof snapDynPath === 'function' ? snapDynPath() : null;
+    if (P) out = snapPathAt(P, L);
+    else out = [ref[0] + Math.cos(isNaN(A) ? ang(ref, ST.cur) : A) * L,
       ref[1] + Math.sin(isNaN(A) ? ang(ref, ST.cur) : A) * L];
   }
   dynRelease();
@@ -712,8 +720,11 @@ function syncDyn() {
   }
   dynEl.style.left = s[0] + 'px'; dynEl.style.top = s[1] + 'px';
   const f1 = $('#dF1'), f2 = $('#dF2');
-  const live1 = mode === 'abs' ? fmt(ST.cur[0]) : fmt(dist(ref, ST.cur));
-  const live2 = mode === 'abs' ? fmt(ST.cur[1]) : deg(ang(ref, ST.cur)).toFixed(1);
+  /* A2 (snaps): on an Extension or tracking path the fields show the
+     distance and direction along it, which is what a typed length will mean */
+  const DP = mode === 'polar' && typeof snapDynPath === 'function' ? snapDynPath() : null;
+  const live1 = mode === 'abs' ? fmt(ST.cur[0]) : fmt(DP ? DP.L : dist(ref, ST.cur));
+  const live2 = mode === 'abs' ? fmt(ST.cur[1]) : deg(DP ? DP.a : ang(ref, ST.cur)).toFixed(1);
   if (document.activeElement !== f1 && !dynLock.f1) f1.value = live1;
   if (document.activeElement !== f2 && !dynLock.f2) f2.value = live2;
 }

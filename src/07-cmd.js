@@ -776,6 +776,11 @@ function cmdText(s) {
     if (typeof buildProps === 'function') buildProps();
     return true;
   }
+  /* A2 (snaps): on an Extension or tracking path, a bare distance runs from
+     the acquired point along the path, as AutoCAD measures it — see
+     snapTypedPoint in 06-snap. The command's own options above still win. */
+  const tp = typeof snapTypedPoint === 'function' ? snapTypedPoint(s) : null;
+  if (tp) { cmdPoint(tp, true); return true; }
   const ref = c.pts.length ? c.pts[c.pts.length - 1] : (ST.lastPt || null);
   const p = parseCoord(s, ref, ST.cur);
   if (p) { cmdPoint(p, true); return true; }

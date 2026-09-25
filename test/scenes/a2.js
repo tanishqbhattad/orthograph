@@ -111,6 +111,55 @@ module.exports = ({ scene, ok, eq }) => {
     await page.evaluate(() => { SEL.clear(); draw(); });
   });
 
+  /* The tooltip says "Extension: 500 < 0°" and 500 has to mean 500 from the
+     END, along the path — typed at the cursor (the dynamic input) or on the
+     command line. It meant 500 from the last point toward the cursor. */
+  scene('a distance typed on an Extension or tracking path runs along the path', async (page) => {
+    const setup = async (modes, otrack) => {
+      await page.evaluate(([modes, otrack]) => {
+        OG.reset();
+        begin(); addEnt({ t: 'line', a: [0, 0], b: [1000, 0] }); commit('l');
+        OG.stage(900, 300, 0.3);
+        ST.polar = false; ST.otrack = otrack; ST.dyn = true;
+        toggleSnap('none'); for (const k of modes) ST.osnapOn[k] = 1;
+      }, [modes, otrack]);
+      await page.evaluate(() => OG.settle());
+      await type(page, 'line');
+      await clickAt(page, 300, 800);               /* on empty paper: focus stays on the drawing */
+    };
+    const slide = async () => {
+      await moveTo(page, 1000, 0, -3, 2);           /* pause over the end */
+      await new Promise(r => setTimeout(r, 400));
+      await moveTo(page, 1000, 0, -2, 2);
+      await moveTo(page, 1500, 0, 0, 2);            /* and slide out along the path */
+      return page.evaluate(() => ST.snapTip);
+    };
+    const last = () => page.evaluate(() => { const l = [...DOC.ents.values()].filter(e => e.t === 'line').pop(); return [l.a, l.b.map(v => +v.toFixed(9))]; });
+
+    await setup(['ext', 'end'], false);
+    eq('the Extension tooltip', await slide(), 'Extension: 500 < 0°');
+    await page.keyboard.type('500');               /* at the cursor: the dynamic input */
+    await page.keyboard.press('Enter');
+    await page.evaluate(() => OG.settle());
+    eq('typed at the cursor, it ends 500 past the end', await last(), [[300, 800], [1500, 0]]);
+    await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+
+    await setup(['ext', 'end'], false);
+    await slide();
+    await type(page, '500');                       /* on the command line */
+    eq('typed on the command line, the same', await last(), [[300, 800], [1500, 0]]);
+    await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+
+    await setup(['end'], true);
+    eq('the tracking tooltip', await slide(), 'Endpoint: 500 < 0°');
+    await page.keyboard.type('500');
+    await page.keyboard.press('Enter');
+    await page.evaluate(() => OG.settle());
+    eq('along a tracking path, the same', await last(), [[300, 800], [1500, 0]]);
+    await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+    await page.evaluate(() => { ST.otrack = true; setOsmode(4133 | 2 | 8 | 16 | 128 | 131072 | 262144); });
+  });
+
   scene('LINE, TAN, TAN draws the tangent common to two circles', async (page) => {
     await board(page);
     await type(page, 'line');

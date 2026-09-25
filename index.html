@@ -8356,6 +8356,43 @@ function snapRefresh() {
     rather than the point (the keyboard crosshair) */
 function snapAt(sx, sy, ref) { snapPoint(sx, sy, ref); return ST.snap; }
 
+/* ---------------- a distance typed on an alignment path ----------------
+   With an Extension or a tracking path showing, AutoCAD measures a typed
+   distance from the ACQUIRED point along the path — the tooltip says
+   "Extension: 500 < 0°", and 500 means 500 from that end. Direct distance
+   entry measures from the last point toward the cursor, which on a path is
+   a point the tooltip was never describing. Parallel and polar need nothing:
+   their path already runs out of the last point. */
+/** the straight path the crosshair is on, as {o, a, L}, or null */
+function snapPathBase() {
+  const s = ST.snap;
+  if (!s || !s.meta || ST.snapV !== DOCV) return null;
+  const m = s.meta;
+  if (s.k === 'ext' && !m.arc && m.o && isFinite(m.a)) return { o: m.o, a: m.a, L: m.L, k: 'ext' };
+  if (s.k === 'track' && m.o && isFinite(m.a)) return { o: m.o, a: m.a, L: dist(m.o, s.p), k: 'track' };
+  return null;
+}
+/** a prompt that wants a location — not a radius, a length or a count */
+function snapPointPrompt() {
+  if (typeof PROMPT === 'undefined' || !PROMPT) return true;
+  const b = String(PROMPT.base || '');
+  return /point|corner/i.test(b) && !/radius|diameter|distance|length|angle/i.test(b);
+}
+/** a typed distance, placed along the path the crosshair is on; null when
+    there is no path, or the text is not a bare distance */
+function snapTypedPoint(txt) {
+  const t = String(txt == null ? '' : txt).trim();
+  if (!t || /[,<@#]/.test(t) || ST.angOverride != null) return null;
+  const P = snapPathBase();
+  if (!P || !snapPointPrompt()) return null;
+  const d = typeof parseLen === 'function' ? parseLen(t) : parseFloat(t);
+  if (!isFinite(d)) return null;
+  return snapPathAt(P, d);
+}
+function snapPathAt(P, d) { return [P.o[0] + Math.cos(P.a) * d, P.o[1] + Math.sin(P.a) * d]; }
+/** the path the dynamic-input fields should measure along, at a point prompt */
+function snapDynPath() { return snapPointPrompt() ? snapPathBase() : null; }
+
 /* ---------------- snap tracking ---------------- */
 let _dwellPt = null, _dwellT0 = 0, _dwellUsed = false;
 let _parEnt = null, _parT0 = 0, _parUsed = false;
@@ -11642,6 +11679,11 @@ function cmdText(s) {
     if (typeof buildProps === 'function') buildProps();
     return true;
   }
+  /* A2 (snaps): on an Extension or tracking path, a bare distance runs from
+     the acquired point along the path, as AutoCAD measures it — see
+     snapTypedPoint in 06-snap. The command's own options above still win. */
+  const tp = typeof snapTypedPoint === 'function' ? snapTypedPoint(s) : null;
+  if (tp) { cmdPoint(tp, true); return true; }
   const ref = c.pts.length ? c.pts[c.pts.length - 1] : (ST.lastPt || null);
   const p = parseCoord(s, ref, ST.cur);
   if (p) { cmdPoint(p, true); return true; }
@@ -24739,6 +24781,10 @@ function dynApply(p) {
     const y = dynLock.f2 ? parseLen(f2.value) : p[1];
     return [isNaN(x) ? p[0] : x, isNaN(y) ? p[1] : y];
   }
+  /* A2 (snaps): a length typed while an Extension or tracking path is
+     showing runs along that path from its acquired point — snapDynPath */
+  const P = !dynLock.f2 && typeof snapDynPath === 'function' ? snapDynPath() : null;
+  if (P && dynLock.f1 && !isNaN(parseLen(f1.value))) return snapPathAt(P, parseLen(f1.value));
   let L = dynLock.f1 ? parseLen(f1.value) : dist(ref, p);
   let A = dynLock.f2 ? rad(parseFloat(f2.value)) : ang(ref, p);
   if (isNaN(L)) L = dist(ref, p);
@@ -24759,7 +24805,11 @@ function dynCommit() {
     const L = parseLen(f1.value);
     const A = f2.value.trim() === '' ? ang(ref, ST.cur) : rad(parseFloat(f2.value));
     if (isNaN(L)) return;
-    out = [ref[0] + Math.cos(isNaN(A) ? ang(ref, ST.cur) : A) * L,
+    /* A2 (snaps): on an Extension or tracking path the length is measured
+       along the path from its acquired point, unless an angle was typed */
+    const P = !dynLock.f2 && typeof snapDynPath === 'function' ? snapDynPath() : null;
+    if (P) out = snapPathAt(P, L);
+    else out = [ref[0] + Math.cos(isNaN(A) ? ang(ref, ST.cur) : A) * L,
       ref[1] + Math.sin(isNaN(A) ? ang(ref, ST.cur) : A) * L];
   }
   dynRelease();
@@ -24810,8 +24860,11 @@ function syncDyn() {
   }
   dynEl.style.left = s[0] + 'px'; dynEl.style.top = s[1] + 'px';
   const f1 = $('#dF1'), f2 = $('#dF2');
-  const live1 = mode === 'abs' ? fmt(ST.cur[0]) : fmt(dist(ref, ST.cur));
-  const live2 = mode === 'abs' ? fmt(ST.cur[1]) : deg(ang(ref, ST.cur)).toFixed(1);
+  /* A2 (snaps): on an Extension or tracking path the fields show the
+     distance and direction along it, which is what a typed length will mean */
+  const DP = mode === 'polar' && typeof snapDynPath === 'function' ? snapDynPath() : null;
+  const live1 = mode === 'abs' ? fmt(ST.cur[0]) : fmt(DP ? DP.L : dist(ref, ST.cur));
+  const live2 = mode === 'abs' ? fmt(ST.cur[1]) : deg(DP ? DP.a : ang(ref, ST.cur)).toFixed(1);
   if (document.activeElement !== f1 && !dynLock.f1) f1.value = live1;
   if (document.activeElement !== f2 && !dynLock.f2) f2.value = live2;
 }

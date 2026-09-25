@@ -24,7 +24,8 @@ const SETUP = `
   ST.defer = null; ST.xpick = null; ST.osPrompt = null;
   toggleSnap('none');
   const onlyModes = (...ks) => { toggleSnap('none'); for (const k of ks) ST.osnapOn[k] = 1; };
-  const at = (x, y) => { const s = w2s([x, y]); return snapPoint(s[0], s[1], refPoint()); };
+  /* what a pointer move does: snap, and the crosshair goes where the snap put it */
+  const at = (x, y) => { const s = w2s([x, y]); return (ST.cur = snapPoint(s[0], s[1], refPoint())); };
   const pick = (x, y) => { const p = at(x, y); cmdPoint(p); return p; };
   const last = () => CLI.lines[CLI.lines.length - 1].t;
   const lineEnts = () => [...DOC.ents.values()].filter(e => e.t === 'line');
@@ -572,6 +573,72 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       startCmd('line'); runInput('mid'); pick(100, 2);
       return CMD.pts[0];`);
     eq(JSON.stringify(r), '[200,0]');
+  });
+
+  /* ============================================================ */
+  group('A2 a distance typed on an alignment path is measured along the path');
+
+  /* AutoCAD: LINE 300,800, pause on the end of a line, slide out along the
+     dotted Extension path, type 500, Enter — the point is 500 from the END,
+     along the path. It was 500 from the LAST POINT toward the cursor: a
+     point nowhere near the path the tooltip was describing. */
+  t('Extension: the typed distance runs from the acquired end along the path', () => {
+    const r = R(`${SETUP}
+      onlyModes('ext', 'end');
+      addEnt({t:'line', a:[0,0], b:[1000,0]});
+      startCmd('line'); runInput('300,800');
+      at(1000, 1);                        /* over the end: acquired */
+      at(1500, 2);                        /* out along the extension */
+      const k = ST.snap && ST.snap.k, tip = ST.snapTip;
+      runInput('500');
+      const L = lineEnts().filter(e => e.a[0] === 300).pop();
+      return { k, tip, a: L && L.a, b: L && L.b };`);
+    eq(r.k, 'ext');
+    eq(r.tip, 'Extension: 500 < 0°');
+    eq(JSON.stringify(r.a), '[300,800]');
+    eq(JSON.stringify(r.b), '[1500,0]');
+  });
+
+  t('object snap tracking: the typed distance runs from the acquired point along the path', () => {
+    const r = R(`${SETUP}
+      onlyModes('end'); ST.otrack = true;
+      addEnt({t:'line', a:[0,0], b:[1000,0]});
+      startCmd('line'); runInput('300,800');
+      acquireTrack([1000, 0], 'end');
+      at(1500, 3);
+      const k = ST.snap && ST.snap.k, tip = ST.snapTip;
+      runInput('500');
+      const L = lineEnts().filter(e => e.a[0] === 300).pop();
+      ST.otrack = false;
+      return { k, tip, b: L && L.b };`);
+    eq(r.k, 'track');
+    eq(r.tip, 'Endpoint: 500 < 0°');
+    eq(JSON.stringify(r.b), '[1500,0]');
+  });
+
+  t('a typed radius is still a radius, whatever path is showing', () => {
+    const r = R(`${SETUP}
+      onlyModes('ext', 'end');
+      addEnt({t:'line', a:[0,0], b:[1000,0]});
+      startCmd('circle'); runInput('300,800');
+      at(1000, 1); at(1500, 2);
+      const k = ST.snap && ST.snap.k;
+      runInput('500');
+      const C = [...DOC.ents.values()].find(e => e.t === 'circle');
+      return { k, r: C && C.r, c: C && C.c };`);
+    eq(r.k, 'ext', 'the path really is showing');
+    eq(r.r, 500);
+    eq(JSON.stringify(r.c), '[300,800]');
+  });
+
+  t('with no path showing, a typed distance is still direct distance entry toward the cursor', () => {
+    const r = R(`${SETUP}
+      startCmd('line'); runInput('0,0');
+      at(300, 400);
+      runInput('500');
+      const L = lineEnts().pop();
+      return L && L.b;`);
+    close(r[0], 300, 1e-9); close(r[1], 400, 1e-9);
   });
 
   /* ============================================================ */
