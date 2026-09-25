@@ -2032,18 +2032,22 @@ function acSuggest(text, limit) {
   if (!q) return [];
   const mid = !!(CLI.autoComplete & 16);
   const seen = new Set(), out = [];
+  /* An alias typed in full IS that command: L is LINE, C is CIRCLE, before
+     LABEL, LAYER or CANNOSCALE, however alphabetical or recent those are. The
+     top row is what Enter runs once the append bit has written it into the
+     field, so ranking the alias level with every other prefix match made
+     L-Enter start LABEL. A command name typed in full comes next, and system
+     variables sort behind the commands that share their band. */
+  const al = (USERALIAS[q] || ALIAS[q] || '').toUpperCase();
   for (const c of cmdCatalog()) {
     const lo = c.name.toLowerCase();
-    let rank = -1;
+    let rank = -9;
     if (lo.startsWith(q)) rank = 0;
     else if (mid && lo.indexOf(q) > 0) rank = 2;
-    /* An alias typed in full offers its command straight away, and FIRST:
-       S Enter is STRETCH and E Enter is ERASE, as they are in AutoCAD, not
-       whichever command happens to sort ahead of them (SAVE, ELLIPSE). */
-    const al = (USERALIAS[q] || ALIAS[q] || '').toUpperCase();
-    const aliasHit = !!al && al === c.name;
-    if ((rank < 0 && !aliasHit) || seen.has(c.name)) continue;
-    if (aliasHit) rank = -1;
+    if (rank > -9 && c.kind === 'var') rank += 0.5;
+    if (lo === q && c.kind !== 'var') rank = -1;
+    if (al && al === c.name) rank = -2;
+    if (rank === -9 || seen.has(c.name)) continue;
     seen.add(c.name);
     const m = CLI.mru.indexOf(c.name);
     out.push({ name: c.name, kind: c.kind, key: c.key, alias: aliasFor(c.name), rank, mru: m < 0 ? 999 : m });
