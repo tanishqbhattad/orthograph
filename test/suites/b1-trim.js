@@ -21,12 +21,19 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
 
   t('the prompt is AutoCAD\'s, with its keywords', () => {
     const r = R(`${SETUP}
+      begin(); addEnt({t:'line', a:[0,-500], b:[0,500]}); addEnt({t:'line', a:[-500,0], b:[500,0]}); commit('x');
       startCmd('trim');
       const p = PROMPT.text, keys = PROMPT.keys.map(k => k.key).join(',');
+      cmdPoint([0, 300]);
+      const after = PROMPT.text;
       endCmd(true);
-      return { p, keys };`);
-    eq(r.p, 'Select object to trim or shift-select to extend or [cuTting edges/Crossing/mOde/Project/eRase/Undo]:');
-    eq(r.keys, 'T,C,O,P,R,U');
+      startCmd('extend'); const ex = PROMPT.text; endCmd(true);
+      return { p, keys, after, ex };`);
+    /* Undo is offered once there is something to take back */
+    eq(r.p, 'Select object to trim or shift-select to extend or [cuTting edges/Crossing/mOde/Project/eRase]:');
+    eq(r.keys, 'T,C,O,P,R');
+    eq(r.after, 'Select object to trim or shift-select to extend or [cuTting edges/Crossing/mOde/Project/eRase/Undo]:');
+    eq(r.ex, 'Select object to extend or shift-select to trim or [Boundary edges/Crossing/mOde/Project]:');
   });
 
   t('an object that nothing crosses is erased, as Quick mode does', () => {
@@ -186,7 +193,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       return { ask, phase, p, n, tops };`);
     eq(r.phase, 'sel', 'it opens a selection');
     ok(/select all/i.test(r.ask), 'offering all of them: ' + r.ask);
-    ok(/\[Fence\/Crossing\/mOde\/Project\/Edge\/eRase\/Undo\]/.test(r.p), 'the Standard keywords: ' + r.p);
+    ok(/\[Fence\/Crossing\/mOde\/Project\/Edge\/eRase\]/.test(r.p), 'the Standard keywords: ' + r.p);
     eq(r.tops.join(','), '2000');
     eq(r.n, 3, 'and an object no edge crosses is not erased');
   });

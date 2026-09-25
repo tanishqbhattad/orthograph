@@ -377,11 +377,13 @@ const TRIM_WORD = { trim: 'Trim', extend: 'Extend' };
 function trimPrompt(c) {
   const ext = c.ext;
   const q = c.quick;
+  /* Undo is offered once there is something to take back, as AutoCAD does */
+  const u = c.ops && c.ops.length ? '/Undo' : '';
   hint(ext
     ? 'Select object to extend or shift-select to trim or [' + (q ? 'Boundary edges/' : 'Fence/') +
-      'Crossing/mOde/Project/' + (q ? '' : 'Edge/') + 'Undo]:'
+      'Crossing/mOde/Project' + (q ? '' : '/Edge') + u + ']:'
     : 'Select object to trim or shift-select to extend or [' + (q ? 'cuTting edges/' : 'Fence/') +
-      'Crossing/mOde/Project/' + (q ? '' : 'Edge/') + 'eRase/Undo]:');
+      'Crossing/mOde/Project/' + (q ? '' : 'Edge/') + 'eRase' + u + ']:');
 }
 function trimSettings(c) {
   cliPrint('Current settings: Projection=UCS, Edge=' + (VS.edgemode ? 'Extend' : 'None') +
@@ -540,7 +542,7 @@ function trimLike(ext) {
         if (!c.fence.pts.length) { c.stage = 'pick'; trimPrompt(c); }
         return true;
       }
-      if (k === 'u' || k === 'undo') { opUndo(c); return true; }
+      if (k === 'u' || k === 'undo') { opUndo(c); if (c.stage === 'pick') trimPrompt(c); return true; }
       if (k === 'c' || k === 'crossing') { c.stage = 'cross'; c.corner = null; hint('Specify first corner:'); return true; }
       if (k === 'f' || k === 'fence') { c.stage = 'fence'; c.fence = { pts: [], shift: false }; hint('Specify first fence point:'); return true; }
       if ((!ext && k === 't') || (ext && k === 'b')) { trimAskEdges(c); return true; }
@@ -589,7 +591,7 @@ function trimLike(ext) {
       }
       return false;
     },
-    point(c, p0) { trimPoint(c, p0); modRefresh(c); },
+    point(c, p0) { trimPoint(c, p0); if (CMD === c && c.stage === 'pick' && c.phase === 'run' && !c.sub) trimPrompt(c); modRefresh(c); },
     release(c) {
       if (c.stage !== 'qfence' || !c.fence || !c.fence.free) return;
       const f = c.fence;
