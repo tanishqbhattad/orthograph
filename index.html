@@ -9056,7 +9056,12 @@ function archPieces(e, out) {
     if (F) out.pts.push({ p: F.c, k: 'ins', body: 1 });
   } else if (e.t === 'column') {
     if (e.p) out.pts.push({ p: e.p, k: 'ins', meta: DEF_META(e, 'p'), body: 1 });
-    if (e.shape !== 'round' && e.p) out.pts.push({ p: e.p, k: 'gcen', body: 1 });
+    /* a square column has a centre as surely as a round one does — and a
+       drafter asks for it by CEN, not by knowing it is also a centroid */
+    if (e.shape !== 'round' && e.p) {
+      out.pts.push({ p: e.p, k: 'gcen', body: 1 });
+      out.pts.push({ p: e.p, k: 'cen', meta: DEF_META(e, 'p'), body: 1 });
+    }
   } else if (e.t === 'room' || e.t === 'floor' || e.t === 'roof') {
     out.pts.push({ lazy: e, k: 'gcen', body: 1 });
   }
@@ -9535,7 +9540,7 @@ function featureSnap(f, body, raw, r, on, one, push, e) {
   /* hovering the object anywhere offers it — the text, the block, the
      boundary of the closed shape — ranked by how close the crosshair is to
      the OBJECT, below any point that is actually under the crosshair */
-  const pri = one === f.k ? null : (f.k === 'gcen' ? SNAP_PRI.gcenEdge : SNAP_PRI.insEdge);
+  const pri = one === f.k ? null : (f.k === 'gcen' ? SNAP_PRI.gcenEdge : f.k === 'cen' ? SNAP_PRI.cenEdge : SNAP_PRI.insEdge);
   push(f.p, f.k, body, pri, 1, f.meta || null, src);
 }
 
@@ -9621,8 +9626,12 @@ function nearEnts(raw, r) {
       try { d = entDist(raw, e); } catch (err) { continue; }
     }
     if (!(d < reach)) {
+      const pp = placePoint(e);
       /* pointing straight at the centre of a big circle is pointing at it */
       if ((e.t === 'circle' || e.t === 'arc' || e.t === 'ellipse') && e.c && dist(raw, e.c) <= r) d = r;
+      /* and so is pointing at the point an object is placed by — a door's
+         lies in its opening, where nothing at all is drawn */
+      else if (pp && dist(raw, pp) <= r) d = dist(raw, pp);
       /* and a dimension is pointed at by its definition points too */
       else if (e.t === 'dim') {
         const p1 = typeof dimEnd === 'function' ? dimEnd(e, 1) : e.p1;
@@ -9636,6 +9645,15 @@ function nearEnts(raw, r) {
   }
   hits.sort((a, b) => a.d - b.d);
   return hits;
+}
+/** the point an object is placed by, where it has one apart from its outline */
+function placePoint(e) {
+  if (e.t === 'door' || e.t === 'window') {
+    const F = typeof openFrame === 'function' ? openFrame(e) : null;
+    return F ? F.c : null;
+  }
+  if (e.t === 'insert' || e.t === 'column' || e.t === 'text' || e.t === 'mtext' || e.t === 'attdef') return e.p || null;
+  return null;
 }
 /** the exact distance from p to a primitive entity, or undefined when it has
     no cheap form. `cut` lets a long polyline skip spans that cannot beat it. */

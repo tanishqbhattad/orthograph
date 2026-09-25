@@ -446,6 +446,37 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.k, 'ins'); eq(JSON.stringify(r.p), '[500,400]');
   });
 
+  /* A door's insertion point is in its OPENING, where nothing is drawn — so
+     pointing straight at it found no geometry and INS said nothing. Pointing
+     at a placement point is pointing at the object, as it is for a circle's
+     centre. */
+  t('INS pointed straight at a door\'s insertion point, in the empty opening, takes it', () => {
+    const r = R(`${SETUP}
+      V.z = 0.15; V.px = 600 - 10000 * 0.15; V.py = 400 + 2000 * 0.15;
+      const w = addEnt({t:'wall', a:[8000,0], b:[12000,0], wt:'brk230', just:'center', layer:'A-WALL'});
+      const d = addOpening('door', w, 1500, 'sgl900');
+      const c = openFrame(d).c;
+      startCmd('line'); runInput('10037,6234'); runInput('ins');
+      const s = w2s(c); ST.cur = snapPoint(s[0] + 2, s[1] + 2, refPoint());
+      return { k: ST.snap && ST.snap.k, p: ST.snap && ST.snap.p, c };`);
+    eq(r.k, 'ins');
+    eq(JSON.stringify(r.p), JSON.stringify(r.c));
+  });
+
+  t('CEN on a rectangular column is its centre, as it is on a round one', () => {
+    const r = R(`${SETUP}
+      addEnt({t:'column', p:[500,400], w:350, d:350, shape:'rect'});
+      startCmd('line'); runInput('100,100'); runInput('cen');
+      at(675, 450);                         /* on its east face */
+      const k = ST.snap && ST.snap.k, p = ST.snap && ST.snap.p;
+      cancelCmd();
+      onlyModes('cen'); startCmd('line');
+      at(675, 450);
+      return { k, p, run: ST.snap && [ST.snap.k, ST.snap.p] };`);
+    eq(r.k, 'cen'); eq(JSON.stringify(r.p), '[500,400]');
+    eq(JSON.stringify(r.run), JSON.stringify(['cen', [500, 400]]), 'and with CEN running');
+  });
+
   t('a door: its insertion point on the wall centreline, and the corners of its reveal', () => {
     const r = R(`${SETUP}
       const w = addEnt({t:'wall', a:[0,0], b:[4000,0], wt:'gen100', layer:'A-WALL'});
