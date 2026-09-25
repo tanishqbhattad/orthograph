@@ -78,6 +78,15 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
 
   group('B1 LENGTHEN');
 
+  /* AutoCAD offers Total first; afterwards, whatever was used last. Asked of a
+     freshly loaded program, since the shared sandbox remembers the others. */
+  t('a fresh LENGTHEN offers Total as its default', () => {
+    const { loadApp } = require('../load.js');
+    const { run } = loadApp();
+    const p = run(`startCmd('lengthen'); const p = PROMPT.text; endCmd(true); return p;`);
+    eq(p, 'Select an object to measure or [DElta/Percent/Total/DYnamic] <Total>:');
+  });
+
   t('picking reports the length, and an arc its included angle', () => {
     const r = R(`${SETUP}
       begin(); addEnt({t:'line', a:[0,0], b:[1200,0]}); addEnt({t:'arc', c:[0,3000], r:1000, a0:0, a1:Math.PI/2}); commit('x');

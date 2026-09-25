@@ -14021,7 +14021,7 @@ const MODSET = {
   /* CHAMFERB, C, D and CHAMMODE are drawing settings beside CHAMFERA: they
      live on DOC (01-doc DOC_SETTINGS), are saved with it and reset for a new
      drawing — as DOC.chamD2, chamL, chamAng (radians) and chamMode */
-  lenMode: 'de',        /* LENGTHEN's option, remembered between runs   */
+  lenMode: 't',         /* LENGTHEN's option: Total first, then the last used */
   lenDelta: 0, lenPct: 100, lenTotal: 1000, lenAngle: false,
 };
 if (VS.trimextendmode == null) VS.trimextendmode = 1;
