@@ -805,7 +805,12 @@ function gripsOf(e) {
       if (e.t === 'pline') {
         const n = e.pts.length;
         const last = e.closed ? n : n - 1;
-        for (let i = 0; i < last; i++) g.push({ p: mid(e.pts[i], e.pts[(i + 1) % n]), k: 's' + i });
+        for (let i = 0; i < last; i++) {
+          /* an arc segment's grip is on the arc, where AutoCAD puts it */
+          const p1 = e.pts[i], p2 = e.pts[(i + 1) % n], b = bulgeAt(e, i), A = b ? bulgeArc(p1, p2, b) : null;
+          const t = A ? A.a0 + 2 * Math.atan(b) : 0;
+          g.push({ p: A ? [A.c[0] + A.r * Math.cos(t), A.c[1] + A.r * Math.sin(t)] : mid(p1, p2), k: 's' + i });
+        }
       }
       return g;
     }
@@ -838,6 +843,18 @@ function gripSet(e, k, p, orig) {
     else if (k === 'm') { const d = sub(p, mid(e.a, e.b)); e.a = add(e.a, d); e.b = add(e.b, d); }
   }
   else if ((e.t === 'pline' || e.t === 'spline') && k[0] === 'p') e.pts[+k.slice(1)] = p;
+  else if (e.t === 'pline' && k[0] === 's' && bulgeAt(orig && orig.t === 'pline' ? orig : e, +k.slice(1))) {
+    /* an arc segment's grip bends the arc through the cursor, ends fixed: the
+       inscribed angle at the cursor is pi - theta/2, and a CCW arc (positive
+       bulge) bows to the right of its chord */
+    const i = +k.slice(1), n = e.pts.length, p1 = e.pts[i], p2 = e.pts[(i + 1) % n];
+    const s = cross(sub(p2, p1), sub(p, p1));
+    if (Math.abs(s) < 1e-12 * Math.max(1, dot(sub(p2, p1), sub(p2, p1)))) { e.bulges[i] = 0; return; }
+    const at = Math.acos(clamp(dot(norm(sub(p1, p)), norm(sub(p2, p))), -1, 1));
+    const th = 2 * (Math.PI - at);
+    if (!Array.isArray(e.bulges)) e.bulges = [];
+    e.bulges[i] = (s < 0 ? 1 : -1) * Math.tan(th / 4);
+  }
   else if (e.t === 'pline' && k[0] === 's') {
     /* a segment midpoint drags the whole segment; the neighbours stretch */
     const i = +k.slice(1), n = e.pts.length, j = (i + 1) % n;

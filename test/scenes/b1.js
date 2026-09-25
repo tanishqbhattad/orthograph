@@ -263,6 +263,31 @@ module.exports = ({ scene, ok, eq }) => {
     eq('and it is the length round the half circle, not across it', m && m[1].replace(/,/g, ''), (4000 + 500 * Math.PI).toFixed(1));
   });
 
+  scene('a polyline arc has its grip on the arc, and dragging it bends the arc', async (page) => {
+    await page.evaluate(() => {
+      OG.reset();
+      begin(); addEnt({ t: 'pline', pts: [[0, 0], [1000, 0], [1000, 1000]], bulges: [0, 1, 0] }); commit('p');
+      OG.stage(800, 500, 0.3);
+    });
+    await page.evaluate(() => OG.settle());
+    const on = await at(page, 500, 0);
+    await page.mouse.click(on.x, on.y);
+    const grip = await page.evaluate(() => { const g = gripsOf([...DOC.ents.values()][0]).find(q => q.k === 's1'); return g.p; });
+    eq('the grip is at the middle of the arc', grip.map(Math.round), [1500, 500]);
+    const g = await at(page, 1500, 500), to = await at(page, 1200, 500);
+    await page.mouse.move(g.x, g.y, { steps: 3 });
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 8 });
+    await page.mouse.up();
+    await page.evaluate(() => OG.settle());
+    const r = await page.evaluate(() => {
+      const e = [...DOC.ents.values()][0], A = bulgeArc(e.pts[1], e.pts[2], e.bulges[1]);
+      return { ends: [e.pts[1], e.pts[2]].map(p => p.map(Math.round)), off: A ? Math.round(Math.abs(dist(A.c, [1200, 500]) - A.r)) : null };
+    });
+    eq('the ends stay put', r.ends, [[1000, 0], [1000, 1000]]);
+    eq('and the arc runs through where the grip was dropped', r.off, 0);
+  });
+
   scene('TRIM: hovering shows the piece a click would take, with a pick box and no snap', async (page) => {
     await page.evaluate(grid);
     await command(page, 'TR');

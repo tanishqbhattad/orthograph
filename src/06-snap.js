@@ -807,6 +807,12 @@ function entSnaps(e, dEnt, raw, ref, r, push, on) {
       if (on.end && e.t === 'spline' && e.fit) for (const p of e.fit) push(p, 'end');
       const Q = e.closed ? [...P, P[0]] : P;
       for (let i = 1; i < Q.length; i++) {
+        /* an arc segment's middle is on the arc: its chord is not the object */
+        const bA = e.t === 'pline' ? bulgeArc(Q[i - 1], Q[i], bulgeAt(e, i - 1)) : null;
+        if (bA) {
+          if (on.mid) { const t = bA.a0 + 2 * Math.atan(bulgeAt(e, i - 1)); push([bA.c[0] + bA.r * Math.cos(t), bA.c[1] + bA.r * Math.sin(t)], 'mid'); }
+          continue;
+        }
         if (on.mid && e.t !== 'spline') push(mid(Q[i - 1], Q[i]), 'mid');
         if (ref && on.perp) perpOnSeg(Q[i - 1], Q[i], ref, raw, push);
       }
@@ -1837,9 +1843,13 @@ function gripDo(e, k, action) {
     const i = +k.slice(1);
     if (!(i >= 0 && i < n)) return k;
     mut(e);
+    /* the bulges run parallel to the vertices and must move with them, or
+       every later arc lands on the wrong span */
+    const B = Array.isArray(e.bulges) ? e.bulges : null;
     if (action === 'delv') {
       if (k[0] !== 'p' || n <= 2) return k;
       e.pts.splice(i, 1);
+      if (B) { B.splice(i, 1); if (i > 0) B[i - 1] = 0; else if (e.closed) B[B.length - 1] = 0; }
       return null;
     }
     /* on the last vertex of an open polyline there is no "next" to halve, so
@@ -1849,6 +1859,14 @@ function gripDo(e, k, action) {
       const d = sub(e.pts[i], e.pts[i - 1] || e.pts[i]);
       q = [e.pts[i][0] + d[0] * .5, e.pts[i][1] + d[1] * .5];
     } else q = mid(e.pts[i], e.pts[(i + 1) % n]);
+    const bi = B ? bulgeAt(e, i) : 0;
+    const arc = bi ? bulgeArc(e.pts[i], e.pts[(i + 1) % n], bi) : null;
+    if (arc) {
+      /* on an arc the new vertex goes on the arc, halving it */
+      const t = arc.a0 + 2 * Math.atan(bi), h = Math.tan(Math.atan(bi) / 2);
+      q = [arc.c[0] + arc.r * Math.cos(t), arc.c[1] + arc.r * Math.sin(t)];
+      B.splice(i, 1, h, h);
+    } else if (B) B.splice(i + 1, 0, 0);
     e.pts.splice(i + 1, 0, q);
     return 'p' + (i + 1);
   }

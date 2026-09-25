@@ -199,6 +199,54 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     close(r.inn, octagon - 4 * seg, 1e-6, 'and bowed inward, the octagon less them');
   });
 
+  /* Siblings of the round-1 finding: two more places read a polyline's arcs
+     as their chords. */
+  t('MID snaps to the middle of an arc segment, on the arc', () => {
+    const r = R(`${SETUP}
+      const e = { t:'pline', pts:[[0,0],[1000,0],[1000,1000]], bulges:[0, 1, 0], id: 1 };  /* a half circle */
+      const got = [];
+      entSnaps(e, 0, [1500, 500], null, 1e9, (p, k) => { if (k === 'mid') got.push(p.map(v => +v.toFixed(6))); }, { mid: 1 });
+      return got;`);
+    ok(r.some(p => p[0] === 500 && p[1] === 0), 'the straight span still has its midpoint');
+    ok(r.some(p => p[0] === 1500 && p[1] === 500), 'and the half circle has its own, on the curve: ' + JSON.stringify(r));
+    ok(!r.some(p => p[0] === 1000 && p[1] === 500), 'not the midpoint of the chord');
+  });
+
+  t('Add and Remove Vertex keep every arc on its own span', () => {
+    const r = R(`${SETUP}
+      cancelCmd();
+      begin();
+      const e = addEnt({ t:'pline', pts:[[0,0],[1000,0],[2000,1000],[3000,1000]], bulges:[0, Math.tan(Math.PI/8), 0, 0] });
+      commit('x');
+      const L0 = entLength(e);
+      begin(); gripDo(e, 's1', 'addv'); commit('a');                 /* on the arc */
+      const add = { n: e.pts.length, L: entLength(e), q: e.pts[2], b: e.bulges.slice(0, 4) };
+      begin(); gripDo(e, 's0', 'addv'); commit('b');                 /* on the straight run before it */
+      const add2 = { L: entLength(e), arcs: e.bulges.filter(Boolean).length };
+      begin(); gripDo(e, 'p1', 'delv'); commit('c');                 /* the vertex just added */
+      const del = { L: entLength(e), arcs: e.bulges.filter(Boolean).length, n: e.pts.length };
+      return { L0, add, add2, del };`);
+    close(r.add.L, r.L0, 1e-9, 'a vertex added on the arc splits it and changes nothing');
+    close(Math.hypot(r.add.q[0] - 1000, r.add.q[1] - 1000), 1000, 1e-9, 'the new vertex is on the arc');
+    close(r.add.b[1], Math.tan(Math.PI / 16), 1e-12); close(r.add.b[2], Math.tan(Math.PI / 16), 1e-12);
+    close(r.add2.L, r.L0, 1e-9, 'one on a straight run changes nothing either'); eq(r.add2.arcs, 2);
+    close(r.del.L, r.L0, 1e-9, 'and removing a vertex between two straight pieces changes nothing');
+    eq(r.del.arcs, 2, 'with both halves of the arc still arcs');
+  });
+
+  t('an arc segment grip sits on the arc, and dragging it bends the arc through the cursor', () => {
+    const r = R(`${SETUP}
+      const e = { t:'pline', pts:[[0,0],[1000,0],[1000,1000]], bulges:[0, 1, 0], id: 1 };   /* half circle */
+      const g = gripsOf(e).find(q => q.k === 's1');
+      gripSet(e, 's1', [1200, 500]);                /* pull it in to a flatter arc */
+      const A = bulgeArc(e.pts[1], e.pts[2], e.bulges[1]);
+      return { g: g.p.map(v => +v.toFixed(6)), ends: [e.pts[1], e.pts[2]],
+               through: A && +Math.abs(dist(A.c, [1200, 500]) - A.r).toFixed(9) };`);
+    eq(JSON.stringify(r.g), '[1500,500]', 'the grip is at the middle of the arc');
+    eq(JSON.stringify(r.ends), JSON.stringify([[1000,0],[1000,1000]]), 'dragging it leaves the ends where they are');
+    eq(r.through, 0, 'and the arc now passes through where it was dropped');
+  });
+
   group('B1 kernel — OFFSET the way AutoCAD makes it');
 
   t('an arc segment of a polyline offsets to an arc about the same centre', () => {
