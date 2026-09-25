@@ -265,6 +265,13 @@ noticed months later.
 
 ## Known limits
 
+- FILLET and CHAMFER work on lines, arcs, circles, rays, xlines and polylines — not
+  on splines or ellipses, and a vertex between two polyline arc segments cannot be
+  filleted. Offsetting an ellipse or spline gives a spline sampled from the curve,
+  and a spline is extended along its end chord.
+- One-shot object snaps take a single mode: AutoCAD's comma lists (END,INT) are not
+  supported. Tangent to a spline is found at a vertex of its stored points, and
+  Extension runs from lines, arcs, open polylines and walls only.
 - Everything is 2D. Walls, openings and slabs carry height, sill and level data already,
   so the model is ready for a 3D view later without a data migration.
 - DWG remains experimental and **rejected by AutoCAD**, which refuses the file at

@@ -148,6 +148,9 @@ module.exports = ({ scene, ok, eq }) => {
     await page.evaluate(() => {
       OG.reset();
       begin(); addEnt({ t: 'line', a: [0, 0], b: [4000, 0] }); commit('l');
+      /* running snaps off (F3): this measures BREAK, and with Midpoint running a
+         click at 2500 on a 4000 line snaps to 2000, as it would in AutoCAD */
+      ST.osnap = false;
       OG.stage(2000, 0, 0.15);
     });
     await command(page, 'BR');

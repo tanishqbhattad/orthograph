@@ -201,16 +201,10 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
 
   /* Siblings of the round-1 finding: two more places read a polyline's arcs
      as their chords. */
-  t('MID snaps to the middle of an arc segment, on the arc', () => {
-    const r = R(`${SETUP}
-      const e = { t:'pline', pts:[[0,0],[1000,0],[1000,1000]], bulges:[0, 1, 0], id: 1 };  /* a half circle */
-      const got = [];
-      entSnaps(e, 0, [1500, 500], null, 1e9, (p, k) => { if (k === 'mid') got.push(p.map(v => +v.toFixed(6))); }, { mid: 1 });
-      return got;`);
-    ok(r.some(p => p[0] === 500 && p[1] === 0), 'the straight span still has its midpoint');
-    ok(r.some(p => p[0] === 1500 && p[1] === 500), 'and the half circle has its own, on the curve: ' + JSON.stringify(r));
-    ok(!r.some(p => p[0] === 1000 && p[1] === 500), 'not the midpoint of the chord');
-  });
+  /* MID on a polyline arc span landing on the arc rather than its chord is
+     pinned by the snap engine's own suite (a2-snaps: 'a polyline arc span:
+     its midpoint, its centre and a crossing, all exact'). This copy drove the
+     engine that A2 replaced, through a function that no longer exists. */
 
   t('Add and Remove Vertex keep every arc on its own span', () => {
     const r = R(`${SETUP}
