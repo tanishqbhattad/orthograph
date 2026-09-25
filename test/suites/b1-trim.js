@@ -148,6 +148,23 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r, 'line,ray');
   });
 
+  /* A plan is walls. A line drawn across a wall and trimmed there must stop at
+     the wall's face — in Quick mode, with walls not counted as edges, it was
+     erased outright instead. */
+  t('a wall is a cutting edge: a line crossing it trims to its face', () => {
+    const r = R(`${SETUP}
+      begin();
+      addEnt({t:'wall', a:[0,0], b:[4000,0], wt:'brk230', layer:'A-WALL'});
+      addEnt({t:'line', a:[2000,-1500], b:[2000,1500], layer:'0'});
+      commit('x');
+      startCmd('trim'); cmdPoint([2000, 1000]);
+      const l = [...DOC.ents.values()].filter(e => e.t === 'line');
+      endCmd(true);
+      return l.map(e => [e.a[1], e.b[1]].sort((a, b) => a - b).map(v => +v.toFixed(6)));`);
+    eq(r.length, 1, 'the line is trimmed, not erased');
+    eq(JSON.stringify(r[0]), JSON.stringify([-1500, 115]), 'and it stops at the wall face');
+  });
+
   group('B1 TRIM — Standard mode');
 
   t('Standard asks for edges first, and Enter takes them all', () => {

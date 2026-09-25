@@ -3066,6 +3066,12 @@ function sgPieceLen(s, uS, uE) { return sgLen(s) * Math.abs(uE - uS); }
 function edgeCurves(e) {
   const C = curveOf(e);
   if (C) return [C];
+  /* A wall's faces are edges: on a plan, "trim to the wall" is the ordinary
+     case, and without it Quick mode erased a line that crossed only walls. */
+  if (e.t === 'wall' && typeof wallOutline === 'function') {
+    const K = curveOf({ t: 'pline', pts: wallOutline(e), closed: true });
+    return K ? [K] : [];
+  }
   if (e.t === 'insert' && typeof insertEnts === 'function') {
     const out = [];
     for (const q of insertEnts(e)) for (const K of edgeCurves(q)) out.push(K);
