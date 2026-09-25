@@ -1515,11 +1515,17 @@ defc('join', {
     }
     commit('Join');
     const joined = used.size, discarded = all.length - joined;
+    /* AutoCAD's own words: "2 lines joined into 1 line", "3 objects converted
+       to 1 polyline" — a kind of object when they were all one kind */
+    const NOUN = { line: 'line', arc: 'arc', circle: 'circle', pline: 'polyline', spline: 'spline' };
     const kinds = [...new Set(results.map(r => r.ent.t))];
-    const word = kinds.length === 1 ? ({ line: 'line', arc: 'arc', circle: 'circle', pline: 'polyline', spline: 'spline' })[kinds[0]] : 'object';
-    cliPrint(joined + ' objects ' + (kinds.length === 1 && kinds[0] === 'pline' && lines.length + arcs.length ? 'converted' : 'joined') +
-             ' into ' + made + ' ' + word + (made > 1 ? 's' : '') +
-             (discarded ? ', ' + discarded + ' object' + (discarded > 1 ? 's' : '') + ' discarded from the operation' : ''));
+    const inKinds = [...new Set(all.filter(e => used.has(e.id)).map(e => e.t))];
+    const outWord = kinds.length === 1 ? NOUN[kinds[0]] : 'object';
+    const inWord = inKinds.length === 1 ? NOUN[inKinds[0]] : 'object';
+    const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+    const changed = kinds.length !== 1 || inKinds.length !== 1 || kinds[0] !== inKinds[0];
+    cliPrint(plural(joined, changed ? 'object' : inWord) + (changed ? ' converted to ' : ' joined into ') + plural(made, outWord) +
+             (discarded ? ', ' + plural(discarded, 'object') + ' discarded from the operation' : ''));
     syncUI(); endCmd();
   },
   text(c, s) {

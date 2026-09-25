@@ -337,7 +337,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.n, 1); eq(r.t, 'pline');
     eq(JSON.stringify(r.pts), JSON.stringify([[0,0],[1000,0],[1000,1000],[0,1000]]));
     close(r.b[1], 1, 1e-9, 'the half circle is a bulge of 1');
-    ok(/3 objects converted into 1 polyline/.test(r.said), r.said);
+    eq(r.said, '3 objects converted to 1 polyline');
   });
 
   t('collinear lines join across a gap when they are all that is selected', () => {
@@ -346,8 +346,9 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       for (const e of DOC.ents.values()) SEL.add(e.id);
       startCmd('join');
       const all = ${ents};
-      return { n: all.length, t: all[0].t, x: [all[0].a[0], all[0].b[0]] };`);
+      return { n: all.length, t: all[0].t, x: [all[0].a[0], all[0].b[0]], said: CLI.lines[CLI.lines.length - 1].t };`);
     eq(r.n, 1); eq(r.t, 'line'); eq(JSON.stringify(r.x), '[0,3000]');
+    eq(r.said, '2 lines joined into 1 line');
   });
 
   t('arcs on one circle join across a gap; a lone arc closes with cLose', () => {
@@ -401,6 +402,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       const p = ${ents}.find(e => e.t === 'pline');
       return { closed: p && p.closed, n: p && p.pts.length, said: CLI.lines[CLI.lines.length - 1].t };`);
     eq(r.closed, true); eq(r.n, 3);
+    eq(r.said, '3 objects converted to 1 polyline, 1 object discarded from the operation', 'three lines are three objects');
     ok(/1 object discarded/.test(r.said), r.said);
   });
 };
