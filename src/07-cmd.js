@@ -68,20 +68,16 @@ function varParse(v, s) {
   return v.type === 'int' ? Math.round(n) : n;
 }
 
-/* OSMODE is a bit code and always has been. 64 (insertion), 1024, 2048
-   (apparent intersection) and 8192 (parallel) have no snap in this app, so
-   they round-trip as zero rather than pretending. 16384 suppresses the lot,
-   which is exactly what our osnap toggle does. */
-const OSBITS = [[1, 'end'], [2, 'mid'], [4, 'cen'], [8, 'node'], [16, 'quad'],
-  [32, 'int'], [128, 'perp'], [256, 'tan'], [512, 'near'], [4096, 'ext']];
-
+/* OSMODE is a bit code and always has been. The bit table lives with the
+   snap engine (06-snap: SNAP_KINDS), which is the one place that knows every
+   mode — insertion 64, geometric centre 1024, apparent intersection 2048 and
+   parallel 8192 all exist now, and a second table here had quietly dropped
+   them. 16384 suppresses the lot, which is exactly what our osnap toggle does. */
 defvar('OSMODE', {
   desc: 'Running object snap modes, bit coded',
-  get() { let v = 0; for (const [b, k] of OSBITS) if (ST.osnapOn[k]) v |= b; if (!ST.osnap) v |= 16384; return v; },
+  get() { return osmodeVar(); },
   set(v) {
-    v = v | 0;
-    ST.osnap = !(v & 16384);
-    for (const [b, k] of OSBITS) ST.osnapOn[k] = (v & b) ? 1 : 0;
+    setOsmodeVar(v);
     if (typeof syncToggles === 'function') syncToggles();
     draw();
   },
@@ -784,6 +780,11 @@ function cmdText(s) {
     if (typeof buildProps === 'function') buildProps();
     return true;
   }
+  /* A2 (snaps): on an Extension or tracking path, a bare distance runs from
+     the acquired point along the path, as AutoCAD measures it — see
+     snapTypedPoint in 06-snap. The command's own options above still win. */
+  const tp = typeof snapTypedPoint === 'function' ? snapTypedPoint(s) : null;
+  if (tp) { cmdPoint(tp, true); return true; }
   const ref = c.pts.length ? c.pts[c.pts.length - 1] : (ST.lastPt || null);
   const p = parseCoord(s, ref, ST.cur);
   if (p) { cmdPoint(p, true); return true; }

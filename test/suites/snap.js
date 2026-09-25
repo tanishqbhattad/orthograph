@@ -140,9 +140,16 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       addEnt({t:'circle',c:[0,0],r:100});
       const q = Math.SQRT1_2 * 100;
       const _s = w2s([q, q]);
+      /* at a point prompt — idle, the crosshair stays on the rim (see below) */
+      startCmd('line');
       const _p = snapPoint(_s[0], _s[1], null);
-      return { k: ST.snap && ST.snap.k, p: _p, kinds: (ST.snapCands||[]).map(c=>c.k) };`);
+      const out = { k: ST.snap && ST.snap.k, p: _p, kinds: (ST.snapCands||[]).map(c=>c.k) };
+      cancelCmd();
+      snapPoint(_s[0], _s[1], null);
+      out.idle = ST.snap && ST.snap.k;
+      return out;`);
     eq(r.k, 'cen'); pt(r, 0, 0, 1e-9);
+    ok(r.idle !== 'cen', 'with no command running the rim is not thrown to the centre, got ' + r.idle);
   });
 
   t('nearest is last resort: it only wins when nothing else is in reach', () => {
@@ -354,8 +361,13 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       ${AT(4, 3)}`);
     ok(r.n >= 3, 'expected several candidates, got ' + r.n);
     eq(r.kinds[0], 'end');
-    const pri = R(`return (ST.snapCands||[]).map(c=>c.pri);`);
-    for (let i = 1; i < pri.length; i++) ok(pri[i - 1] >= pri[i], 'candidates must be sorted by priority');
+    /* Best first means: everything inside the aperture before the far points
+       of the object under it, and within each tier by score (distance less
+       the priority head start) — the order the winner is chosen in. */
+    const c = R(`return (ST.snapCands||[]).map(c=>({t:c.tier, s:c.score}));`);
+    for (let i = 1; i < c.length; i++)
+      ok(c[i - 1].t < c[i].t || (c[i - 1].t === c[i].t && c[i - 1].s <= c[i].s),
+        'candidates must be in the order the winner is chosen by');
   });
 
   t('cycleSnap steps through the overlapping points and wraps', () => {
@@ -542,24 +554,39 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     ok(r[1] > 100, 'the sweep should have hit plenty of snaps');
   });
 
-  t('a snap never lands outside the aperture', () => {
+  /* AutoCAD's rule, which replaced "never outside the aperture": the aperture
+     finds the OBJECT, and a point outside it is only ever one of that
+     object's own defined points — its end, its middle, its centre. With
+     nearest on, nothing need leave the aperture at all; with it off, a jump
+     is allowed only to such a point, and only from an object the aperture is
+     actually on. Anything else is a snap from nowhere. */
+  t('a snap outside the aperture is only ever a defined point of the object under it', () => {
     const r = R(`${SETUP}
       addEnt({t:'line',a:[0,0],b:[200,0]});
       addEnt({t:'circle',c:[500,500],r:120});
-      let bad = null;
-      for (let sx = 0; sx < 1200; sx += 13) for (let sy = 0; sy < 800; sy += 13) {
-        const raw = s2w(sx, sy);
-        snapPoint(sx, sy, null);
-        if (!ST.snap) continue;
-        if (dist(raw, ST.snap.p) <= px(14) + 1e-9) continue;
-        /* The one sanctioned exception, and it is AutoCAD's: hovering a
-           circle's rim offers its centre. There is nothing to hover at the
-           centre of a big circle, so the reach is the whole point. */
-        if (ST.snap.k === 'cen') continue;
-        bad = [sx, sy, ST.snap.k];
-      }
-      return bad;`);
-    eq(r, null, 'a snap outside the aperture is a jump');
+      startCmd('line');
+      const sweep = () => {
+        let bad = null, far = 0;
+        for (let sx = 0; sx < 1200; sx += 13) for (let sy = 0; sy < 800; sy += 13) {
+          const raw = s2w(sx, sy);
+          snapPoint(sx, sy, null);
+          if (!ST.snap) continue;
+          if (dist(raw, ST.snap.p) <= px(10) + 1e-9) continue;
+          far++;
+          const own = ST.snap.k === 'end' || ST.snap.k === 'mid' || ST.snap.k === 'cen';
+          const under = nearEnts(raw, apertureR()).some(h => h.d <= apertureR() + 1e-9);
+          if (!own || !under) bad = [sx, sy, ST.snap.k];
+        }
+        return { bad, far };
+      };
+      const withNear = sweep();
+      ST.osnapOn.near = 0;
+      const without = sweep();
+      cancelCmd();
+      return { withNear, without };`);
+    eq(r.withNear.bad, null, 'with nearest on');
+    eq(r.without.bad, null, 'with nearest off');
+    ok(r.without.far > 0, 'and with nearest off the far defined points really are offered');
   });
 
   t('degenerate geometry does not throw', () => {

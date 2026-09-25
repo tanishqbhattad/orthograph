@@ -322,7 +322,14 @@ function startBandGesture(scr, kind, sense, keep) {
   return ST.band;
 }
 stage.addEventListener('pointerdown', ev => {
-  if (ev.target.closest('.dyn')) return;
+  /* A2 (snaps): only the input FIELDS of the dynamic input take a press —
+     a press on its labels or its gaps is a pick on the drawing, never lost */
+  if (ev.target.closest('.dyn input')) return;
+  /* A2 (snaps): the right button is AutoCAD's Enter / shortcut menu, and
+     Shift+right-click the object snap menu — all handled on contextmenu.
+     Its press used to run down the left button's path and hand a running
+     command a POINT first, so asking for the snap menu drew a segment. */
+  if (ev.button === 2) return;
   /* a pointer that has already been released throws here, and losing the
      capture must never cost us the whole press */
   try { stage.setPointerCapture(ev.pointerId); } catch (_) { }
@@ -641,6 +648,10 @@ function dynApply(p) {
     const y = dynLock.f2 ? parseLen(f2.value) : p[1];
     return [isNaN(x) ? p[0] : x, isNaN(y) ? p[1] : y];
   }
+  /* A2 (snaps): a length typed while an Extension or tracking path is
+     showing runs along that path from its acquired point — snapDynPath */
+  const P = !dynLock.f2 && typeof snapDynPath === 'function' ? snapDynPath() : null;
+  if (P && dynLock.f1 && !isNaN(parseLen(f1.value))) return snapPathAt(P, parseLen(f1.value));
   let L = dynLock.f1 ? parseLen(f1.value) : dist(ref, p);
   let A = dynLock.f2 ? rad(parseFloat(f2.value)) : ang(ref, p);
   if (isNaN(L)) L = dist(ref, p);
@@ -661,7 +672,11 @@ function dynCommit() {
     const L = parseLen(f1.value);
     const A = f2.value.trim() === '' ? ang(ref, ST.cur) : rad(parseFloat(f2.value));
     if (isNaN(L)) return;
-    out = [ref[0] + Math.cos(isNaN(A) ? ang(ref, ST.cur) : A) * L,
+    /* A2 (snaps): on an Extension or tracking path the length is measured
+       along the path from its acquired point, unless an angle was typed */
+    const P = !dynLock.f2 && typeof snapDynPath === 'function' ? snapDynPath() : null;
+    if (P) out = snapPathAt(P, L);
+    else out = [ref[0] + Math.cos(isNaN(A) ? ang(ref, ST.cur) : A) * L,
       ref[1] + Math.sin(isNaN(A) ? ang(ref, ST.cur) : A) * L];
   }
   dynRelease();
@@ -676,7 +691,11 @@ function syncDyn() {
   const ref = refPoint();
   const mode = ref ? 'polar' : 'abs';
   if (dynEl && dynMode !== mode) dynKill();        /* the fields mean something else now */
-  const s = w2s(ST.cur);
+  /* A2 (snaps): anchored at the HAND, not at the snapped point. A snap can sit
+     up and to the left of the pointer — a line's midpoint while the cursor is
+     further along it — and a box anchored there lay under the pointer and
+     swallowed the click. Off the pointer's own position it never can. */
+  const s = w2s(ST.raw || ST.cur);
   if (!isFinite(s[0]) || !isFinite(s[1])) { dynKill(); return; }
   if (!dynEl) {
     dynMode = mode;
@@ -714,8 +733,11 @@ function syncDyn() {
   }
   dynEl.style.left = s[0] + 'px'; dynEl.style.top = s[1] + 'px';
   const f1 = $('#dF1'), f2 = $('#dF2');
-  const live1 = mode === 'abs' ? fmt(ST.cur[0]) : fmt(dist(ref, ST.cur));
-  const live2 = mode === 'abs' ? fmt(ST.cur[1]) : deg(ang(ref, ST.cur)).toFixed(1);
+  /* A2 (snaps): on an Extension or tracking path the fields show the
+     distance and direction along it, which is what a typed length will mean */
+  const DP = mode === 'polar' && typeof snapDynPath === 'function' ? snapDynPath() : null;
+  const live1 = mode === 'abs' ? fmt(ST.cur[0]) : fmt(DP ? DP.L : dist(ref, ST.cur));
+  const live2 = mode === 'abs' ? fmt(ST.cur[1]) : deg(DP ? DP.a : ang(ref, ST.cur)).toFixed(1);
   if (document.activeElement !== f1 && !dynLock.f1) f1.value = live1;
   if (document.activeElement !== f2 && !dynLock.f2) f2.value = live2;
 }

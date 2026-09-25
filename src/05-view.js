@@ -1772,10 +1772,16 @@ function drawCycleBadge() {
   mid: (x, y, r) => { ctx.beginPath(); ctx.moveTo(x - r, y + r); ctx.lineTo(x, y - r); ctx.lineTo(x + r, y + r); ctx.closePath(); ctx.stroke(); },
   /* circle */
   cen: (x, y, r) => { ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.stroke(); },
-  /* circle inside a triangle — centre of area rather than centre of a curve */
+  /* an eight-pointed asterisk — AutoCAD's Geometric Center, drawn so it can
+     never be mistaken for the circle of a curve's centre */
   gcen: (x, y, r) => {
-    ctx.beginPath(); ctx.moveTo(x - r * 1.2, y + r * .85); ctx.lineTo(x, y - r * 1.2); ctx.lineTo(x + r * 1.2, y + r * .85); ctx.closePath(); ctx.stroke();
-    ctx.beginPath(); ctx.arc(x, y + r * .1, r * .42, 0, TAU); ctx.stroke();
+    const d = Math.round(r * .78);
+    ctx.beginPath();
+    ctx.moveTo(x - r, y); ctx.lineTo(x + r, y);
+    ctx.moveTo(x, y - r); ctx.lineTo(x, y + r);
+    ctx.moveTo(x - d, y - d); ctx.lineTo(x + d, y + d);
+    ctx.moveTo(x + d, y - d); ctx.lineTo(x - d, y + d);
+    ctx.stroke();
   },
   /* circle with an X through it */
   node: (x, y, r) => {
@@ -1843,6 +1849,25 @@ SNAP_GLYPH.perpx = SNAP_GLYPH.perp;
 SNAP_GLYPH.tanx = SNAP_GLYPH.tan;
 SNAP_GLYPH.trackx = SNAP_GLYPH.int;
 SNAP_GLYPH.wall = SNAP_GLYPH.wface;
+/* AutoCAD's marks for a point that is not finished yet — a deferred
+   perpendicular or tangent, the first object of an extended intersection —
+   are the mode's own glyph followed by an ellipsis */
+function snapGlyphDots(g) {
+  return (x, y, r) => {
+    g(x, y, r);
+    const s = Math.max(1, Math.round(r * .28)), y0 = y + r - s;
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) ctx.rect(x + r + 3 + i * (s + 3), y0, s, s);
+    ctx.stroke();
+  };
+}
+SNAP_GLYPH.perpd = snapGlyphDots(SNAP_GLYPH.perp);
+SNAP_GLYPH.tand = snapGlyphDots(SNAP_GLYPH.tan);
+SNAP_GLYPH.xint1 = snapGlyphDots(SNAP_GLYPH.int);
+SNAP_GLYPH.xapp1 = snapGlyphDots(SNAP_GLYPH.appint);
+SNAP_GLYPH.xint = SNAP_GLYPH.int;
+SNAP_GLYPH.xapp = SNAP_GLYPH.appint;
+SNAP_GLYPH.extx = SNAP_GLYPH.int;
 
 /** round a CSS-pixel coordinate onto the device pixel grid.
     An odd-width stroke is only crisp when its centre line falls on a device
@@ -1853,9 +1878,20 @@ function devRound(v) { const d = V.dpr || 1; return Math.round(v * d) / d; }
 function markerLW() { const d = V.dpr || 1; return Math.max(1, Math.round(1.5 * d)) / d; }
 
 function drawSnap() {
+  drawSnapAcquired();
   const s = ST.snap; if (!s) return;
+  /* A marker computed before the drawing last changed — an undo, a typed
+     MOVE — would sit on geometry that is no longer there, so it is not drawn;
+     the next move, click or Tab asks the snap again. A drag re-snaps on every
+     move, which is why only a snap that has gone quiet counts as stale. */
+  if (ST.snapV != null && ST.snapV !== DOCV && Date.now() - (ST.snapT || 0) > 90) return;
   const p = w2s(s.p);
   if (!isFinite(p[0]) || !isFinite(p[1])) return;
+  /* Tab says which object the point belongs to by lighting it up */
+  if (ST.snapCycled && s.src != null && typeof drawEntHL === 'function') {
+    const e = DOC.ents.get(s.src);
+    if (e && !SEL.has(e.id)) drawEntHL(e, 'hot');
+  }
   const d = V.dpr || 1;
   const lw = markerLW(), lwDev = Math.round(lw * d);
   const x = devSnap(p[0], lwDev), y = devSnap(p[1], lwDev);
@@ -1873,8 +1909,41 @@ function drawSnap() {
   ctx.restore();
   if (ST.snapTip) drawSnapTip(x, y, r, ST.snapTip);
 }
-/** the AutoSnap tooltip: a small boxed label that names the mode, flipped
-    back inside the viewport when the cursor is near an edge */
+/** What has been acquired and is still live: a small + on every endpoint an
+    Extension will run on from, and the // on every edge a Parallel direction
+    was lifted off — so you can see what the snaps are remembering. */
+function drawSnapAcquired() {
+  const ext = (ST.osnap || ST.osnapOne) && typeof extAcquired === 'function' ? extAcquired() : [];
+  const par = ST.parRefs && ST.parRefs.length ? ST.parRefs.filter(q => q.p) : [];
+  if (!ext.length && !par.length) return;
+  const d = V.dpr || 1, lwDev = Math.max(1, Math.round(1.4 * d));
+  ctx.save();
+  ctx.setLineDash(DASH_SOLID);
+  ctx.strokeStyle = CO.snap; ctx.lineWidth = lwDev / d; ctx.lineCap = 'butt';
+  const a = devRound(4);
+  ctx.beginPath();
+  for (const q of ext) {
+    const s = w2s(q);
+    if (!isFinite(s[0]) || !isFinite(s[1])) continue;
+    const x = devSnap(s[0], lwDev), y = devSnap(s[1], lwDev);
+    ctx.moveTo(x - a, y); ctx.lineTo(x + a, y);
+    ctx.moveTo(x, y - a); ctx.lineTo(x, y + a);
+  }
+  ctx.stroke();
+  const r = Math.max(3, devRound(clamp(+ST.markerSize || 6, 2, 20)) - 1);
+  for (const q of par) {
+    const s = w2s(q.p);
+    if (!isFinite(s[0]) || !isFinite(s[1])) continue;
+    SNAP_GLYPH.par(devSnap(s[0], lwDev), devSnap(s[1], lwDev), r);
+  }
+  ctx.restore();
+}
+/** The AutoSnap tooltip: a small boxed label that names the mode. It sits
+    ABOVE and to the right of the marker, because below and to the right is
+    where the dynamic input fields are — drawn on the canvas under an HTML
+    overlay, the label used to vanish behind them whenever DYN was on. Flipped
+    back inside the viewport near an edge. Paper-coloured and opaque in every
+    theme, so it reads on light and dark alike. */
 function drawSnapTip(x, y, r, text) {
   ctx.save();
   ctx.font = "500 11px 'JetBrains Mono',ui-monospace,monospace";
@@ -1882,14 +1951,14 @@ function drawSnapTip(x, y, r, text) {
   let w = 60;
   try { w = ctx.measureText(text).width; } catch (e) { }
   const padX = 6, h = 18, bw = w + padX * 2, gap = r + 6;
-  let tx = x + gap, ty = y + gap;
+  let tx = x + gap, ty = y - gap - h;
   if (tx + bw > V.w - 2) tx = x - gap - bw;
-  if (ty + h > V.h - 2) ty = y - gap - h;
-  tx = devRound(Math.max(2, tx)); ty = devRound(Math.max(2, ty));
+  if (ty < 2) ty = y + gap + 22;
+  tx = devRound(Math.max(2, tx)); ty = devRound(clamp(ty, 2, Math.max(2, V.h - h - 2)));
   ctx.beginPath();
   roundRectPath(tx, ty, bw, h, 3);
-  ctx.fillStyle = '#0b0e14ee'; ctx.fill();
-  ctx.strokeStyle = CO.snap + '66'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = CO.bg; ctx.fill();
+  ctx.strokeStyle = CO.snap; ctx.lineWidth = 1; ctx.stroke();
   ctx.fillStyle = CO.snap;
   ctx.fillText(text, tx + padX, ty + h / 2 + 0.5);
   ctx.restore();
