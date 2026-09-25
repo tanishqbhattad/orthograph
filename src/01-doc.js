@@ -149,6 +149,10 @@ const DOC_SETTINGS = {
   altArea: false,         /* show a second area unit                         */
   filletR: null,          /* last fillet radius                              */
   chamD: null,            /* last chamfer distance                           */
+  chamD2: null,           /* CHAMFERB — second distance; null: as the first  */
+  chamL: null,            /* CHAMFERC — length on the first line (angle method) */
+  chamAng: null,          /* CHAMFERD — angle from the first line, radians   */
+  chamMode: null,         /* CHAMMODE — 0 two distances, 1 length and angle  */
   dimScale: null,         /* DIMSCALE — every size on a plain dimension      */
   /* the current object properties: what the next thing drawn will take.
      AutoCAD keeps CECOLOR/CELTYPE/CELWEIGHT in the drawing, and so should we —
