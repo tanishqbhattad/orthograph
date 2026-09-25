@@ -432,14 +432,16 @@ function kwWord(label, key) {
 function parsePrompt(s) {
   const raw = String(s == null ? '' : s);
   if (!raw) return { raw: '', base: 'Command:', keys: [], extra: '' };
-  const m = raw.match(/^([^[]*)\[([^\]]*)\]\s*:?\s*(.*)$/);
+  /* AutoCAD's default rides after the keywords: [Through/Erase/Layer] <Through>: */
+  const m = raw.match(/^([^[]*)\[([^\]]*)\]\s*(?:<([^>]*)>)?\s*:?\s*(.*)$/);
   if (m && m[2].trim()) {
     const keys = [];
     for (const w of m[2].split('/')) {
       const word = w.trim(); if (!word) continue;
       keys.push({ word, key: kwKey(word) });
     }
-    return { raw, base: m[1].replace(/\s*or\s*$/i, '').trim(), keys, extra: m[3].replace(/^[·\s]+/, '').trim() };
+    return { raw, base: m[1].replace(/\s*or\s*$/i, '').trim(), keys, dflt: m[3] == null ? '' : m[3],
+             extra: m[4].replace(/^[·\s]+/, '').trim() };
   }
   /* legacy: "Next point · <em>C</em> close · <em>Enter</em> end" */
   const parts = raw.split('·');
@@ -478,7 +480,9 @@ function parsePrompt(s) {
 function promptText(p) {
   if (!p.base && !p.keys.length) return 'Command:';
   let s = p.base || 'Specify option';
-  if (p.keys.length) s += (p.base ? ' or ' : ' ') + '[' + p.keys.map(k => k.word).join('/') + ']';
+  /* a question takes its answers straight after it: "...points? [Yes/No]" */
+  if (p.keys.length) s += (p.base ? (/\?$/.test(p.base) ? ' ' : ' or ') : ' ') + '[' + p.keys.map(k => k.word).join('/') + ']';
+  if (p.dflt) s += ' <' + p.dflt + '>';
   return s.replace(/:\s*$/, '') + ':';
 }
 /** Draw the prompt. renderPromptKeys (13-ui) is the renderer that makes each
@@ -491,7 +495,7 @@ function promptRender() {
 /** set the prompt that the command line, the tooltip and the HUD all show */
 function promptSet(s) {
   const p = parsePrompt(s);
-  PROMPT.raw = p.raw; PROMPT.base = p.base; PROMPT.keys = p.keys; PROMPT.extra = p.extra;
+  PROMPT.raw = p.raw; PROMPT.base = p.base; PROMPT.keys = p.keys; PROMPT.extra = p.extra; PROMPT.dflt = p.dflt || '';
   PROMPT.text = promptText(p);
   promptRender();
   return PROMPT;
@@ -2029,15 +2033,22 @@ function acSuggest(text, limit) {
   if (!q) return [];
   const mid = !!(CLI.autoComplete & 16);
   const seen = new Set(), out = [];
+  /* An alias typed in full IS that command: L is LINE, C is CIRCLE, before
+     LABEL, LAYER or CANNOSCALE, however alphabetical or recent those are. The
+     top row is what Enter runs once the append bit has written it into the
+     field, so ranking the alias level with every other prefix match made
+     L-Enter start LABEL. A command name typed in full comes next, and system
+     variables sort behind the commands that share their band. */
+  const al = (USERALIAS[q] || ALIAS[q] || '').toUpperCase();
   for (const c of cmdCatalog()) {
     const lo = c.name.toLowerCase();
-    let rank = -1;
+    let rank = -9;
     if (lo.startsWith(q)) rank = 0;
     else if (mid && lo.indexOf(q) > 0) rank = 2;
-    /* an alias typed in full offers its command straight away */
-    const al = (USERALIAS[q] || ALIAS[q] || '').toUpperCase();
-    if (al && al === c.name) rank = Math.min(rank < 0 ? 9 : rank, 1);
-    if (rank < 0 || seen.has(c.name)) continue;
+    if (rank > -9 && c.kind === 'var') rank += 0.5;
+    if (lo === q && c.kind !== 'var') rank = -1;
+    if (al && al === c.name) rank = -2;
+    if (rank === -9 || seen.has(c.name)) continue;
     seen.add(c.name);
     const m = CLI.mru.indexOf(c.name);
     out.push({ name: c.name, kind: c.kind, key: c.key, alias: aliasFor(c.name), rank, mru: m < 0 ? 999 : m });

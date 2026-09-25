@@ -329,13 +329,22 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
 
   t('a command used recently is offered before one that was not', () => {
     const r = R(SETUP + `
+      /* 'lay' is nobody's alias: an alias's own command always comes first
+         (LI is LIST), so recency is shown among plain prefix matches */
       CLI.mru.length = 0;
-      const cold = acSuggest('li', 10).map(x => x.name);
-      runInput('list'); cancelCmd();
-      const warm = acSuggest('li', 10).map(x => x.name);
+      const cold = acSuggest('lay', 10).map(x => x.name);
+      runInput('layiso'); cancelCmd();
+      const warm = acSuggest('lay', 10).map(x => x.name);
       return {cold, warm};`);
-    eq(r.warm[0], 'LIST', 'the last one used comes to the top: ' + r.warm.join(','));
-    ok(r.cold[0] !== 'LIST', 'and it was not there before');
+    eq(r.warm[0], 'LAYISO', 'the last one used comes to the top: ' + r.warm.join(','));
+    ok(r.cold[0] !== 'LAYISO', 'and it was not there before');
+  });
+
+  t('an alias typed in full puts its own command first', () => {
+    const r = R(SETUP + `
+      CLI.mru.length = 0; runInput('save'); cancelCmd();
+      return ['s', 'e', 'li'].map(q => acSuggest(q, 5)[0].name);`);
+    eq(r.join(','), 'STRETCH,ERASE,LIST', 'S is STRETCH even with SAVE just used');
   });
 
   t('an alias offers the command it expands to, and names itself', () => {

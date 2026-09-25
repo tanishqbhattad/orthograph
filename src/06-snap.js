@@ -116,7 +116,9 @@ const ST = {
   selMode: 'add',         /* the A / R switch inside a Select objects prompt   */
 };
 /** the pick box only shows when no command is running (AutoCAD behaviour) */
-function showPickBox() { return !CMD || CMD.phase === 'sel'; }
+/* A prompt that asks for an OBJECT (TRIM's "Select object to trim") is a
+   selection prompt too, and shows the pick box; cmdPicksObjects is 08-modify's */
+function showPickBox() { return !CMD || CMD.phase === 'sel' || (typeof cmdPicksObjects === 'function' && cmdPicksObjects()); }
 let SNAP_R = 10;                                  /* aperture, screen px — AutoCAD's APERTURE, default 10 */
 const SNAP_CYCLE_RESET = 4;                       /* px of travel that resets Tab cycling */
 const TRACK_DWELL_MS = 260;                       /* hover time before a point is acquired */
@@ -1416,7 +1418,8 @@ function snapPoint(sx, sy, ref, now) {
   ST.snapV = DOCV; ST.snapT = Date.now();
   const r = apertureR();
   const on = activeModes();
-  const osOn = osnapActive();
+  /* ...and object snap has nothing to offer a pick that wants an object */
+  const osOn = osnapActive() && !(typeof cmdPicksObjects === 'function' && cmdPicksObjects());
   const one = oneShotKind();
   const tracks = [];
   ST.snapLimited = false;
@@ -2483,6 +2486,7 @@ function bandCommit(remove) {
     if (P && P.length >= 3) {
       const q = ptsBox(P);
       ST.lastBand = q;                        /* STRETCH reuses the last box */
+      ST.lastBandPoly = P.map(v => v.slice());   /* ...and the shape itself (08-modify) */
     }
   }
   const n = selApply(ids, remove == null ? ST.selMode === 'remove' : remove);
@@ -2691,9 +2695,13 @@ function gripDo(e, k, action) {
     const i = +k.slice(1);
     if (!(i >= 0 && i < n)) return k;
     mut(e);
+    /* the bulges run parallel to the vertices and must move with them, or
+       every later arc lands on the wrong span */
+    const B = Array.isArray(e.bulges) ? e.bulges : null;
     if (action === 'delv') {
       if (k[0] !== 'p' || n <= 2) return k;
       e.pts.splice(i, 1);
+      if (B) { B.splice(i, 1); if (i > 0) B[i - 1] = 0; else if (e.closed) B[B.length - 1] = 0; }
       return null;
     }
     /* on the last vertex of an open polyline there is no "next" to halve, so
@@ -2703,6 +2711,14 @@ function gripDo(e, k, action) {
       const d = sub(e.pts[i], e.pts[i - 1] || e.pts[i]);
       q = [e.pts[i][0] + d[0] * .5, e.pts[i][1] + d[1] * .5];
     } else q = mid(e.pts[i], e.pts[(i + 1) % n]);
+    const bi = B ? bulgeAt(e, i) : 0;
+    const arc = bi ? bulgeArc(e.pts[i], e.pts[(i + 1) % n], bi) : null;
+    if (arc) {
+      /* on an arc the new vertex goes on the arc, halving it */
+      const t = arc.a0 + 2 * Math.atan(bi), h = Math.tan(Math.atan(bi) / 2);
+      q = [arc.c[0] + arc.r * Math.cos(t), arc.c[1] + arc.r * Math.sin(t)];
+      B.splice(i, 1, h, h);
+    } else if (B) B.splice(i + 1, 0, 0);
     e.pts.splice(i + 1, 0, q);
     return 'p' + (i + 1);
   }

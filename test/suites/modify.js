@@ -184,12 +184,15 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.ys.join(','), '0,500,500', 'each offset is taken from the object picked');
   });
 
+  /* AutoCAD asks both at the distance prompt, and both stay set until
+     changed; at "Select object to offset" an E means Exit. */
   t('OFFSET Erase removes the source, Layer chooses where it lands', () => {
     const r = R(`${SETUP}
+      MODSET.offErase = false; MODSET.offLayerCur = false;
       addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'});
       const srcId = [...DOC.ents.values()][0].id;
       cancelCmd();
-      startCmd('offset'); dispatch('300'); dispatch('E');
+      startCmd('offset'); dispatch('E'); dispatch('Y'); dispatch('300');
       cmdPoint([2500,0]); cmdPoint([2500,100]);
       endCmd(true);
       const erased = { n: DOC.ents.size, gone: !DOC.ents.get(srcId) };
@@ -199,7 +202,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       addEnt({t:'line', a:[0,0], b:[5000,0], layer:'A-WALL'});
       DOC.cur = '0';
       cancelCmd();
-      startCmd('offset'); dispatch('300'); dispatch('L');
+      startCmd('offset'); dispatch('E'); dispatch('N'); dispatch('L'); dispatch('C'); dispatch('300');
       cmdPoint([2500,0]); cmdPoint([2500,100]);
       endCmd(true);
       const onCur = [...DOC.ents.values()].find(e => e.a[1] !== 0);
@@ -209,7 +212,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
       addEnt({t:'line', a:[0,0], b:[5000,0], layer:'A-WALL'});
       DOC.cur = '0';
       cancelCmd();
-      startCmd('offset'); dispatch('300');
+      startCmd('offset'); dispatch('L'); dispatch('S'); dispatch('300');
       cmdPoint([2500,0]); cmdPoint([2500,100]);
       endCmd(true);
       const onSrc = [...DOC.ents.values()].find(e => e.a[1] !== 0);
@@ -386,7 +389,7 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
   t('TRIMMODE off adds the arc and leaves the lines alone', () => {
     const r = R(`${SETUP}${CORNER}
       VS.trimmode = 1;
-      startCmd('fillet'); dispatch('300'); dispatch('T');
+      startCmd('fillet'); dispatch('300'); dispatch('T'); dispatch('N');   /* AutoCAD asks: Trim/No trim */
       const mode = VS.trimmode;
       cmdPoint([1000,0]); cmdPoint([2000,1000]);
       const lines = [...DOC.ents.values()].filter(e => e.t === 'line');
@@ -483,18 +486,20 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.pts, 3, 'keeping the corner point');
   });
 
-  t('a run that doubles back on itself is not called straight', () => {
+  /* Out to 1000 and back to 400. The old join chained end to end and came
+     back with a line from 0 to 400 — losing 600 of the drawing. AutoCAD joins
+     collinear lines into the one line they cover, overlaps and all. */
+  t('a run that doubles back on itself is not cut short', () => {
     const r = R(`${SETUP}
-      /* out to 1000 and back to 400: every point IS on the line, but the run
-         is not a single segment and must not be flattened into one */
       addEnt({t:'line', a:[0,0], b:[1000,0], layer:'0'});
       addEnt({t:'line', a:[1000,0], b:[400,0], layer:'0'});
       SEL.clear(); for (const e of DOC.ents.values()) SEL.add(e.id);
       cancelCmd();
       startCmd('join'); endCmd(true);
       const all = [...DOC.ents.values()];
-      return { t: all[0] && all[0].t };`);
-    eq(r.t, 'pline', 'doubling back is a polyline, not a line from 0 to 400');
+      return { n: all.length, t: all[0] && all[0].t, x: all[0] && [all[0].a[0], all[0].b[0]].sort((a,b)=>a-b) };`);
+    eq(r.n, 1); eq(r.t, 'line');
+    eq(JSON.stringify(r.x), '[0,1000]', 'spanning everything the two covered');
   });
 
   group('B2 — joining arcs, and Edge mode');
@@ -547,27 +552,31 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
 
   /* Edge mode is the difference between trimming to a line that nearly reaches
      and having to draw a longer one. */
+  /* Edge is a Standard-mode option in AutoCAD, so this runs there: choose the
+     edges, then trim. (In Quick mode an object nothing crosses is erased —
+     see b1-trim.) */
   t('Edge mode trims to a boundary that stops short', () => {
     const r = R(`${SETUP}
-      VS.edgemode = 0;
+      VS.edgemode = 0; VS.trimextendmode = 0;
       begin();
       addEnt({t:'line', a:[0,0], b:[0,3000], layer:'0'});      /* the object */
       /* a boundary that stops 500 short of it */
       addEnt({t:'line', a:[500,2000], b:[3000,2000], layer:'0'});
       commit('x');
-      cancelCmd(); startCmd('trim');
+      cancelCmd(); SEL.clear(); startCmd('trim');
+      cmdEnter();                                              /* <select all> */
       cmdPoint([0, 2600]);                                     /* above the boundary */
       const offTop = Math.max(...[...DOC.ents.values()]
         .filter(e => Math.abs(e.a[0]) < 1e-9).map(e => Math.max(e.a[1], e.b[1])));
-      dispatch('E');
+      dispatch('E'); dispatch('E');
       const mode = VS.edgemode;
       cmdPoint([0, 2600]);
       const onTop = Math.max(...[...DOC.ents.values()]
         .filter(e => Math.abs(e.a[0]) < 1e-9).map(e => Math.max(e.a[1], e.b[1])));
-      endCmd(true); VS.edgemode = 0;
+      endCmd(true); VS.edgemode = 0; VS.trimextendmode = 1;
       return { offTop, mode, onTop };`);
     eq(r.offTop, 3000, 'with Edge off the boundary misses, so nothing is cut');
-    eq(r.mode, 1, 'E turns it on');
+    eq(r.mode, 1, 'E, Extend turns it on');
     eq(r.onTop, 2000, 'and now it cuts at the extended boundary, got ' + r.onTop);
   });
 

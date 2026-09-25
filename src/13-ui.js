@@ -1113,7 +1113,7 @@ const QUICK = {
     addRow(w, 'Radius Y', e.ry, set(v => e.ry = Math.max(v, 1e-9)));
   },
   pline(w, e, set, upd) {
-    ro(w, 'Length', fmt(polyLen(e.pts, e.closed)));
+    ro(w, 'Length', fmt(entLength(e)));                /* its arcs as arcs, not chords */
     btnRow(w, 'Closed', e.closed ? 'yes' : 'no', () => { begin(); mut(e); e.closed = !e.closed; commit(); upd(); });
   },
   text(w, e, set, upd) {
@@ -1222,8 +1222,8 @@ const PROPS = {
   pline(w, e, set, upd) {
     ro(w, 'Vertices', e.pts.length);
     btnRow(w, 'Closed', e.closed ? 'yes' : 'no', () => { begin(); mut(e); e.closed = !e.closed; commit(); upd(); });
-    ro(w, 'Length', fmt(polyLen(e.pts, e.closed)));
-    if (e.closed) ro(w, 'Area', fmtArea(polyArea(e.pts)));
+    ro(w, 'Length', fmt(entLength(e)));                /* its arcs as arcs, not chords */
+    if (e.closed) ro(w, 'Area', fmtArea(entArea(e)));
   },
   text(w, e, set, upd) {
     const r = el('div', 'row', '<label>Text</label>');
@@ -2045,7 +2045,7 @@ function renderPromptKeys() {
   const base = p.base.replace(/:\s*$/, '');
   if (base) txt(base);
   if (p.keys.length) {
-    txt(base ? ' or [' : '[');
+    txt(base ? (/\?$/.test(base) ? ' [' : ' or [') : '[');
     p.keys.forEach((k, i) => {
       if (i) txt('/');
       const b = el('button', 'kw', kwLabelHTML(k));
@@ -2060,7 +2060,7 @@ function renderPromptKeys() {
       n.appendChild(b);
       PROMPT_KW.push(b);
     });
-    txt(']:');
+    txt(p.dflt ? '] <' + p.dflt + '>:' : ']:');
   } else if (!/[.?!:]$/.test(base)) txt(':');
   if (p.extra) txt(' · ' + p.extra);
   n.style.display = '';

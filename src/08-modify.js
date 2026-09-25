@@ -165,435 +165,1905 @@ defc('mirror', {
     return (c.src || []).map(e => xf(clone(e), T.mirror(c.pts[0], p)));
   },
 });
+/* ============================================================
+   THE EDITING COMMANDS
+   ------------------------------------------------------------
+   TRIM, EXTEND, OFFSET, FILLET, CHAMFER, BREAK, BREAKATPOINT,
+   JOIN, LENGTHEN, STRETCH and ALIGN, asking what AutoCAD 2025
+   asks, in its order, with its keywords and its defaults. The
+   geometry is the curve kernel in 03-solve; what lives here is
+   the conversation — what each prompt accepts, what a keyword
+   means where it is typed, and what one U takes back.
+
+   Three rules hold for all of them:
+     · a pick at a prompt that wants an OBJECT means the cursor,
+       not wherever object snap pulled it (rawPick)
+     · every operation inside a command can be taken back by the
+       command's own Undo, one at a time, and the whole command is
+       still ONE step for U afterwards
+     · a piece of an object keeps everything the object had —
+       layer, colour, linetype, lineweight, storey
+   ============================================================ */
+/** where a pick really lands: the cursor, not the snap it was pulled to */
+function rawPick(p) {
+  const r = ST.raw;
+  if (r && ST.snap && ST.snap.p && dist(ST.snap.p, p) < 1e-9 && dist(r, p) < px(60)) return r.slice();
+  return p;
+}
+/** Is the running command asking for an object rather than a point? The snap
+    engine asks, so a pick prompt shows AutoCAD's pick box and no snap
+    markers rather than offering endpoints nobody asked for. */
+function cmdPicksObjects() {
+  return !!(typeof CMD !== 'undefined' && CMD && CMD.phase === 'run' && CMD.def.objPick && CMD.def.objPick(CMD));
+}
+/** objects the editing commands can change */
+function editable(e) { return !!e && pickable(e) && !GEOM[e.t] && !!curveOf(e); }
+/* construction lines and rays have no extent the spatial index can hold, so
+   the few there are listed separately — rebuilt only when the drawing moves */
+const UNBOUNDED = { v: -1, list: [] };
+function unboundedEnts() {
+  if (UNBOUNDED.v !== DOCV) {
+    UNBOUNDED.v = DOCV; UNBOUNDED.list = [];
+    for (const e of DOC.ents.values()) if (e.t === 'xline' || e.t === 'ray') UNBOUNDED.list.push(e);
+  }
+  return UNBOUNDED.list;
+}
+/** the editable object under a pick, construction lines included */
+function pickEditable(p, filter) {
+  const f = x => editable(x) && (!filter || filter(x));
+  let best = pickAt(p, 10, f);
+  let bd = best ? entDist(p, best) : Infinity;
+  const r = px(10 * (pickBoxPx() / 8));
+  for (const x of unboundedEnts()) {
+    if (!f(x)) continue;
+    const q = crvNear(curveOf(x), p);
+    if (q && q.d <= r && q.d < bd) { best = x; bd = q.d; }
+  }
+  return best;
+}
+/* ---- one operation inside a command, and taking it back ---- */
+function opRun(c, label, fn) {
+  if (!c.ops) c.ops = [];
+  const seq = HIST.seq;
+  begin();
+  let out;
+  try { out = fn(); } catch (err) { rollback(); throw err; }
+  commit(label);
+  if (HIST.seq !== seq) c.ops.push(seq);
+  draw();
+  return out;
+}
+function opUndo(c) {
+  if (!c.ops || !c.ops.length) { cliPrint('Command has been completely undone.'); return false; }
+  const seq = c.ops.pop();
+  let did = 0;
+  while (HIST.past.length && HIST.past[HIST.past.length - 1].seq > seq) { undoOne(HIST.past, HIST.future, false); did++; }
+  /* What the command's own U takes back is gone, as it is in AutoCAD: it must
+     not wait on the redo stack for a REDO of the whole command to bring it
+     back. (undoOne already took its weight off the journal.) */
+  if (did) HIST.future.splice(HIST.future.length - did, did);
+  /* nothing of this command is left to take back (a new drawing since, say):
+     leave the selection alone, it belongs to whatever comes next */
+  if (did) { SEL.clear(); syncUI(); }
+  modRefresh(c);
+  return true;
+}
+/** Redo the preview for where the cursor is NOW. The engine refreshes it on
+    a mouse move; after an edit, the one on screen describes a drawing that
+    no longer exists — the piece just trimmed, still drawn as about to go. */
+function modRefresh(c) {
+  if (typeof CMD === 'undefined' || CMD !== c) { draw(); return; }
+  ST.preview = null;
+  if (c.phase === 'run' && c.def.preview) {
+    try { ST.preview = c.def.preview(c, ST.cur || [0, 0]) || null; } catch (err) { ST.preview = null; }
+  }
+  if (typeof syncDyn === 'function') syncDyn();
+  draw();
+}
+/** Put `keep` in place of `e`. The first piece IS the object — same id, so
+    anything that refers to it still does — and the rest are new. */
+function replaceWith(e, keep) {
+  if (!keep || !keep.length) { eraseEnt(e.id); return []; }
+  const id = e.id;
+  mut(e);
+  for (const k of Object.keys(e)) if (k !== 'id') delete e[k];
+  Object.assign(e, keep[0]); e.id = id;
+  const made = [e];
+  for (let i = 1; i < keep.length; i++) made.push(addEnt(keep[i]));
+  return made;
+}
+/** A piece drawn as a screen-sized dash pattern in the preview colour. The
+    linetype dashes are drawing units, which at a plan's zoom are too small to
+    see; a trim preview has to read at any zoom. */
+function dashPreview(ent, on, off) {
+  const C = curveOf(ent);
+  if (!C) return [];
+  const L = crvLen(C);
+  let a = px(on || 7), b = px(off || 5);
+  const per = a + b;
+  if (!(L > 0)) return [];
+  if (L / per > 400) { const k = L / per / 400; a *= k; b *= k; }
+  const out = [];
+  for (let l = 0; l < L - 1e-12; l += a + b) {
+    const q = crvSub(C, crvAtLen(C, l), crvAtLen(C, Math.min(L, l + a)));
+    if (q) out.push(q);
+  }
+  if (!out.length) out.push(clone(ent));
+  /* heavier than the line it lies on, so it reads over it rather than as it */
+  for (const q of out) { q.lw = 0.6; q.lt = null; }
+  return out;
+}
+
+/* ---------------- system variables of the editing commands ---------------- */
+const MODSET = {
+  offDist: -1,          /* OFFSETDIST: -1 is Through                    */
+  offErase: false,      /* OFFSET Erase option                          */
+  offLayerCur: false,   /* OFFSET Layer option: current, not source     */
+  /* CHAMFERB, C, D and CHAMMODE are drawing settings beside CHAMFERA: they
+     live on DOC (01-doc DOC_SETTINGS), are saved with it and reset for a new
+     drawing — as DOC.chamD2, chamL, chamAng (radians) and chamMode */
+  lenMode: 't',         /* LENGTHEN's option: Total first, then the last used */
+  lenDelta: 0, lenPct: 100, lenTotal: 1000, lenAngle: false,
+};
+if (VS.trimextendmode == null) VS.trimextendmode = 1;
+if (VS.offsetgaptype == null) VS.offsetgaptype = 0;
+defvar('TRIMEXTENDMODE', {
+  desc: 'TRIM and EXTEND: 1 Quick (every object is an edge), 0 Standard (pick the edges)',
+  get: () => VS.trimextendmode ? 1 : 0, set(v) { VS.trimextendmode = v ? 1 : 0; },
+});
+defvar('OFFSETGAPTYPE', {
+  desc: 'Closing the gaps of an offset polyline: 0 extend, 1 fillet, 2 chamfer',
+  get: () => VS.offsetgaptype | 0, set(v) { v |= 0; VS.offsetgaptype = v === 1 || v === 2 ? v : 0; },
+});
+defvar('OFFSETDIST', {
+  type: 'real', desc: 'Default offset distance; negative means Through',
+  get: () => MODSET.offDist, set(v) { MODSET.offDist = v < 0 ? -1 : v; },
+});
+defvar('CHAMFERB', {
+  type: 'real', desc: 'Second chamfer distance',
+  get: () => DOC.chamD2 == null ? (DOC.chamD || 0) : DOC.chamD2, set(v) { DOC.chamD2 = Math.max(0, v); },
+});
+defvar('CHAMFERC', {
+  type: 'real', desc: 'Chamfer length for the angle method',
+  get: () => DOC.chamL || 0, set(v) { DOC.chamL = Math.max(0, v); },
+});
+defvar('CHAMFERD', {
+  type: 'real', desc: 'Chamfer angle for the angle method, degrees',
+  get: () => deg(DOC.chamAng || 0), set(v) { DOC.chamAng = rad(clamp(v, 0, 90)); },
+});
+defvar('CHAMMODE', {
+  desc: 'Chamfer method: 0 two distances, 1 a length and an angle',
+  get: () => DOC.chamMode ? 1 : 0, set(v) { DOC.chamMode = v ? 1 : 0; },
+});
+
+/* ---- pointer state a command can read: is the button down, has it moved ----
+   TRIM's freehand fence is a press-drag-release, and the engine hands a
+   command its press (as a point) and its moves (as previews) but not its
+   release. So this listens for itself, on the window, and tells the command. */
+const MODPTR = { down: false, moved: false, x: 0, y: 0 };
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('pointerdown', ev => {
+    MODPTR.down = ev.button === 0; MODPTR.moved = false; MODPTR.x = ev.clientX; MODPTR.y = ev.clientY;
+  }, true);
+  window.addEventListener('pointermove', ev => {
+    if (MODPTR.down && Math.hypot(ev.clientX - MODPTR.x, ev.clientY - MODPTR.y) > 4) MODPTR.moved = true;
+  }, true);
+  window.addEventListener('pointerup', () => {
+    const was = MODPTR.down;
+    MODPTR.down = false;
+    const c = typeof CMD !== 'undefined' ? CMD : null;
+    if (was && c && c.phase === 'run' && c.def.release) {
+      try { c.def.release(c, MODPTR.moved); } catch (err) { cmdFail(err, c.def.key); }
+      draw();
+    }
+  });
+}
+
+/* ============================================================
+   TRIM and EXTEND
+   ------------------------------------------------------------
+   Quick mode, AutoCAD's default since 2021: every object is a
+   cutting edge (or boundary) without being asked for. Click a
+   piece and it goes; press and drag a freehand path, or click two
+   empty places, and every piece the path crosses goes; an object
+   that nothing crosses is erased outright. Shift swaps the sense.
+   As the cursor moves, the piece that a click would take is shown.
+
+   Standard mode is the older conversation: choose the edges first
+   (Enter takes them all), then pick. It keeps Fence, Crossing and
+   Edge — where a boundary that stops short is treated as running on.
+   ============================================================ */
+const TRIM_WORD = { trim: 'Trim', extend: 'Extend' };
+function trimPrompt(c) {
+  const ext = c.ext;
+  const q = c.quick;
+  /* Undo is offered once there is something to take back, as AutoCAD does */
+  const u = c.ops && c.ops.length ? '/Undo' : '';
+  hint(ext
+    ? 'Select object to extend or shift-select to trim or [' + (q ? 'Boundary edges/' : 'Fence/') +
+      'Crossing/mOde/Project' + (q ? '' : '/Edge') + u + ']:'
+    : 'Select object to trim or shift-select to extend or [' + (q ? 'cuTting edges/' : 'Fence/') +
+      'Crossing/mOde/Project/' + (q ? '' : 'Edge/') + 'eRase' + u + ']:');
+}
+function trimSettings(c) {
+  cliPrint('Current settings: Projection=UCS, Edge=' + (VS.edgemode ? 'Extend' : 'None') +
+           ', Mode=' + (c.quick ? 'Quick' : 'Standard'));
+}
+/** ask for the edges: the engine's own Select objects prompt, all of its grammar */
+function trimAskEdges(c) {
+  cliPrint(c.ext ? 'Select boundary edges ...' : 'Select cutting edges ...');
+  c.phase = 'sel';
+  SEL.clear();
+  if (typeof selPromptReset === 'function') selPromptReset();
+  c.back = cc => {
+    cc.back = null;
+    const ids = SEL.size ? [...SEL] : [...DOC.ents.values()].filter(x => visible(x) && edgeCurves(x).length).map(x => x.id);
+    cc.edges = ids; cc.quick = false;
+    SEL.clear();
+    cliPrint(ids.length + ' found');
+    cc.stage = 'pick'; trimPrompt(cc);
+  };
+  hint('Select objects or <select all>:');
+}
+/** the edges that can matter to `e` (whole drawing when `reach` or edge mode) */
+function trimEdges(c, e, reach) {
+  if (!c.ecache || c.ecache.v !== DOCV) c.ecache = { v: DOCV, m: new Map() };
+  const cache = c.ecache.m;
+  const out = [], seen = new Set([e.id]);
+  const take = x => {
+    if (!x || seen.has(x.id)) return;
+    seen.add(x.id);
+    if (!visible(x)) return;
+    let K = cache.get(x.id);
+    if (!K) { K = edgeCurves(x); cache.set(x.id, K); }
+    for (const k of K) out.push(k);
+  };
+  if (c.edges) { for (const id of c.edges) take(DOC.ents.get(id)); return out; }
+  const b = bbox(e);
+  if (reach || trimEdgeOn(c) || e.t === 'xline' || e.t === 'ray') {
+    for (const x of DOC.ents.values()) take(x);
+    return out;
+  }
+  const m = 1e-6 + (b[2] - b[0] + b[3] - b[1]) * 1e-9;
+  for (const x of query(b[0] - m, b[1] - m, b[2] + m, b[3] + m)) take(x);
+  for (const x of unboundedEnts()) take(x);
+  return out;
+}
+/** Edge mode is a Standard-mode setting, as it is in AutoCAD */
+function trimEdgeOn(c) { return !c.quick && !!VS.edgemode; }
+/** whether this click trims or extends */
+function trimSense(c, shift) { return c.ext ? !shift : !!shift; }
+/** what one pick would do: { ext, e, n } or { e, r } */
+function trimPlanAt(c, p, shift) {
+  const e = pickEditable(p);
+  if (!e) return null;
+  const doExt = trimSense(c, shift);
+  if (doExt) return { ext: true, e, n: extendPick(e, p, trimEdges(c, e, true), trimEdgeOn(c)) };
+  return { ext: false, e, r: trimPick(e, p, trimEdges(c, e), trimEdgeOn(c)) };
+}
+function trimDoPick(c, p, shift) {
+  const P = trimPlanAt(c, p, shift);
+  if (!P) return false;
+  if (P.ext) {
+    if (!P.n) { cliPrint('No edge in that direction.'); return true; }
+    opRun(c, 'Extend', () => replaceWith(P.e, [P.n]));
+    return true;
+  }
+  const r = P.r;
+  if (r.stuck) { cliPrint(r.stuck + '.'); return true; }
+  if (r.erase) {
+    if (!c.quick) { cliPrint('Object does not intersect an edge.'); return true; }
+    opRun(c, 'Trim', () => eraseEnt(P.e.id));
+    return true;
+  }
+  opRun(c, 'Trim', () => replaceWith(P.e, r.keep));
+  return true;
+}
+/** the objects a stroke or window could touch */
+function strokeCands(pts) {
+  const b = ptsBox(pts);
+  const out = new Set();
+  for (const e of query(b[0], b[1], b[2], b[3])) if (editable(e)) out.add(e);
+  for (const e of unboundedEnts()) if (editable(e)) out.add(e);
+  return [...out];
+}
+/** Plan a fence (open path) or window (closed ring) across the drawing. Every
+    plan is made against the drawing as it stands, then applied together, so
+    the order objects happen to be stored in never changes the answer. */
+function trimStrokePlans(c, pts, ring, doExt) {
+  const plans = [];
+  if (!pts || pts.length < 2) return plans;
+  const F = ring ? curveOf({ t: 'pline', pts, closed: true }) : curveOf({ t: 'pline', pts });
+  if (!F) return plans;
+  for (const e of strokeCands(pts)) {
+    const C = curveOf(e);
+    const hits = crvHits(C, F, null, null);
+    const inside = ring && pointInPoly(crvPt(C, C.closed ? 0 : C.n / 2), pts);
+    if (!hits.length && !inside) continue;
+    if (doExt) {
+      if (ring) continue;                          /* a window has no near end */
+      const n = extendPick(e, hits[0].p, trimEdges(c, e, true), trimEdgeOn(c));
+      if (n) plans.push({ e, keep: [n], gone: [] });
+      continue;
+    }
+    const edges = trimEdges(c, e);
+    const r = ring ? trimWindow(e, pts, edges, trimEdgeOn(c)) : trimFence(e, F, edges, trimEdgeOn(c));
+    if (!r) continue;
+    if (r.erase) { if (c.quick) plans.push({ e, keep: [], gone: [e] }); continue; }
+    plans.push({ e, keep: r.keep, gone: r.gone || [] });
+  }
+  return plans;
+}
+function trimStroke(c, pts, ring, doExt) {
+  const plans = trimStrokePlans(c, pts, ring, doExt);
+  if (!plans.length) { cliPrint(ring ? 'Nothing crossed that window.' : 'The fence crossed nothing.'); return 0; }
+  opRun(c, doExt ? 'Extend' : 'Trim', () => { for (const P of plans) replaceWith(P.e, P.keep); });
+  echo((doExt ? 'Extended ' : 'Trimmed ') + plans.length + ' object' + (plans.length > 1 ? 's' : ''));
+  return plans.length;
+}
+/** what a stroke would do, drawn: the path, and the pieces it would take */
+function strokePreview(c, pts, ring, doExt) {
+  const out = [];
+  const path = ring ? pts.concat([pts[0]]) : pts;
+  if (path.length >= 2) for (const q of dashPreview({ t: 'pline', pts: path, layer: DOC.cur }, 5, 4)) out.push(q);
+  let plans = [];
+  try { plans = trimStrokePlans(c, pts, ring, doExt); } catch (err) { plans = []; }
+  for (const P of plans.slice(0, 300)) {
+    if (doExt) { for (const k of P.keep) out.push(k); continue; }
+    for (const g of P.gone) for (const q of dashPreview(g)) out.push(q);
+  }
+  return out;
+}
+function trimLike(ext) {
+  const WORD = ext ? 'Extend' : 'Trim';
+  return {
+    group: 'modify',
+    objPick: c => c.stage === 'pick',
+    init(c) {
+      if (c.back) { c.back(c); return; }             /* back from choosing edges */
+      c.ext = ext; c.ops = []; c.edges = null; c.fence = null; c.corner = null; c.sub = null;
+      c.stage = 'pick';
+      c.quick = VS.trimextendmode !== 0;
+      const pre = SEL.size ? [...SEL] : null;
+      SEL.clear();
+      trimSettings(c);
+      if (!c.quick) {
+        if (pre) { c.edges = pre; cliPrint(pre.length + ' found'); trimPrompt(c); }
+        else trimAskEdges(c);
+        return;
+      }
+      trimPrompt(c);
+    },
+    text(c, s) {
+      const k = String(s).trim().toLowerCase();
+      if (c.sub) return c.sub(k);
+      if (c.stage === 'fence' && k === 'u') {
+        c.fence.pts.pop();
+        if (!c.fence.pts.length) { c.stage = 'pick'; trimPrompt(c); }
+        return true;
+      }
+      if (k === 'u' || k === 'undo') { opUndo(c); if (c.stage === 'pick') trimPrompt(c); return true; }
+      if (k === 'c' || k === 'crossing') { c.stage = 'cross'; c.corner = null; hint('Specify first corner:'); return true; }
+      if (k === 'f' || k === 'fence') { c.stage = 'fence'; c.fence = { pts: [], shift: false }; hint('Specify first fence point:'); return true; }
+      if ((!ext && k === 't') || (ext && k === 'b')) { trimAskEdges(c); return true; }
+      if (k === 'o' || k === 'mode') {
+        hint('Enter a ' + (ext ? 'extend' : 'trim') + ' mode option [Quick/Standard] <' + (c.quick ? 'Quick' : 'Standard') + '>:');
+        c.sub = a => {
+          if (a === '') { c.sub = null; trimPrompt(c); return true; }
+          if (a !== 'q' && a !== 's') return false;
+          c.sub = null;
+          VS.trimextendmode = a === 'q' ? 1 : 0;
+          c.quick = a === 'q';
+          if (c.quick) { c.edges = null; trimPrompt(c); } else trimAskEdges(c);
+          return true;
+        };
+        return true;
+      }
+      if (k === 'p' || k === 'project') {
+        hint('Enter a projection option [None/Ucs/View] <Ucs>:');
+        c.sub = a => { if (a === '' || a === 'n' || a === 'u' || a === 'v') { c.sub = null; trimPrompt(c); return true; } return false; };
+        return true;
+      }
+      if (k === 'e' || k === 'edge') {
+        hint('Enter an implied edge extension mode [Extend/No extend] <' + (VS.edgemode ? 'Extend' : 'No extend') + '>:');
+        c.sub = a => {
+          if (a === 'e' || a === 'extend') VS.edgemode = 1;
+          else if (a === 'n' || a === 'no extend') VS.edgemode = 0;
+          else if (a !== '') return false;
+          c.sub = null; trimPrompt(c); return true;
+        };
+        return true;
+      }
+      if (!ext && (k === 'r' || k === 'erase')) {
+        cliPrint('Select objects to erase or <exit>:');
+        c.phase = 'sel';
+        SEL.clear();
+        if (typeof selPromptReset === 'function') selPromptReset();
+        c.back = cc => {
+          cc.back = null;
+          const ids = [...SEL];
+          SEL.clear();
+          if (ids.length) opRun(cc, 'Erase', () => { for (const id of ids) if (DOC.ents.get(id)) eraseEnt(id); });
+          cc.stage = 'pick'; trimPrompt(cc);
+        };
+        hint('Select objects to erase or <exit>:');
+        return true;
+      }
+      return false;
+    },
+    point(c, p0) { trimPoint(c, p0); if (CMD === c && c.stage === 'pick' && c.phase === 'run' && !c.sub) trimPrompt(c); modRefresh(c); },
+    release(c) {
+      if (c.stage !== 'qfence' || !c.fence || !c.fence.free) return;
+      const f = c.fence;
+      c.fence = null; c.stage = 'pick';
+      if (f.pts.length >= 2) trimStroke(c, f.pts, false, trimSense(c, f.shift));
+      trimPrompt(c);
+      modRefresh(c);
+    },
+    enter(c) { trimEnter(c); if (CMD === c) modRefresh(c); },
+    preview(c, p0) { return trimPreview(c, p0); },
+    done() { SEL.clear(); },
+  };
+}
+function trimPoint(c, p0) {
+  const p = rawPick(p0);
+  if (c.stage === 'cross') {
+    if (!c.corner) { c.corner = p; hint('Specify opposite corner:'); return; }
+    trimStroke(c, boxFence(c.corner, p), true, trimSense(c, ST.shift));
+    c.corner = null; c.stage = 'pick'; trimPrompt(c); return;
+  }
+  if (c.stage === 'fence') { c.fence.pts.push(p); hint('Specify next fence point or [Undo]:'); return; }
+  if (c.stage === 'qfence') {
+    /* the second of two clicks in empty space: a straight fence */
+    trimStroke(c, [c.fence.pts[0], p], false, trimSense(c, c.fence.shift));
+    c.fence = null; c.stage = 'pick'; trimPrompt(c); return;
+  }
+  if (trimDoPick(c, p, ST.shift)) return;
+  /* nothing under the pick */
+  if (c.quick) {
+    c.stage = 'qfence';
+    c.fence = { pts: [p], shift: !!ST.shift, free: false };
+    hint('Specify end point of the fence, or drag a freehand path:');
+  } else {
+    c.stage = 'cross'; c.corner = p; hint('Specify opposite corner:');
+  }
+}
+function trimEnter(c) {
+  if (c.sub) { c.sub(''); return; }
+  if (c.stage === 'fence') {
+    const pts = c.fence.pts;
+    if (pts.length >= 2) trimStroke(c, pts, false, trimSense(c, false));
+    c.fence = null; c.stage = 'pick'; trimPrompt(c); return;
+  }
+  if (c.stage === 'cross' || c.stage === 'qfence') { c.fence = null; c.corner = null; c.stage = 'pick'; trimPrompt(c); return; }
+  endCmd();
+}
+function trimPreview(c, p0) {
+  const p = rawPick(p0);
+  ST.tracks = null;
+  if (c.stage === 'qfence' && c.fence) {
+    const f = c.fence;
+    if (MODPTR.down && MODPTR.moved) {
+      f.free = true;
+      const last = f.pts[f.pts.length - 1];
+      if (dist(last, p) > px(3)) f.pts.push(p);
+    }
+    return strokePreview(c, f.free ? f.pts : [f.pts[0], p], false, trimSense(c, f.shift));
+  }
+  if (c.stage === 'fence' && c.fence) return strokePreview(c, c.fence.pts.concat([p]), false, trimSense(c, false));
+  if (c.stage === 'cross' && c.corner) return strokePreview(c, boxFence(c.corner, p), true, trimSense(c, ST.shift));
+  if (c.stage !== 'pick') return null;
+  let P = null;
+  try { P = trimPlanAt(c, p, ST.shift); } catch (err) { P = null; }
+  if (!P) return null;
+  if (P.ext) return P.n ? [P.n] : null;
+  const r = P.r;
+  if (r.stuck) return null;
+  if (r.erase) return c.quick ? dashPreview(P.e) : null;
+  return r.gone ? dashPreview(r.gone) : null;
+}
+defc('trim', trimLike(false));
+defc('extend', trimLike(true));
+/* ============================================================
+   OFFSET
+   ------------------------------------------------------------
+     Specify offset distance or [Through/Erase/Layer] <Through>:
+     Select object to offset or [Exit/Undo] <Exit>:
+     Specify point on side to offset or [Exit/Multiple/Undo] <Exit>:
+
+   The distance is remembered (OFFSETDIST, -1 meaning Through) and
+   offered back as the default, and can be shown by two points.
+   Erase and Layer are settings that stay set, as they do in
+   AutoCAD. Multiple keeps offsetting from the object just made,
+   which is how a run of parallel lines is drawn; Enter then goes
+   on to the next object. Undo takes back one offset at a time.
+   ============================================================ */
+function offWord() { return MODSET.offDist < 0 ? 'Through' : fmt(MODSET.offDist); }
+function offAskDist(c) {
+  c.stage = 'dist'; c.p1 = null; c.sub = null;
+  hint('Specify offset distance or [Through/Erase/Layer] <' + offWord() + '>:');
+}
+function offAskObj(c) {
+  c.stage = 'select'; c.src = null; c.multi = !!c.multiArm; SEL.clear();
+  hint('Select object to offset or [Exit/Undo] <Exit>:');
+}
+function offAskSide(c) {
+  c.stage = 'side';
+  const thru = MODSET.offDist < 0;
+  const ask = thru ? 'Specify through point' : 'Specify point on side to offset';
+  hint(ask + (c.multi ? ' or [Exit/Undo] <next object>:' : ' or [Exit/Multiple/Undo] <Exit>:'));
+}
+/** the offsets a click at p would make from the current source */
+function offPlan(c, p) {
+  const src = c.src && DOC.ents.get(c.src.id) ? DOC.ents.get(c.src.id) : c.src;
+  if (!src) return null;
+  const C = curveOf(src);
+  if (!C) return null;
+  const d = MODSET.offDist < 0 ? crvNear(C, p).d : MODSET.offDist;
+  if (!(d > SLIVER)) return null;
+  const made = offsetEnts(src, d, offsetSide(src, p));
+  for (const m of made) if (MODSET.offLayerCur) m.layer = DOC.cur;
+  return { src, made };
+}
 defc('offset', {
   group: 'modify',
-  hint: 'Offset distance · <em>T</em>hrough · <em>M</em>ultiple · <em>E</em>rase source · <em>L</em>ayer',
-  init: c => { c.d = null; c.e = null; c.thru = false;
-               c.multiple = false; c.erase = false; c.layerCur = false; },
+  objPick: c => c.stage === 'select',
+  init(c) {
+    c.ops = []; c.multiArm = false; c.erased = false;
+    cliPrint('Current settings: Erase source=' + (MODSET.offErase ? 'Yes' : 'No') +
+             '  Layer=' + (MODSET.offLayerCur ? 'Current' : 'Source') +
+             '  OFFSETGAPTYPE=' + (VS.offsetgaptype | 0));
+    offAskDist(c);
+  },
   text(c, s) {
     const k = String(s).trim().toLowerCase();
-    if (k === 't') { c.thru = true; c.d = 0; hint('Select the object to offset'); return true; }
-    /* Multiple keeps offsetting from the object just made, which is how a run
-       of parallel lines actually gets drawn. */
-    if (k === 'm') { c.multiple = !c.multiple;
-      echo(c.multiple ? 'Multiple: each offset continues from the last' : 'Multiple off'); return true; }
-    if (k === 'e') { c.erase = !c.erase;
-      echo(c.erase ? 'The source will be erased' : 'The source will be kept'); return true; }
-    if (k === 'l') { c.layerCur = !c.layerCur;
-      echo(c.layerCur ? 'Offsets go on the current layer' : 'Offsets keep the source layer'); return true; }
-    if (c.d === null || c.thru === false) {
+    if (c.sub) return c.sub(k);
+    if (c.stage === 'dist') {
+      if (k === 't' || k === 'through') { MODSET.offDist = -1; offAskObj(c); return true; }
+      if (k === 'e' || k === 'erase') {
+        hint('Erase source object after offsetting? [Yes/No] <' + (MODSET.offErase ? 'Yes' : 'No') + '>:');
+        c.sub = a => {
+          if (a === 'y' || a === 'yes') MODSET.offErase = true;
+          else if (a === 'n' || a === 'no') MODSET.offErase = false;
+          else if (a !== '') return false;
+          offAskDist(c); return true;
+        };
+        return true;
+      }
+      if (k === 'l' || k === 'layer') {
+        hint('Enter layer option for offset objects [Current/Source] <' + (MODSET.offLayerCur ? 'Current' : 'Source') + '>:');
+        c.sub = a => {
+          if (a === 'c' || a === 'current') MODSET.offLayerCur = true;
+          else if (a === 's' || a === 'source') MODSET.offLayerCur = false;
+          else if (a !== '') return false;
+          offAskDist(c); return true;
+        };
+        return true;
+      }
       const v = parseLen(s);
-      if (!isNaN(v) && v > 0) { c.d = v; c.thru = false; hint('Select the object to offset'); return true; }
+      if (isFinite(v) && v > 0) { MODSET.offDist = v; offAskObj(c); return true; }
+      if (isFinite(v)) { cliPrint('Value must be positive and nonzero.', 'err'); return true; }
+      return false;
+    }
+    if (k === 'e' || k === 'exit') { endCmd(); return true; }
+    if (k === 'u' || k === 'undo') {
+      if (opUndo(c)) {
+        if (c.stage === 'side' && c.multi && c.chain && c.chain.length) {
+          c.chain.pop();
+          c.src = c.chain.length ? c.chain[c.chain.length - 1] : c.src0;
+        }
+      }
+      return true;
+    }
+    if (k === 'm' || k === 'multiple') {
+      if (c.stage === 'select') { c.multiArm = true; return true; }
+      c.multi = true; offAskSide(c); return true;
+    }
+    return false;
+  },
+  point(c, p0) {
+    if (c.stage === 'dist') {
+      if (!c.p1) { c.p1 = p0; hint('Specify second point:'); return; }
+      const d = dist(c.p1, p0);
+      if (!(d > 0)) { cliPrint('Value must be positive and nonzero.', 'err'); c.p1 = null; return; }
+      MODSET.offDist = d; offAskObj(c); return;
+    }
+    if (c.stage === 'select') {
+      const p = rawPick(p0);
+      const e = pickEditable(p);
+      if (!e) return;
+      c.src = e; c.src0 = e; c.chain = []; c.multi = !!c.multiArm;
+      SEL.clear(); SEL.add(e.id);
+      offAskSide(c); modRefresh(c); return;
+    }
+    if (c.stage === 'side') {
+      const P = offPlan(c, p0);
+      if (!P || !P.made.length) { cliPrint('Cannot offset that object by that distance.', 'err'); return; }
+      const made = opRun(c, 'Offset', () => {
+        const out = P.made.map(m => addEnt(m));
+        if (MODSET.offErase && !c.erased && DOC.ents.get(P.src.id)) { eraseEnt(P.src.id); c.erased = true; }
+        return out;
+      });
+      if (c.multi) {
+        /* the next offset steps out from the one just made */
+        c.src = made[0]; c.chain.push(made[0]);
+        SEL.clear(); SEL.add(made[0].id);
+        offAskSide(c);
+      } else offAskObj(c);
+      modRefresh(c);
+    }
+  },
+  enter(c) {
+    if (c.sub) { c.sub(''); return; }
+    if (c.stage === 'dist') {
+      if (c.p1) { c.p1 = null; offAskDist(c); return; }
+      offAskObj(c); return;                            /* the default: last distance or Through */
+    }
+    if (c.stage === 'side' && c.multi) { offAskObj(c); modRefresh(c); return; }   /* <next object> */
+    endCmd();
+  },
+  preview(c, p) {
+    if (c.stage === 'dist' && c.p1) { ST.tracks = [[c.p1, p]]; return null; }
+    if (c.stage !== 'side') return null;
+    const P = offPlan(c, p);
+    return P ? P.made : null;
+  },
+  done() { SEL.clear(); },
+});
+/* ============================================================
+   FILLET and CHAMFER
+   ------------------------------------------------------------
+     FILLET  Current settings: Mode = TRIM, Radius = 0.0000
+             Select first object or [Undo/Polyline/Radius/Trim/Multiple]:
+             Select second object or shift-select to apply corner or [Radius]:
+     CHAMFER (TRIM mode) Current chamfer Dist1 = 0.0000, Dist2 = 0.0000
+             Select first line or [Undo/Polyline/Distance/Angle/Trim/mEthod/Multiple]:
+             Select second line or shift-select to apply corner or [Distance/Angle/Method]:
+
+   Each object keeps the part the pick was on. Two lines that cross
+   have four corners and the one both picks lie in is the one made;
+   anything with a curve takes the fillet whose tangent points sit
+   nearest the picks, and each object keeps the part that runs on
+   smoothly from it. A circle is never trimmed. Two parallel lines get the half circle
+   that joins them, at the end of the first nearer its pick. Radius
+   0 — or a Shift-pick — makes a sharp corner. Two segments of one
+   polyline, or a polyline and a line, come out as one polyline.
+   The arc (or chamfer line) goes on the objects' layer if they
+   share one, and on the current layer if not, as AutoCAD's does.
+   ============================================================ */
+const TOOBIG = 'too big';
+/** a pick for FILLET or CHAMFER: the object, and the segment of it picked */
+function cornerPick(p0, ok) {
+  const p = rawPick(p0);
+  const e = pickEditable(p, x => ok(x));
+  if (!e) return null;
+  const C = curveOf(e);
+  let i = 0, bd = Infinity;
+  for (let k = 0; k < C.n; k++) { const d = sgNear(C.segs[k], p).d; if (d < bd - 1e-12) { bd = d; i = k; } }
+  return { e, C, i, s: C.segs[i], p };
+}
+const FILLETABLE = x => x.t === 'line' || x.t === 'arc' || x.t === 'circle' || x.t === 'pline' || x.t === 'ray' || x.t === 'xline';
+const CHAMFERABLE = x => x.t === 'line' || x.t === 'pline' || x.t === 'ray' || x.t === 'xline';
+/** the object cut back (or run on) to T, keeping the part that carries on
+    from T in direction k. Circles are left whole. */
+function keepFrom(P, T, k) {
+  const { e, C, i, s } = P;
+  if (e.t === 'circle') return { same: true };
+  if (C.closed) return { err: 'Cannot fillet or chamfer a closed polyline to another object' };
+  let tan;
+  if (s.k === 'l') tan = sgTan(s, 0);
+  else { const v = norm(sub(T, s.c)); tan = s.sw < 0 ? [v[1], -v[0]] : [-v[1], v[0]]; }
+  const fwd = dot(k, tan) > 0;
+  let u = sgU(s, T);
+  if (s.k === 'a' && u > 1 + 1e-9) {
+    /* Off the arc: just past its end, or just before its start — whichever
+       is nearer, never the long way round the circle. Then it must be on the
+       side the object carries on from, or there is nothing left to keep. */
+    const full = TAU / Math.abs(s.sw);
+    const pastEnd = (u - 1) <= (full - u);
+    if (pastEnd === fwd) return { err: TOOBIG };
+    if (!pastEnd) u -= full;
+  }
+  if (fwd) {
+    if (i !== 0) return { err: 'That polyline segment is not at an end of it' };
+    const n = crvSub(C, u, C.n);
+    return n ? { ent: n } : { err: TOOBIG };
+  }
+  if (i !== C.n - 1) return { err: 'That polyline segment is not at an end of it' };
+  const n = crvSub(C, 0, i + u);
+  return n ? { ent: n } : { err: TOOBIG };
+}
+/** where a fillet arc or chamfer line goes, and in what pen */
+function cornerProps(a, b) {
+  if (a.layer !== b.layer) return { layer: DOC.cur };
+  const o = { layer: a.layer };
+  if (a.color === b.color) o.color = a.color;
+  if (a.lt === b.lt) o.lt = a.lt;
+  if (a.lw === b.lw) o.lw = a.lw;
+  return o;
+}
+/** half a circle joining two parallel lines, at the end of the first nearer its pick */
+function parallelFit(A, B) {
+  if (A.e.t === 'xline') return null;
+  const u = norm(sub(A.s.b, A.s.a)), nrm = perp(u);
+  const w = dot(sub(B.s.a, A.s.a), nrm);
+  if (Math.abs(w) < MTOL) return null;
+  const ends = A.e.t === 'ray' ? [A.e.a] : [crvPt(A.C, 0), crvPt(A.C, A.C.n)];
+  const E = ends.length === 1 || dist(A.p, ends[0]) <= dist(A.p, ends[1]) ? ends[0] : ends[1];
+  const other = ends.length === 1 ? add(E, u) : (E === ends[0] ? ends[1] : ends[0]);
+  const o = dot(sub(E, other), u) >= 0 ? u : [-u[0], -u[1]];
+  const T1 = E.slice(), T2 = add(E, mul(nrm, w)), C = add(E, mul(nrm, w / 2)), r = Math.abs(w) / 2;
+  const a = arc3(T1, add(C, mul(o, r)), T2);
+  if (!a) return null;
+  return { C, T1, T2, k1: [-o[0], -o[1]], k2: [-o[0], -o[1]], arc: { c: a.c, r: a.r, a0: a.a0, a1: a.a1 } };
+}
+/** the finished corner: each object's new self, and the arc or line between */
+function cornerFinish(A, B, F) {
+  const out = { A: null, B: null, extra: null };
+  if (VS.trimmode) {
+    const a = keepFrom(A, F.T1, F.k1);
+    if (a.err) return { err: a.err };
+    const b = keepFrom(B, F.T2, F.k2);
+    if (b.err) return { err: b.err };
+    out.A = a.ent || null; out.B = b.ent || null;
+  }
+  const props = cornerProps(A.e, B.e);
+  if (F.arc) out.extra = Object.assign({ t: 'arc', c: F.arc.c, r: F.arc.r, a0: F.arc.a0, a1: F.arc.a1 }, props);
+  if (F.line && dist(F.line[0], F.line[1]) > SLIVER) out.extra = Object.assign({ t: 'line', a: F.line[0], b: F.line[1] }, props);
+  return out;
+}
+/** Plan a fillet between two picks (radius r). */
+function filletPlan(A, B, r) {
+  if (A.e.id === B.e.id) return vertexPlan(A, B, { kind: 'fillet', r });
+  const lines = A.s.k === 'l' && B.s.k === 'l';
+  if (lines && Math.abs(cross(norm(sub(A.s.b, A.s.a)), norm(sub(B.s.b, B.s.a)))) < 1e-12) {
+    const F = parallelFit(A, B);
+    if (!F) return { err: A.e.t === 'xline' ? 'The first object must be a line or a ray' : 'The lines are collinear' };
+    return cornerFinish(A, B, F);
+  }
+  if (r <= MTOL) {
+    const F = cornerFit(A.s, A.p, B.s, B.p);
+    if (!F) return { err: 'The objects do not meet' };
+    const out = cornerFinish(A, B, F);
+    return out.err === TOOBIG ? { err: 'The objects do not meet there' } : out;
+  }
+  const cands = filletCands(A.s, A.p, B.s, B.p, r);
+  if (!cands.length) return { err: 'Radius is too large' };
+  /* Two lines: the corner the picks are in, or nothing — never another one.
+     With a curve: the fillet whose tangent points sit nearest the picks, of
+     those that can be made. Each object then keeps the part that runs on
+     smoothly from its tangent point, which is what makes the corner a fillet
+     rather than a kink — so the pick chooses the fillet, not the part kept. */
+  if (lines) {
+    const out = cornerFinish(A, B, cands[0]);
+    return out.err ? { err: out.err === TOOBIG ? 'Radius is too large' : out.err } : out;
+  }
+  let err = null;
+  for (const F of cands) {
+    const out = cornerFinish(A, B, F);
+    if (!out.err) return out;
+    err = err || out.err;
+  }
+  return { err: err === TOOBIG || !err ? 'Radius is too large' : err };
+}
+/** the two chamfer distances for a pair of lines meeting at angle theta */
+function chamferDists(theta) {
+  if (!DOC.chamMode) return [DOC.chamD || 0, DOC.chamD2 == null ? (DOC.chamD || 0) : DOC.chamD2];
+  const L = DOC.chamL || 0, a = DOC.chamAng || 0;
+  const g = Math.PI - a - theta;                         /* the angle the chamfer meets the second line at */
+  if (!(g > 1e-9)) return null;
+  return [L, L * Math.sin(a) / Math.sin(g)];
+}
+/** Plan a chamfer between two picks; `corner` for a Shift-pick. */
+function chamferPlan(A, B, corner) {
+  if (A.e.id === B.e.id) return vertexPlan(A, B, { kind: 'chamfer', corner });
+  if (A.s.k !== 'l' || B.s.k !== 'l') return { err: 'Chamfer works on lines and straight polyline segments' };
+  const X = sgCross(A.s, B.s)[0];
+  if (!X) return { err: 'The lines are parallel' };
+  const u1 = armDir(A.s, X, A.p), u2 = armDir(B.s, X, B.p);
+  const theta = Math.acos(clamp(dot(u1, u2), -1, 1));
+  const ds = corner ? [0, 0] : chamferDists(theta);
+  if (!ds) return { err: 'That chamfer angle cannot reach the second line' };
+  const [d1, d2] = ds;
+  const F = { T1: add(X, mul(u1, d1)), T2: add(X, mul(u2, d2)), k1: u1, k2: u2 };
+  if (d1 > SLIVER || d2 > SLIVER) F.line = [F.T1.slice(), F.T2.slice()];
+  const out = cornerFinish(A, B, F);
+  return out.err === TOOBIG ? { err: 'Distance is too large' } : out;
+}
+/* ---------------- one corner of a polyline ---------------- */
+function plArrays(e) {
+  const P = e.pts.map(p => p.slice());
+  const B = P.map((_, i) => bulgeAt(e, i));
+  return { P, B };
+}
+/** fillet or chamfer vertex v of a polyline, in its arrays. Returns
+    'done', 'short', or null when the corner is not two straight spans. */
+function plCorner(P, B, closed, v, how, used, d1First) {
+  const m = P.length, spans = closed ? m : m - 1;
+  if (!closed && (v === 0 || v === m - 1)) return null;
+  const a = (v - 1 + m) % m, b = v % m;              /* the span into v, and out of it */
+  if (a >= spans || b >= spans) return null;
+  if (Math.abs(B[a]) >= BULGE_MIN || Math.abs(B[b]) >= BULGE_MIN) return null;
+  const V = P[v], A0 = P[a], B1 = P[(v + 1) % m];
+  const La = dist(A0, V), Lb = dist(V, B1);
+  if (!(La > SLIVER) || !(Lb > SLIVER)) return null;
+  const u1 = norm(sub(A0, V)), u2 = norm(sub(B1, V));
+  const theta = Math.acos(clamp(dot(u1, u2), -1, 1));
+  if (theta > Math.PI - 1e-9 || theta < 1e-9) return null;          /* straight through */
+  let t1, t2, bulge = 0;
+  if (how.kind === 'fillet') {
+    if (!(how.r > 0)) return null;
+    t1 = t2 = how.r / Math.tan(theta / 2);
+    const turn = cross(sub(V, A0), sub(B1, V));
+    bulge = (turn > 0 ? 1 : -1) * Math.tan((Math.PI - theta) / 4);
+  } else {
+    const ds = chamferDists(theta);
+    if (!ds) return 'short';
+    [t1, t2] = d1First === false ? [ds[1], ds[0]] : ds;
+    if (!(t1 > 0) && !(t2 > 0)) return null;
+  }
+  if (t1 > La - used[a] + 1e-9 || t2 > Lb - used[b] + 1e-9) return 'short';
+  used[a] += t1; used[b] += t2;
+  return { T1: add(V, mul(u1, t1)), T2: add(V, mul(u2, t2)), bulge };
+}
+/** Is span k an old fillet: an arc tangent to straight spans either side? */
+function plOldFillet(P, B, closed, k) {
+  const m = P.length, spans = closed ? m : m - 1;
+  if (Math.abs(B[k]) < BULGE_MIN) return null;
+  const a = k - 1 < 0 ? (closed ? spans - 1 : -1) : k - 1, b = k + 1 >= spans ? (closed ? 0 : -1) : k + 1;
+  if (a < 0 || b < 0 || a === k || b === k) return null;
+  if (Math.abs(B[a]) >= BULGE_MIN || Math.abs(B[b]) >= BULGE_MIN) return null;
+  const s = bulgeArc(P[k], P[(k + 1) % m], B[k]);
+  if (!s) return null;
+  const S = sgA(s.c, s.r, Math.atan2(P[k][1] - s.c[1], P[k][0] - s.c[0]), 4 * Math.atan(B[k]), P[k], P[(k + 1) % m]);
+  const la = norm(sub(P[k], P[a])), lb = norm(sub(P[(b + 1) % m], P[b]));
+  if (Math.abs(cross(la, sgTan(S, 0))) > 1e-6 || Math.abs(cross(lb, sgTan(S, 1))) > 1e-6) return null;
+  const X = sgCross(sgL(P[a], P[k]), sgL(P[b], P[(b + 1) % m]))[0];
+  return X || null;
+}
+/** Fillet or chamfer every corner of a polyline. Existing fillet arcs are
+    taken out first, so filleting again at a new radius replaces them. */
+function plAllCorners(e, how) {
+  let { P, B } = plArrays(e);
+  const closed = !!e.closed && P.length > 2;
+  if (how.kind === 'fillet') {
+    for (let guard = 0; guard < 10000; guard++) {
+      const spans = closed ? P.length : P.length - 1;
+      let hit = -1, X = null;
+      for (let k = 0; k < spans; k++) { X = plOldFillet(P, B, closed, k); if (X) { hit = k; break; } }
+      if (hit < 0) break;
+      const k2 = (hit + 1) % P.length;
+      P[hit] = X; B[hit] = 0;
+      P.splice(k2, 1); B.splice(k2, 1);
+      if (k2 < hit) { /* wrapped: nothing further to renumber */ }
+    }
+  }
+  const m = P.length, spans = closed ? m : m - 1;
+  const used = new Array(spans).fill(0);
+  const outP = [], outB = [];
+  let n = 0, short = 0;
+  for (let v = 0; v < m; v++) {
+    const r = plCorner(P, B, closed, v, how, used);
+    if (r && r !== 'short') {
+      outP.push(r.T1, r.T2); outB.push(r.bulge, B[v]); n++;
+      continue;
+    }
+    if (r === 'short') short++;
+    outP.push(P[v]); outB.push(B[v]);
+  }
+  return { P: outP, B: outB, n, short };
+}
+/** two segments of one polyline that meet at a vertex */
+function vertexPlan(A, B, how) {
+  const e = A.e;
+  if (e.t !== 'pline') return { err: 'Cannot ' + how.kind + ' an object to itself' };
+  /* by index: each pick read the polyline afresh, so its segment objects are
+     not the other pick's, and comparing them never matched */
+  const C = A.C, n = C.n;
+  const follows = (x, y) => (x.i + 1 < n || C.closed) && (x.i + 1) % n === y.i;
+  let first = A, second = B;
+  if (follows(B, A)) { first = B; second = A; }
+  else if (!follows(A, B)) return { err: 'Those segments of the polyline are not next to each other' };
+  second = Object.assign({}, second, { s: C.segs[second.i] });
+  if (first.s.k !== 'l' || second.s.k !== 'l') return { err: 'Only straight segments can be cornered this way' };
+  if (how.kind === 'fillet' && !(how.r > 0)) return { err: 'They already meet in a corner' };
+  const { P, B: Bl } = plArrays(e);
+  const v = second.s.vi;
+  const used = new Array(P.length).fill(0);
+  const h = how.kind === 'chamfer' && how.corner ? null : how;
+  if (!h) return { err: 'They already meet in a corner' };
+  const r = plCorner(P, Bl, !!e.closed && P.length > 2, v, h, used, first === A);
+  if (!r) return { err: 'That corner cannot be ' + (how.kind === 'fillet' ? 'filleted' : 'chamfered') };
+  if (r === 'short') return { err: how.kind === 'fillet' ? 'Radius is too large' : 'Distance is too large' };
+  P.splice(v, 1, r.T1, r.T2); Bl.splice(v, 1, r.bulge, Bl[v]);
+  const out = clone(e); delete out.id;
+  out.pts = P;
+  if (Bl.some(b => Math.abs(b) >= BULGE_MIN)) out.bulges = Bl; else delete out.bulges;
+  return { A: out, B: null, extra: null, vertex: true };
+}
+/** apply a planned corner as one operation, joining a polyline and what it
+    now meets into one polyline, as AutoCAD does */
+function cornerApply(c, A, B, plan, label) {
+  opRun(c, label, () => {
+    const a = plan.A ? replaceWith(A.e, [plan.A])[0] : A.e;
+    if (plan.vertex) return;
+    const b = plan.B ? replaceWith(B.e, [plan.B])[0] : B.e;
+    const x = plan.extra ? addEnt(plan.extra) : null;
+    if (!VS.trimmode || (a.t !== 'pline' && b.t !== 'pline')) return;
+    if (!joinRunOf(a) || !joinRunOf(b)) return;
+    const parts = [a, x, b].filter(Boolean);
+    const J = joinChains(parts, 1e-6);
+    if (J.length !== 1 || J[0].members.length !== parts.length) return;
+    const host = a.t === 'pline' ? a : b;
+    const pl = joinOut(host, J[0]);
+    for (const q of parts) if (q !== host) eraseEnt(q.id);
+    replaceWith(host, [pl]);
+  });
+}
+defc('fillet', {
+  group: 'modify',
+  objPick: c => c.stage === 'first' || c.stage === 'second' || c.stage === 'poly',
+  init(c) {
+    c.ops = []; c.multi = false; c.sub = null; c.A = null;
+    cliPrint('Current settings: Mode = ' + (VS.trimmode ? 'TRIM' : 'NOTRIM') + ', Radius = ' + fmt(DOC.filletR || 0));
+    filletFirst(c);
+  },
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (c.sub) return c.sub(k, s);
+    if (k === 'r' || k === 'radius') {
+      hint('Specify fillet radius <' + fmt(DOC.filletR || 0) + '>:');
+      const back = c.stage;
+      c.sub = (a, raw) => {
+        if (a === '') { c.sub = null; back === 'second' ? filletSecond(c) : back === 'poly' ? filletPoly(c) : filletFirst(c); return true; }
+        const v = parseLen(raw);
+        if (!isFinite(v) || v < 0) { cliPrint('Requires a distance of 0 or more.', 'err'); return true; }
+        DOC.filletR = v; c.sub = null;
+        back === 'second' ? filletSecond(c) : back === 'poly' ? filletPoly(c) : filletFirst(c);
+        return true;
+      };
+      return true;
+    }
+    if (c.stage === 'first') {
+      if (k === 'u' || k === 'undo') { opUndo(c); return true; }
+      if (k === 'p' || k === 'polyline') { filletPoly(c); return true; }
+      if (k === 'm' || k === 'multiple') { c.multi = true; return true; }
+      if (k === 't' || k === 'trim') {
+        hint('Enter Trim mode option [Trim/No trim] <' + (VS.trimmode ? 'Trim' : 'No trim') + '>:');
+        c.sub = a => {
+          if (a === 't' || a === 'trim') VS.trimmode = 1;
+          else if (a === 'n' || a === 'no trim' || a === 'notrim') VS.trimmode = 0;
+          else if (a !== '') return false;
+          c.sub = null; filletFirst(c); return true;
+        };
+        return true;
+      }
+      /* a bare number is taken as the radius: quicker than R, and harmless */
+      const v = parseLen(s);
+      if (isFinite(v) && v >= 0) { DOC.filletR = v; cliPrint('Radius = ' + fmt(v)); filletFirst(c); return true; }
     }
     return false;
   },
   point(c, p) {
-    if (c.d === null) { echo('Type a distance first'); return; }
-    if (!c.e) {
-      const e = pickAt(p, 10, x => !GEOM[x.t] && x.t !== 'dim' && x.t !== 'text');
-      if (!e) return;
-      c.e = e; SEL.clear(); SEL.add(e.id);
-      hint(c.thru ? 'Through point' : 'Side to offset');
-      return;
+    if (c.stage === 'poly') {
+      const e = pickEditable(rawPick(p), x => x.t === 'pline');
+      if (!e) { cliPrint('Select a 2D polyline.'); return; }
+      const R = plAllCorners(e, { kind: 'fillet', r: DOC.filletR || 0 });
+      if (R.n || R.P.length !== e.pts.length) {
+        opRun(c, 'Fillet', () => {
+          const out = clone(e); delete out.id; out.pts = R.P;
+          if (R.B.some(b => Math.abs(b) >= BULGE_MIN)) out.bulges = R.B; else delete out.bulges;
+          replaceWith(e, [out]);
+        });
+      }
+      cliPrint(R.n + ' line' + (R.n === 1 ? ' was' : 's were') + ' filleted' + (R.short ? ', ' + R.short + ' were too short' : ''));
+      return c.multi ? filletFirst(c) : endCmd();
     }
-    const d = c.thru ? entDist(p, c.e) : c.d;
-    const n = offsetEnt(c.e, d, offsetSide(c.e, p));
-    if (!n) { c.e = null; SEL.clear(); hint('Select the object to offset'); return; }
-    begin();
-    /* Layer: AutoCAD's OFFSETLAYER chooses between the source's layer and the
-       current one. Everything else about appearance follows the source, since
-       an offset is meant to be the same kind of line as what it came from. */
-    const meta = c.layerCur
-      ? { layer: DOC.cur, color: c.e.color, lt: c.e.lt, lw: c.e.lw }
-      : { layer: c.e.layer, color: c.e.color, lt: c.e.lt, lw: c.e.lw };
-    const made = addEnt(Object.assign(n, meta));
-    const src = c.e;
-    if (c.erase) { eraseEnt(src.id); }
-    commit('Offset');
-    SEL.clear();
-    if (c.multiple && made) {
-      /* continue from what was just made, so a second click steps out again */
-      c.e = made; SEL.add(made.id);
-      hint('Side to offset again · <em>Enter</em> to stop');
-    } else {
-      c.e = null;
-      hint('Select the object to offset');
-    }
+    const P = cornerPick(p, FILLETABLE);
+    if (!P) return;
+    if (c.stage === 'first') { c.A = P; SEL.clear(); SEL.add(P.e.id); filletSecond(c); return; }
+    const A = c.A;
+    if (!DOC.ents.get(A.e.id)) { filletFirst(c); return; }
+    const plan = filletPlan(A, P, ST.shift ? 0 : (DOC.filletR || 0));
+    if (plan.err) { cliPrint(plan.err + '.', 'err'); return; }
+    cornerApply(c, A, P, plan, 'Fillet');
+    c.A = null; SEL.clear();
+    if (c.multi) { filletFirst(c); modRefresh(c); } else endCmd();
   },
   enter(c) {
-    /* Enter finishes a multiple run, or ends the command when idle */
-    if (c.multiple && c.e) { c.e = null; SEL.clear(); hint('Select the object to offset'); return; }
+    if (c.sub) { c.sub('', ''); return; }
     endCmd();
   },
   preview(c, p) {
-    if (!c.e || c.d === null) return null;
-    const d = c.thru ? entDist(p, c.e) : c.d;
-    const n = offsetEnt(c.e, d, offsetSide(c.e, p));
-    return n ? [Object.assign(n, { layer: c.layerCur ? DOC.cur : c.e.layer })] : null;
+    if (c.stage !== 'second' || !c.A || c.sub) return null;
+    const B = cornerPick(p, FILLETABLE);
+    if (!B) return null;
+    let plan;
+    try { plan = filletPlan(c.A, B, ST.shift ? 0 : (DOC.filletR || 0)); } catch (err) { return null; }
+    if (!plan || plan.err) return null;
+    return [plan.A, plan.B, plan.extra].filter(Boolean);
   },
   done() { SEL.clear(); },
 });
-/* ---------------- trim and extend ----------------
-   Clicking one object at a time is fine for a stray line and hopeless for a
-   grid of them. Fence drags a line through everything to cut, and Crossing
-   does the same with a box — between them they are most of what TRIM is used
-   for on a real drawing. A crossing window is just a closed fence, so both go
-   through one path.
+function filletFirst(c) { c.stage = 'first'; c.A = null; SEL.clear(); hint('Select first object or [Undo/Polyline/Radius/Trim/Multiple]:'); }
+function filletSecond(c) { c.stage = 'second'; hint('Select second object or shift-select to apply corner or [Radius]:'); }
+function filletPoly(c) { c.stage = 'poly'; hint('Select 2D polyline or [Radius]:'); }
 
-   The cutting edges stay implicit: every visible object is a boundary, which
-   is what AutoCAD's Quick mode does and has been its default since 2021. */
-function trimBoundaries(exceptId) {
-  return [...DOC.ents.values()].filter(x => x.id !== exceptId && visible(x) && !GEOM[x.t]);
+defc('chamfer', {
+  group: 'modify',
+  objPick: c => c.stage === 'first' || c.stage === 'second' || c.stage === 'poly',
+  init(c) {
+    c.ops = []; c.multi = false; c.sub = null; c.A = null;
+    chamSettings();
+    chamFirst(c);
+  },
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (c.sub) return c.sub(k, s);
+    const back = () => c.stage === 'second' ? chamSecond(c) : c.stage === 'poly' ? chamPoly(c) : chamFirst(c);
+    if (k === 'd' || k === 'distance') {
+      const d0 = DOC.chamD || 0;
+      hint('Specify first chamfer distance <' + fmt(d0) + '>:');
+      c.sub = (a, raw) => {
+        const v = a === '' ? d0 : parseLen(raw);
+        if (!isFinite(v) || v < 0) { cliPrint('Requires a distance of 0 or more.', 'err'); return true; }
+        DOC.chamD = v;
+        hint('Specify second chamfer distance <' + fmt(v) + '>:');
+        c.sub = (a2, raw2) => {
+          const w = a2 === '' ? v : parseLen(raw2);
+          if (!isFinite(w) || w < 0) { cliPrint('Requires a distance of 0 or more.', 'err'); return true; }
+          DOC.chamD2 = w; DOC.chamMode = 0; c.sub = null; back(); return true;
+        };
+        return true;
+      };
+      return true;
+    }
+    if (k === 'a' || k === 'angle') {
+      hint('Specify chamfer length on the first line <' + fmt(DOC.chamL || 0) + '>:');
+      c.sub = (a, raw) => {
+        const v = a === '' ? DOC.chamL || 0 : parseLen(raw);
+        if (!isFinite(v) || v < 0) { cliPrint('Requires a distance of 0 or more.', 'err'); return true; }
+        DOC.chamL = v;
+        hint('Specify chamfer angle from the first line <' + +deg(DOC.chamAng || 0).toFixed(4) + '>:');
+        c.sub = (a2, raw2) => {
+          const t = a2 === '' ? deg(DOC.chamAng || 0) : parseFloat(raw2);
+          if (!isFinite(t) || t <= 0 || t >= 90) { cliPrint('Requires an angle between 0 and 90 degrees.', 'err'); return true; }
+          DOC.chamAng = rad(t); DOC.chamMode = 1; c.sub = null; back(); return true;
+        };
+        return true;
+      };
+      return true;
+    }
+    if (k === 'e' || k === 'method') {
+      hint('Enter trim method [Distance/Angle] <' + (DOC.chamMode ? 'Angle' : 'Distance') + '>:');
+      c.sub = a => {
+        if (a === 'd' || a === 'distance') DOC.chamMode = 0;
+        else if (a === 'a' || a === 'angle') DOC.chamMode = 1;
+        else if (a !== '') return false;
+        c.sub = null; back(); return true;
+      };
+      return true;
+    }
+    if (c.stage === 'first') {
+      if (k === 'u' || k === 'undo') { opUndo(c); return true; }
+      if (k === 'p' || k === 'polyline') { chamPoly(c); return true; }
+      if (k === 'm' || k === 'multiple') { c.multi = true; return true; }
+      if (k === 't' || k === 'trim') {
+        hint('Enter Trim mode option [Trim/No trim] <' + (VS.trimmode ? 'Trim' : 'No trim') + '>:');
+        c.sub = a => {
+          if (a === 't' || a === 'trim') VS.trimmode = 1;
+          else if (a === 'n' || a === 'no trim' || a === 'notrim') VS.trimmode = 0;
+          else if (a !== '') return false;
+          c.sub = null; chamFirst(c); return true;
+        };
+        return true;
+      }
+      const v = parseLen(s);
+      if (isFinite(v) && v >= 0) { DOC.chamD = v; DOC.chamD2 = v; DOC.chamMode = 0; chamSettings(); chamFirst(c); return true; }
+    }
+    return false;
+  },
+  point(c, p) {
+    if (c.stage === 'poly') {
+      const e = pickEditable(rawPick(p), x => x.t === 'pline');
+      if (!e) { cliPrint('Select a 2D polyline.'); return; }
+      const R = plAllCorners(e, { kind: 'chamfer' });
+      if (R.n) {
+        opRun(c, 'Chamfer', () => {
+          const out = clone(e); delete out.id; out.pts = R.P;
+          if (R.B.some(b => Math.abs(b) >= BULGE_MIN)) out.bulges = R.B; else delete out.bulges;
+          replaceWith(e, [out]);
+        });
+      }
+      cliPrint(R.n + ' line' + (R.n === 1 ? ' was' : 's were') + ' chamfered' + (R.short ? ', ' + R.short + ' were too short' : ''));
+      return c.multi ? chamFirst(c) : endCmd();
+    }
+    const P = cornerPick(p, CHAMFERABLE);
+    if (!P) return;
+    if (c.stage === 'first') { c.A = P; SEL.clear(); SEL.add(P.e.id); chamSecond(c); return; }
+    const A = c.A;
+    if (!DOC.ents.get(A.e.id)) { chamFirst(c); return; }
+    const plan = chamferPlan(A, P, !!ST.shift);
+    if (plan.err) { cliPrint(plan.err + '.', 'err'); return; }
+    cornerApply(c, A, P, plan, 'Chamfer');
+    c.A = null; SEL.clear();
+    if (c.multi) { chamFirst(c); modRefresh(c); } else endCmd();
+  },
+  enter(c) {
+    if (c.sub) { c.sub('', ''); return; }
+    endCmd();
+  },
+  preview(c, p) {
+    if (c.stage !== 'second' || !c.A || c.sub) return null;
+    const B = cornerPick(p, CHAMFERABLE);
+    if (!B) return null;
+    let plan;
+    try { plan = chamferPlan(c.A, B, !!ST.shift); } catch (err) { return null; }
+    if (!plan || plan.err) return null;
+    return [plan.A, plan.B, plan.extra].filter(Boolean);
+  },
+  done() { SEL.clear(); },
+});
+function chamSettings() {
+  cliPrint(DOC.chamMode
+    ? '(' + (VS.trimmode ? 'TRIM' : 'NOTRIM') + ' mode) Current chamfer Length = ' + fmt(DOC.chamL || 0) + ', Angle = ' + +deg(DOC.chamAng || 0).toFixed(4)
+    : '(' + (VS.trimmode ? 'TRIM' : 'NOTRIM') + ' mode) Current chamfer Dist1 = ' + fmt(DOC.chamD || 0) +
+      ', Dist2 = ' + fmt(DOC.chamD2 == null ? (DOC.chamD || 0) : DOC.chamD2));
 }
-/** every object a fence polyline crosses, with the point it crosses at */
-function fenceHits(pts, closed) {
-  const fence = { t: 'pline', pts: closed ? pts.concat([pts[0]]) : pts, id: -1 };
+function chamFirst(c) { c.stage = 'first'; c.A = null; SEL.clear(); hint('Select first line or [Undo/Polyline/Distance/Angle/Trim/mEthod/Multiple]:'); }
+function chamSecond(c) { c.stage = 'second'; hint('Select second line or shift-select to apply corner or [Distance/Angle/Method]:'); }
+function chamPoly(c) { c.stage = 'poly'; hint('Select 2D polyline or [Distance/Angle/Method]:'); }
+
+/* ============================================================
+   JOIN
+   ------------------------------------------------------------
+   Select them all at once, as AutoCAD 2025 lets you:
+     · lines that lie on one line join into ONE line — across gaps
+       too, when collinear lines are all that was selected
+     · arcs on one circle join into one arc, or a circle when they
+       close it — across gaps too, when those arcs are all there is
+     · lines, arcs and polylines that meet end to end join into one
+       polyline, its arcs kept as arcs (bulges), closed if it closes
+     · splines that meet end to end join into one spline
+   Anything else is reported as discarded, not silently dropped.
+   The result takes the properties of the first object selected.
+   ============================================================ */
+const JTOL = 1e-6;
+function joinRunOf(e) {
+  if (!e || !(e.t === 'line' || e.t === 'arc' || e.t === 'pline' || e.t === 'spline')) return null;
+  const C = curveOf(e);
+  if (!C || C.closed) return null;
+  return C.segs.map(sgCopy);
+}
+function runReverse(run) {
+  return run.slice().reverse().map(s => s.k === 'l'
+    ? sgL(s.b.slice(), s.a.slice())
+    : sgA(s.c.slice(), s.r, s.a0 + s.sw, -s.sw, s.p1.slice(), s.p0.slice()));
+}
+/** chain objects that meet end to end: [{ run, members, closed }] */
+function joinChains(ents, tol) {
+  const pool = [];
+  for (const e of ents) { const r = joinRunOf(e); if (r && r.length) pool.push({ run: r, members: [e], kind: e.t === 'spline' ? 's' : 'p' }); }
   const out = [];
-  for (const e of DOC.ents.values()) {
-    if (!visible(e) || GEOM[e.t] || e.t === 'dim' || e.t === 'text') continue;
-    let xs = [];
-    try { xs = intersect(e, fence, false) || []; } catch (err) { xs = []; }
-    if (xs.length) out.push({ e, at: xs[0] });
+  while (pool.length) {
+    let cur = pool.shift();
+    for (let moved = true; moved && pool.length;) {
+      moved = false;
+      const head = cur.run[0].p0, tail = cur.run[cur.run.length - 1].p1;
+      if (dist(head, tail) < tol && cur.run.length > 1) break;           /* it has closed */
+      for (let i = 0; i < pool.length; i++) {
+        const o = pool[i];
+        if (o.kind !== cur.kind) continue;
+        const oh = o.run[0].p0, ot = o.run[o.run.length - 1].p1;
+        let add = null, front = false;
+        if (dist(tail, oh) < tol) add = o.run;
+        else if (dist(tail, ot) < tol) add = runReverse(o.run);
+        else if (dist(head, ot) < tol) { add = o.run; front = true; }
+        else if (dist(head, oh) < tol) { add = runReverse(o.run); front = true; }
+        if (!add) continue;
+        cur = { run: front ? add.concat(cur.run) : cur.run.concat(add), members: front ? o.members.concat(cur.members) : cur.members.concat(o.members), kind: cur.kind };
+        pool.splice(i, 1); moved = true; break;
+      }
+    }
+    cur.closed = cur.run.length > 1 && dist(cur.run[0].p0, cur.run[cur.run.length - 1].p1) < tol;
+    out.push(cur);
   }
   return out;
 }
-/** the rectangle of a crossing window, as a fence */
-function boxFence(p0, p1) {
-  return [[p0[0], p0[1]], [p1[0], p0[1]], [p1[0], p1[1]], [p0[0], p1[1]]];
-}
-/** Trim or extend everything a fence touches, in one undo step. Returns how
-    many objects actually changed, so the command can say something useful
-    rather than leaving you guessing whether it did anything. */
-function applyFence(hits, extending) {
-  if (!hits.length) return 0;
-  let n = 0;
-  begin();
-  for (const { e, at } of hits) {
-    if (!DOC.ents.get(e.id)) continue;             /* already consumed by a trim */
-    const others = trimBoundaries(e.id);
-    if (extending) {
-      const nx = extendTo(e, at, others);
-      if (nx) { mut(e); Object.assign(e, nx); n++; }
-    } else {
-      const parts = trimAt(e, at, others);
-      if (!parts) continue;
-      const meta = { layer: e.layer, color: e.color, lt: e.lt, lw: e.lw };
-      delEnt(e.id);
-      parts.forEach(x => addEnt(Object.assign(x, meta)));
-      n++;
-    }
+/** a chain as one object built on `base` */
+function joinOut(base, ch) {
+  if (ch.kind === 's') {
+    const s = clone(base); delete s.id;
+    const P = ch.run.map(q => q.p0.slice());
+    if (!ch.closed) P.push(ch.run[ch.run.length - 1].p1.slice());
+    s.t = 'spline'; s.pts = P; s.closed = !!ch.closed;
+    const F = [];
+    for (const m of ch.members) for (const f of (m.fit || [])) if (!F.length || dist(F[F.length - 1], f) > JTOL) F.push(f.slice());
+    if (F.length > 2) s.fit = F; else delete s.fit;
+    return s;
   }
-  commit(extending ? 'Extend' : 'Trim');
-  return n;
+  /* At each seam take a LINE's end when there is one: it is the point that
+     was drawn, where an arc's end is recomputed from an angle and carries
+     the last bit of rounding with it. */
+  const run = ch.run, m = run.length;
+  const seam = (a, b) => a.k === 'l' ? a.p1 : b.k === 'l' ? b.p0 : a.p1;
+  const out = segsToPline(base, run, ch.closed);
+  for (let i = 1; i < m; i++) out.pts[i] = seam(run[i - 1], run[i]).slice();
+  if (ch.closed) out.pts[0] = seam(run[m - 1], run[0]).slice();
+  else out.pts[m] = run[m - 1].p1.slice();
+  return out;
 }
-/* TRIM and EXTEND are the same command with the sense reversed, so they are
-   built from one definition rather than two that drift apart. */
-function trimLike(extending) {
-  return {
-    group: 'modify',
-    hint: extending
-      ? 'Click near the end to extend · <em>F</em>ence · <em>C</em>rossing · <em>E</em>dge · hold <em>Shift</em> to trim'
-      : 'Click the piece to remove · <em>F</em>ence · <em>C</em>rossing · <em>E</em>dge · e<em>R</em>ase · hold <em>Shift</em> to extend',
-    init(c) { c.mode = null; c.fence = []; },
-    text(c, s) {
-      const k = String(s).trim().toLowerCase();
-      if (k === 'f') { c.mode = 'fence'; c.fence = []; hint('Draw a line through what you want to cut · <em>Enter</em> to apply'); return true; }
-      if (k === 'c') { c.mode = 'cross'; c.fence = []; hint('First corner of the crossing window'); return true; }
-      if (!extending && k === 'r') { c.mode = 'erase'; hint('Pick objects to erase outright · <em>Enter</em> to stop'); return true; }
-      if (k === 'e' || k === 'edge') {
-        /* AutoCAD's Edge mode. Extend: a boundary that does not reach the
-           object is treated as if it did, so you can trim to a line that stops
-           short. No extend: only a real crossing counts. */
-        VS.edgemode = VS.edgemode ? 0 : 1;
-        echo(VS.edgemode ? 'Edge: boundaries are extended to meet the object'
-                         : 'Edge: only a real crossing cuts');
+function joinCollinear(lines, gaps) {
+  /* group lines lying on one line; within a group, merge those that touch
+     or overlap — or all of them, across gaps, when `gaps` */
+  const groups = [];
+  for (const e of lines) {
+    const u = norm(sub(e.b, e.a));
+    let g = groups.find(G => Math.abs(cross(G.u, u)) < 1e-9 &&
+      Math.abs(cross(G.u, sub(e.a, G.o))) < JTOL && Math.abs(cross(G.u, sub(e.b, G.o))) < JTOL);
+    if (!g) groups.push(g = { u, o: e.a, items: [] });
+    g.items.push(e);
+  }
+  const out = [];
+  for (const G of groups) {
+    const iv = G.items.map(e => {
+      const t0 = dot(sub(e.a, G.o), G.u), t1 = dot(sub(e.b, G.o), G.u);
+      return { lo: Math.min(t0, t1), hi: Math.max(t0, t1), e };
+    }).sort((a, b) => a.lo - b.lo);
+    let cur = null;
+    for (const q of iv) {
+      if (cur && (gaps || q.lo <= cur.hi + JTOL)) { cur.hi = Math.max(cur.hi, q.hi); cur.members.push(q.e); continue; }
+      if (cur) out.push(cur);
+      cur = { lo: q.lo, hi: q.hi, members: [q.e], u: G.u, o: G.o };
+    }
+    if (cur) out.push(cur);
+  }
+  return out;
+}
+function joinCocircular(arcs, gaps) {
+  const groups = [];
+  for (const e of arcs) {
+    let g = groups.find(G => dist(G.c, e.c) < JTOL && Math.abs(G.r - e.r) < JTOL);
+    if (!g) groups.push(g = { c: e.c, r: e.r, items: [] });
+    g.items.push(e);
+  }
+  const out = [];
+  const aTol = r => JTOL / Math.max(r, 1e-9);
+  for (const G of groups) {
+    /* spans on the circle, merged where they touch or overlap */
+    let spans = G.items.map(e => ({ a: wrap(e.a0), s: arcSweep(e), members: [e] })).sort((x, y) => x.a - y.a);
+    for (let changed = true; changed && spans.length > 1;) {
+      changed = false;
+      for (let i = 0; i < spans.length && !changed; i++) for (let j = 0; j < spans.length && !changed; j++) {
+        if (i === j) continue;
+        const A = spans[i], B = spans[j];
+        const off = wrap(B.a - A.a);
+        if (off <= A.s + aTol(G.r)) {
+          A.s = Math.min(TAU, Math.max(A.s, off + B.s)); A.members = A.members.concat(B.members);
+          spans.splice(j, 1); changed = true;
+        }
+      }
+    }
+    if (gaps && spans.length > 1) {
+      /* Across gaps, AutoCAD joins counter-clockwise from the SOURCE — the
+         first arc selected — to the end of the last arc met going round. */
+      const src = G.items[0];
+      const a = wrap(src.a0);
+      let s = 0;
+      for (const e of G.items) s = Math.max(s, wrap(e.a0 - a) + arcSweep(e));
+      spans = [{ a, s: Math.min(TAU, s), members: spans.flatMap(x => x.members) }];
+    }
+    for (const S of spans) out.push({ c: G.c, r: G.r, a: S.a, s: S.s, members: S.members });
+  }
+  return out;
+}
+defc('join', {
+  needSel: true, group: 'modify',
+  selHint: 'Select source object or multiple objects to join at once:',
+  init(c) {
+    const all = selEnts();
+    if (!all.length) { endCmd(); return; }
+    if (all.length === 1 && all[0].t === 'arc') {
+      c.arc = all[0];
+      hint('Select arcs to join to source or [cLose]:');
+      return;
+    }
+    const src = all[0];
+    const meta = e => ({ layer: e.layer, color: e.color, lt: e.lt, lw: e.lw, lvl: e.lvl });
+    const lines = all.filter(e => e.t === 'line');
+    const arcs = all.filter(e => e.t === 'arc');
+    const others = all.filter(e => (e.t === 'pline' || e.t === 'spline') && !e.closed);
+    const bad = all.filter(e => !(e.t === 'line' || e.t === 'arc' || ((e.t === 'pline' || e.t === 'spline') && !e.closed)));
+    const onlyLines = lines.length === all.length, onlyArcs = arcs.length === all.length;
+    const Lm = joinCollinear(lines, onlyLines);
+    const Am = joinCocircular(arcs, onlyArcs);
+    /* stand-ins for merged lines and arcs, then chain everything */
+    const stand = [];
+    for (const g of Lm) stand.push({ t: 'line', a: add(g.o, mul(g.u, g.lo)), b: add(g.o, mul(g.u, g.hi)), _m: g.members });
+    for (const g of Am) stand.push(g.s >= TAU - 1e-9
+      ? { t: 'circle', c: g.c.slice(), r: g.r, _m: g.members }
+      : { t: 'arc', c: g.c.slice(), r: g.r, a0: g.a, a1: wrap(g.a + g.s), _m: g.members });
+    for (const e of others) stand.push(Object.assign(clone(e), { _m: [e] }));
+    const circles = stand.filter(x => x.t === 'circle');
+    const chains = joinChains(stand.filter(x => x.t !== 'circle'), JTOL);
+    const results = [];
+    for (const ch of chains) {
+      const members = ch.members.flatMap(x => x._m);
+      if (ch.members.length === 1) {
+        const x = ch.members[0];
+        if (x._m.length > 1) { const n = clone(x); delete n._m; results.push({ ent: n, members }); }
+        continue;
+      }
+      results.push({ ent: joinOut(src, ch), members });
+    }
+    for (const x of circles) { const n = clone(x); delete n._m; results.push({ ent: n, members: x._m }); }
+    const used = new Set(results.flatMap(r => r.members.map(m => m.id)));
+    if (!results.length) {
+      cliPrint(all.length > 1 ? '0 objects joined, ' + all.length + ' objects discarded from the operation'
+                              : 'Select at least one more object to join to it.');
+      endCmd(); return;
+    }
+    begin();
+    SEL.clear();
+    let made = 0;
+    for (const R of results) {
+      const n = Object.assign(R.ent, meta(src));
+      delete n.id; delete n._m;
+      /* the first member is the object; the rest go */
+      const host = R.members.find(m => m.id === src.id) || R.members[0];
+      for (const m of R.members) if (m !== host && DOC.ents.get(m.id)) eraseEnt(m.id);
+      replaceWith(host, [n]);
+      SEL.add(host.id); made++;
+    }
+    commit('Join');
+    const joined = used.size, discarded = all.length - joined;
+    /* AutoCAD's own words: "2 lines joined into 1 line", "3 objects converted
+       to 1 polyline" — a kind of object when they were all one kind */
+    const NOUN = { line: 'line', arc: 'arc', circle: 'circle', pline: 'polyline', spline: 'spline' };
+    const kinds = [...new Set(results.map(r => r.ent.t))];
+    const inKinds = [...new Set(all.filter(e => used.has(e.id)).map(e => e.t))];
+    const outWord = kinds.length === 1 ? NOUN[kinds[0]] : 'object';
+    const inWord = inKinds.length === 1 ? NOUN[inKinds[0]] : 'object';
+    const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+    const changed = kinds.length !== 1 || inKinds.length !== 1 || kinds[0] !== inKinds[0];
+    cliPrint(plural(joined, changed ? 'object' : inWord) + (changed ? ' converted to ' : ' joined into ') + plural(made, outWord) +
+             (discarded ? ', ' + plural(discarded, 'object') + ' discarded from the operation' : ''));
+    syncUI(); endCmd();
+  },
+  text(c, s) {
+    if (!c.arc || !/^(l|close)$/i.test(String(s).trim())) return false;
+    const e = c.arc;
+    begin();
+    const n = clone(e); delete n.id; n.t = 'circle'; delete n.a0; delete n.a1;
+    replaceWith(e, [n]);
+    commit('Join');
+    cliPrint('Arc converted to a circle.');
+    endCmd(); return true;
+  },
+});
+/* ============================================================
+   BREAK and BREAKATPOINT
+   ------------------------------------------------------------
+     Select object:                                  the pick IS the first point
+     Specify second break point or [First point]:    @ breaks at the first point
+
+   A circle loses the part counter-clockwise from the first point
+   to the second and becomes an arc; a closed polyline loses the
+   part from the first to the second along its own direction and
+   stays ONE object; a construction line becomes two rays. Breaking
+   a circle at a single point is refused, as it is in AutoCAD — an
+   arc cannot be a full 360 degrees.
+   ============================================================ */
+function breakPlan(e, p1, p2) {
+  const C = curveOf(e);
+  if (!C) return { err: 'That object cannot be broken' };
+  const t1 = crvNear(C, p1).t, t2 = crvNear(C, p2).t;
+  if (C.closed) {
+    const fwd = t2 >= t1 ? t2 - t1 : t2 + C.n - t1;
+    if (crvLenBetween(C, t1, t1 + fwd) < SLIVER || crvLenBetween(C, t1 + fwd, t1 + C.n) < SLIVER) {
+      if (e.t === 'circle' || e.t === 'ellipse') return { err: 'Arc cannot be full 360 degrees' };
+      const q = crvSub(C, t1, t1 + C.n);                 /* opened where it was picked */
+      return q ? { keep: [q] } : { err: 'That object cannot be broken there' };
+    }
+    const q = crvSub(C, t1 + fwd, t1 + C.n);
+    return { keep: q ? [q] : [], gone: crvSub(C, t1, t1 + fwd) };
+  }
+  const a = Math.min(t1, t2), b = Math.max(t1, t2);
+  const keep = [crvSub(C, 0, a), crvSub(C, b, C.n)].filter(Boolean);
+  if (crvLenBetween(C, a, b) < SLIVER) {
+    if (keep.length < 2) return { err: 'Nothing to break at the end of an object' };
+    return { keep };
+  }
+  return { keep, gone: crvSub(C, a, b) };
+}
+function breakApply(c, e, p1, p2) {
+  const r = breakPlan(e, p1, p2);
+  if (r.err) { cliPrint(r.err + '.', 'err'); return false; }
+  begin(); replaceWith(e, r.keep); commit('Break');
+  return true;
+}
+defc('break', {
+  group: 'modify',
+  objPick: c => !c.e,
+  init(c) { c.e = null; c.p1 = null; c.askFirst = false; SEL.clear(); hint('Select object:'); },
+  text(c, s) {
+    if (!c.e) return false;
+    const k = String(s).trim().toLowerCase();
+    if ((k === 'f' || k === 'first point') && !c.askFirst) { c.askFirst = true; c.p1 = null; hint('Specify first break point:'); return true; }
+    if (k === '@' && c.p1) { breakApply(c, c.e, c.p1, c.p1); endCmd(); return true; }
+    return false;
+  },
+  point(c, p0) {
+    if (!c.e) {
+      const p = rawPick(p0);
+      const e = pickEditable(p);
+      if (!e) return;
+      c.e = e; c.p1 = p; c.pts = [p];
+      SEL.clear(); SEL.add(e.id);
+      hint('Specify second break point or [First point]:');
+      return;
+    }
+    if (c.askFirst && !c.p1) { c.p1 = p0; c.pts = [p0]; hint('Specify second break point:'); return; }
+    breakApply(c, c.e, c.p1, p0);
+    endCmd();
+  },
+  preview(c, p) {
+    if (!c.e || !c.p1) return null;
+    const r = breakPlan(c.e, c.p1, p);
+    return r.gone ? dashPreview(r.gone) : null;
+  },
+  done() { SEL.clear(); },
+});
+defc('breakatpoint', {
+  group: 'modify',
+  objPick: c => !c.e,
+  init(c) { c.e = null; SEL.clear(); hint('Select object:'); },
+  point(c, p0) {
+    if (!c.e) {
+      const e = pickEditable(rawPick(p0));
+      if (!e) return;
+      c.e = e; SEL.clear(); SEL.add(e.id);
+      hint('Specify break point:');
+      return;
+    }
+    breakApply(c, c.e, p0, p0);
+    endCmd();
+  },
+  done() { SEL.clear(); },
+});
+
+/* ============================================================
+   LENGTHEN
+   ------------------------------------------------------------
+     Select an object to measure or [DElta/Percent/Total/DYnamic] <DElta>:
+   Picking reports the length (and an arc's included angle). DElta
+   and Total take a length or, with Angle, an arc's angle; Percent
+   a percentage; DYnamic drags the end. Then the end nearer each
+   pick changes, again and again, until Enter; Undo takes one back.
+   A line runs on straight, an arc round its circle, a polyline
+   along its end segment, straight or curved.
+   ============================================================ */
+const LEN_WORD = { de: 'DElta', p: 'Percent', t: 'Total', dy: 'DYnamic' };
+if (MODSET.lenDeltaA == null) MODSET.lenDeltaA = 0;
+if (MODSET.lenTotalA == null) MODSET.lenTotalA = 1;
+function lenMain(c) { c.stage = 'measure'; c.sub = null; c.e = null; SEL.clear(); hint('Select an object to measure or [DElta/Percent/Total/DYnamic] <' + LEN_WORD[MODSET.lenMode] + '>:'); }
+function lenChange(c) { c.stage = 'change'; c.sub = null; c.e = null; SEL.clear(); hint('Select an object to change or [Undo]:'); }
+function lenReport(e) {
+  const C = curveOf(e);
+  if (!C) return;
+  const L = crvLen(C);
+  if (e.t === 'arc') cliPrint('Current length: ' + fmt(L) + ', included angle: ' + +deg(arcSweep(e)).toFixed(4));
+  else cliPrint('Current length: ' + fmt(L));
+}
+function lenAsk(c, mode) {
+  MODSET.lenMode = mode;
+  if (mode === 'dy') { lenChange(c); return; }
+  const num = (raw, ok) => { const v = parseLen(raw); return isFinite(v) && ok(v) ? v : null; };
+  if (mode === 'de') {
+    const ask = () => hint('Enter delta length or [Angle] <' + fmt(MODSET.lenDelta) + '>:');
+    ask();
+    c.sub = (k, raw) => {
+      if (k === 'a' || k === 'angle') {
+        hint('Enter delta angle <' + +deg(MODSET.lenDeltaA).toFixed(4) + '>:');
+        c.sub = (k2, raw2) => {
+          if (k2 !== '') { const v = parseFloat(raw2); if (!isFinite(v)) return false; MODSET.lenDeltaA = rad(v); }
+          MODSET.lenAngle = true; lenChange(c); return true;
+        };
         return true;
       }
-      if (k === 'u') {
-        /* Undo inside the command takes back the last cut without leaving it */
-        undo(); hint('Taken back — carry on'); return true;
-      }
-      return false;
-    },
-    point(c, p) {
-      const shift = ST.shift;
-      const ext = extending ? !shift : shift;
-      if (c.mode === 'fence') { c.fence.push(p); hint('Another fence point · <em>Enter</em> to apply'); draw(); return; }
-      if (c.mode === 'cross') {
-        c.fence.push(p);
-        if (c.fence.length < 2) { hint('Opposite corner'); return; }
-        const hits = fenceHits(boxFence(c.fence[0], c.fence[1]), true);
-        const n = applyFence(hits, ext);
-        echo(n ? (ext ? 'Extended ' : 'Trimmed ') + n : 'Nothing crossed that window');
-        c.fence = []; hint('First corner of the crossing window');
-        return;
-      }
-      if (c.mode === 'erase') {
-        const e = pickAt(p, 10, x => !GEOM[x.t]);
-        if (!e) return;
-        begin(); eraseEnt(e.id); commit('Erase');
-        return;
-      }
-      const e = pickAt(p, 10, x => !GEOM[x.t]);
-      if (!e) return;
-      const others = trimBoundaries(e.id);
-      if (ext) {
-        const n = extendTo(e, p, others);
-        if (n) { begin(); mut(e); Object.assign(e, n); commit('Extend'); }
-        else echo('No boundary in that direction');
-        return;
-      }
-      const parts = trimAt(e, p, others);
-      if (!parts) return echo('No cutting edge crosses that object');
-      begin();
-      const meta = { layer: e.layer, color: e.color, lt: e.lt, lw: e.lw };
-      delEnt(e.id);
-      parts.forEach(n => addEnt(Object.assign(n, meta)));
-      commit('Trim');
-    },
-    enter(c) {
-      if (c.mode === 'fence' && c.fence.length >= 2) {
-        const hits = fenceHits(c.fence, false);
-        const n = applyFence(hits, extending);
-        echo(n ? (extending ? 'Extended ' : 'Trimmed ') + n : 'The fence crossed nothing');
-        c.fence = [];
-        hint('Draw another fence · <em>Enter</em> again to finish');
-        return;
-      }
-      endCmd();
-    },
-    preview(c) {
-      if (c.mode === 'fence' && c.fence.length) ST.tracks = pairs(c.fence);
-      return null;
-    },
+      if (k !== '') { const v = num(raw, () => true); if (v === null) return false; MODSET.lenDelta = v; }
+      MODSET.lenAngle = false; lenChange(c); return true;
+    };
+    return;
+  }
+  if (mode === 'p') {
+    hint('Enter percentage length <' + +MODSET.lenPct.toFixed(4) + '>:');
+    c.sub = (k, raw) => {
+      if (k !== '') { const v = parseFloat(raw); if (!(v > 0)) { cliPrint('Requires a positive value.', 'err'); return true; } MODSET.lenPct = v; }
+      lenChange(c); return true;
+    };
+    return;
+  }
+  hint('Specify total length or [Angle] <' + fmt(MODSET.lenTotal) + '>:');
+  c.sub = (k, raw) => {
+    if (k === 'a' || k === 'angle') {
+      hint('Specify total angle <' + +deg(MODSET.lenTotalA).toFixed(4) + '>:');
+      c.sub = (k2, raw2) => {
+        if (k2 !== '') { const v = parseFloat(raw2); if (!(v > 0 && v < 360)) { cliPrint('Requires an angle between 0 and 360.', 'err'); return true; } MODSET.lenTotalA = rad(v); }
+        MODSET.lenAngle = true; lenChange(c); return true;
+      };
+      return true;
+    }
+    if (k !== '') { const v = num(raw, x => x > 0); if (v === null) { cliPrint('Requires a positive length.', 'err'); return true; } MODSET.lenTotal = v; }
+    MODSET.lenAngle = false; lenChange(c); return true;
   };
 }
-defc('trim', trimLike(false));
-defc('extend', trimLike(true));
-/** consecutive pairs of a point run, for drawing the fence as it is built */
+/** the object lengthened (or shortened) to `target` at the chosen end */
+function lenTo(C, atEnd, target) {
+  const L = crvLen(C), n = C.n, e = C.e;
+  if (!(target > SLIVER)) return { err: 'The result would have no length' };
+  if (Math.abs(target - L) < 1e-12) return { ent: null };
+  if (target < L) {
+    const t = crvAtLen(C, atEnd ? target : L - target);
+    return { ent: atEnd ? crvSub(C, 0, t) : crvSub(C, t, n) };
+  }
+  if (e.t === 'ellipse') {
+    const E = C.ell, rest = TAU - Math.abs(E.sw), dir = E.sw < 0 ? -1 : 1;
+    const from = atEnd ? E.th0 + E.sw : E.th0, go = atEnd ? dir : -dir;
+    const G = curveOf(Object.assign({}, e, { id: undefined, a0: from, a1: from + go * rest }));
+    if (target - L >= crvLen(G) - SLIVER) return { err: 'That would close the ellipse on itself' };
+    const th = from + go * rest * crvAtLen(G, target - L) / G.ell.N;
+    const out = clone(e); delete out.id;
+    let a = atEnd ? E.th0 : th, b = atEnd ? th : E.th0 + E.sw;
+    if (b < a) { const k = a; a = b; b = k; }
+    out.a0 = wrap(a); out.a1 = out.a0 + (b - a);
+    return { ent: out };
+  }
+  const s = C.segs[atEnd ? n - 1 : 0];
+  const du = (target - L) / sgLen(s);
+  if (s.k === 'a' && Math.abs(s.sw) * (1 + du) >= TAU - 1e-9) return { err: 'That would close the arc on itself' };
+  return { ent: atEnd ? crvSub(C, 0, n + du) : crvSub(C, -du, n) };
+}
+function lenPlan(e, pick) {
+  const C = curveOf(e);
+  if (!C || C.closed || e.t === 'xline' || e.t === 'ray') return { err: 'That object has no end to lengthen' };
+  const L = crvLen(C);
+  const atEnd = crvLenTo(C, crvNear(C, pick).t) >= L / 2;
+  const s = C.segs[atEnd ? C.n - 1 : 0];
+  let target;
+  const m = MODSET.lenMode;
+  if ((m === 'de' || m === 't') && MODSET.lenAngle) {
+    if (s.k !== 'a') return { err: 'The Angle option lengthens arcs; that end is straight' };
+    target = m === 'de' ? L + MODSET.lenDeltaA * s.r : L - sgLen(s) + MODSET.lenTotalA * s.r;
+  } else if (m === 'de') target = L + MODSET.lenDelta;
+  else if (m === 'p') target = L * MODSET.lenPct / 100;
+  else target = MODSET.lenTotal;
+  return Object.assign(lenTo(C, atEnd, target), { C, atEnd });
+}
+/** DYnamic: the chosen end follows the cursor along the end segment */
+function lenDynamic(c, p) {
+  const C = curveOf(c.e);
+  if (!C) return null;
+  const n = C.n, s = C.segs[c.atEnd ? n - 1 : 0];
+  let u = sgU(s, p);
+  if (s.k === 'a' && !c.atEnd && u > 1) u -= TAU / Math.abs(s.sw);
+  if (c.atEnd) { const t = n - 1 + u; return t > 1e-9 ? crvSub(C, 0, t) : null; }
+  return u < n - 1e-9 ? crvSub(C, u, n) : null;
+}
+defc('lengthen', {
+  group: 'modify',
+  objPick: c => c.stage === 'measure' || c.stage === 'change',
+  init(c) { c.ops = []; lenMain(c); },
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (c.sub) return c.sub(k, s);
+    if (c.stage === 'measure') {
+      if (k === 'de' || k === 'delta') { lenAsk(c, 'de'); return true; }
+      if (k === 'p' || k === 'percent') { lenAsk(c, 'p'); return true; }
+      if (k === 't' || k === 'total') { lenAsk(c, 't'); return true; }
+      if (k === 'dy' || k === 'dynamic') { lenAsk(c, 'dy'); return true; }
+    }
+    if (c.stage === 'change' && (k === 'u' || k === 'undo')) { opUndo(c); return true; }
+    return false;
+  },
+  point(c, p0) {
+    if (c.stage === 'dyn') {
+      const n = lenDynamic(c, p0);
+      if (!n) { cliPrint('That would leave nothing of it.', 'err'); return; }
+      opRun(c, 'Lengthen', () => replaceWith(c.e, [n]));
+      lenChange(c); modRefresh(c); return;
+    }
+    const p = rawPick(p0);
+    const e = pickEditable(p);
+    if (!e) return;
+    if (c.stage === 'measure') { lenReport(e); return; }
+    if (MODSET.lenMode === 'dy') {
+      const C = curveOf(e);
+      if (!C || C.closed || e.t === 'xline' || e.t === 'ray') { cliPrint('That object has no end to lengthen.', 'err'); return; }
+      c.e = e; c.atEnd = crvLenTo(C, crvNear(C, p).t) >= crvLen(C) / 2;
+      c.pts = [crvPt(C, c.atEnd ? C.n : 0)];
+      SEL.clear(); SEL.add(e.id);
+      c.stage = 'dyn'; hint('Specify new end point:');
+      return;
+    }
+    const r = lenPlan(e, p);
+    if (r.err) { cliPrint(r.err + '.', 'err'); return; }
+    if (r.ent) opRun(c, 'Lengthen', () => replaceWith(e, [r.ent]));
+    modRefresh(c);
+  },
+  enter(c) {
+    if (c.sub) { c.sub('', ''); return; }
+    if (c.stage === 'measure') { lenAsk(c, MODSET.lenMode); return; }   /* the default option */
+    if (c.stage === 'dyn') { lenChange(c); return; }
+    endCmd();
+  },
+  preview(c, p) {
+    if (c.stage === 'dyn' && c.e) { const n = lenDynamic(c, p); return n ? [n] : null; }
+    if (c.stage !== 'change') return null;
+    const e = pickEditable(rawPick(p));
+    if (!e) return null;
+    let r; try { r = lenPlan(e, rawPick(p)); } catch (err) { return null; }
+    return r && r.ent ? [r.ent] : null;
+  },
+  done() { SEL.clear(); },
+});
+
+/* ============================================================
+   STRETCH
+   ------------------------------------------------------------
+     Select objects to stretch by crossing-window or crossing-polygon...
+     Specify base point or [Displacement] <Displacement>:
+     Specify second point or <use first point as displacement>:
+
+   What moves is decided by the last crossing window or polygon:
+   the vertices and ends inside it move, the ones outside stay. An
+   object wholly inside moves whole. A circle, text or block moves
+   if its centre or insertion point is inside. An arc keeps the
+   height of its bulge, so a stretched arc stays the same shape of
+   curve rather than blowing up. An object selected some other way
+   that the window does not touch moves whole, as AutoCAD's does.
+   ============================================================ */
+function stretchWindow() {
+  if (Array.isArray(ST.lastBandPoly) && ST.lastBandPoly.length >= 3) return ST.lastBandPoly;
+  const b = ST.lastBand;
+  return b ? [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]] : null;
+}
+function inRing(p, W) { return !W || pointInPoly(p, W); }
+/** stretch one object (in place) by d, moving what lies inside W */
+function stretchOne(e, W, d) {
+  const mv = p => [p[0] + d[0], p[1] + d[1]];
+  const all = () => xf(e, T.move(d));
+  const pts = (() => {
+    switch (e.t) {
+      case 'line': return [e.a, e.b];
+      case 'arc': return [arcPt(e, 0), arcPt(e, 1)];
+      case 'pline': case 'leader': return e.pts;
+      case 'spline': return e.fit && e.fit.length ? e.fit : e.pts;
+      case 'circle': case 'ellipse': return [e.c];
+      case 'point': case 'text': case 'mtext': case 'insert': case 'attdef': return [e.p];
+      case 'xline': case 'ray': return [e.a];
+      case 'dim': return [e.p1, e.p2, e.p3].filter(Boolean);
+      case 'hatch': return (e.loops || []).flat();
+      default: return null;
+    }
+  })();
+  if (!pts) {
+    /* an architectural object: by its grips, as it always has been */
+    const gs = gripsOf(e), move = new Set();
+    gs.forEach(g => { if (inRing(g.p, W)) move.add(g.k); });
+    if (!W || move.size === gs.length) { all(); return; }
+    if (!move.size) return;
+    if (e.t === 'wall' || e.t === 'stair') {
+      if (move.has('a')) e.a = mv(e.a);
+      if (move.has('b')) e.b = mv(e.b);
+    } else if (e.pts) {
+      for (let i = 0; i < e.pts.length; i++) if (move.has('p' + i)) e.pts[i] = mv(e.pts[i]);
+    } else all();
+    return;
+  }
+  const inside = pts.map(p => inRing(p, W));
+  const nIn = inside.filter(Boolean).length;
+  if (!W || nIn === pts.length) { all(); return; }
+  if (!nIn) {
+    /* picked some other way and nowhere near the window: it moves whole */
+    const b = bbox(e);
+    if (!crossWindowRing(e, W, b)) all();
+    return;
+  }
+  if (e.t === 'circle' || e.t === 'ellipse' || e.t === 'point' || e.t === 'text' || e.t === 'mtext' ||
+      e.t === 'insert' || e.t === 'attdef' || e.t === 'xline' || e.t === 'ray' || e.t === 'hatch') return;
+  switch (e.t) {
+    case 'line': if (inside[0]) e.a = mv(e.a); if (inside[1]) e.b = mv(e.b); return;
+    case 'arc': {
+      const S = arcPt(e, 0), E = arcPt(e, 1);
+      const b = Math.tan(arcSweep(e) / 4), h = b * dist(S, E) / 2;      /* the bulge height is kept */
+      const S2 = inside[0] ? mv(S) : S, E2 = inside[1] ? mv(E) : E;
+      const L2 = dist(S2, E2);
+      if (!(L2 > SLIVER)) return;
+      const A = bulgeArc(S2, E2, 2 * h / L2);
+      if (A) { e.c = A.c; e.r = A.r; e.a0 = A.a0; e.a1 = A.a1; }
+      return;
+    }
+    case 'pline': case 'leader':
+      for (let i = 0; i < e.pts.length; i++) if (inside[i]) e.pts[i] = mv(e.pts[i]);
+      return;
+    case 'spline':
+      if (e.fit && e.fit.length) {
+        e.fit = e.fit.map((p, i) => inside[i] ? mv(p) : p);
+        e.pts = e.fit.length > 2 ? fitSpline(e.fit, !!e.closed) : e.fit.slice();
+      } else e.pts = e.pts.map((p, i) => inside[i] ? mv(p) : p);
+      return;
+    case 'dim':
+      if (inRing(e.p1, W)) e.p1 = mv(e.p1);
+      if (inRing(e.p2, W)) e.p2 = mv(e.p2);
+      if (e.p3 && inRing(e.p3, W)) e.p3 = mv(e.p3);
+      return;
+  }
+}
+/** does an object's outline cross the ring? */
+function crossWindowRing(e, W, b) {
+  const R = ptsBox(W);
+  if (b && !boxMeet(b, R, 0)) return false;
+  const C = curveOf(e);
+  if (!C) return true;
+  return crvHits(C, curveOf({ t: 'pline', pts: W, closed: true }), null, null).length > 0;
+}
+function stretchApply(c, d) {
+  const W = c.win;
+  opRun(c, 'Stretch', () => { for (const e of selEnts()) { mut(e); stretchOne(e, W, d); } });
+  endCmd();
+}
+defc('stretch', {
+  group: 'modify',
+  init(c) {
+    if (c.back) { c.back(c); return; }
+    const go = cc => {
+      cc.back = null;
+      if (!SEL.size) { endCmd(); return; }
+      cc.win = stretchWindow(); cc.base = null; cc.disp = false; cc.pts = []; cc.ops = [];
+      hint('Specify base point or [Displacement] <Displacement>:');
+    };
+    /* A selection made beforehand brings its own window. Otherwise the window
+       is the one drawn at THIS prompt — a box left over from some earlier
+       selection says nothing about what should stretch now. */
+    if (SEL.size) { go(c); return; }
+    ST.lastBandPoly = null; ST.lastBand = null;
+    cliPrint('Select objects to stretch by crossing-window or crossing-polygon...');
+    c.phase = 'sel';
+    if (typeof selPromptReset === 'function') selPromptReset();
+    c.back = go;
+    hint('Select objects:');
+  },
+  text(c, s) {
+    const k = String(s).trim().toLowerCase();
+    if (!c.base && !c.disp && (k === 'd' || k === 'displacement')) { c.disp = true; hint('Specify displacement <0.0000, 0.0000>:'); return true; }
+    return false;
+  },
+  point(c, p) {
+    if (c.disp) { stretchApply(c, p); return; }
+    if (!c.base) { c.base = p; c.pts = [p]; hint('Specify second point or <use first point as displacement>:'); return; }
+    stretchApply(c, sub(p, c.base));
+  },
+  enter(c) {
+    if (c.base) { stretchApply(c, c.base); return; }       /* the first point is the displacement */
+    if (!c.disp) { c.disp = true; hint('Specify displacement <0.0000, 0.0000>:'); return; }
+    endCmd();
+  },
+  preview(c, p) {
+    if (!c.base) return null;
+    const d = sub(p, c.base), W = c.win;
+    return selEnts().map(e => { const n = clone(e); delete n.id; stretchOne(n, W, d); return n; });
+  },
+});
+
+/* ============================================================
+   ALIGN
+   ------------------------------------------------------------
+     Specify first source point:  /  first destination point:
+     Specify second source point or <continue>:
+     Specify second destination point:
+     Specify third source point or <continue>:
+     Scale objects based on alignment points? [Yes/No] <N>:
+   One pair moves; two pairs move and turn, and scale only if asked.
+   ============================================================ */
+const ALIGN_ASK = ['Specify first source point:', 'Specify first destination point:',
+  'Specify second source point or <continue>:', 'Specify second destination point:',
+  'Specify third source point or <continue>:', 'Specify third destination point:'];
+function alignXform(pts, doScale) {
+  const [s1, d1, s2, d2] = pts;
+  if (!s2 || !d2) return p => [p[0] + d1[0] - s1[0], p[1] + d1[1] - s1[1]];
+  const a = ang(s1, s2), b = ang(d1, d2);
+  const ls = dist(s1, s2), ld = dist(d1, d2);
+  const k = doScale && ls > 1e-9 ? ld / ls : 1;
+  const t = b - a, cs = Math.cos(t), sn = Math.sin(t);
+  return p => {
+    const q = [(p[0] - s1[0]) * k, (p[1] - s1[1]) * k];
+    return [d1[0] + q[0] * cs - q[1] * sn, d1[1] + q[0] * sn + q[1] * cs];
+  };
+}
+/* The turn and move land as soon as the second destination is given, so what
+   is asked next is asked of the result; Yes to scaling adds the scale in the
+   same command, and cancelling takes the lot back, as Esc does in AutoCAD. */
+function alignApply(c, doScale) {
+  const f = alignXform(c.pts, doScale);
+  opRun(c, 'Align', () => selEnts().forEach(e => xf(e, f)));
+}
+function alignFinish(c, scale) {
+  if (scale) {
+    const [s1, d1, s2, d2] = c.pts, ls = dist(s1, s2);
+    if (ls > 1e-9) opRun(c, 'Align', () => selEnts().forEach(e => xf(e, T.scale(d1, dist(d1, d2) / ls))));
+  }
+  c.finished = true;
+  endCmd();
+}
+defc('align', {
+  needSel: true, group: 'modify',
+  init(c) { c.pts = []; c.ops = []; c.src = selEnts().map(clone); c.ask = false; c.finished = false; hint(ALIGN_ASK[0]); },
+  text(c, s) {
+    if (!c.ask) return false;
+    const k = String(s).trim().toLowerCase();
+    if (k === 'y' || k === 'yes') { alignFinish(c, true); return true; }
+    if (k === 'n' || k === 'no') { alignFinish(c, false); return true; }
+    return false;
+  },
+  point(c, p) {
+    if (c.ask) return;
+    c.pts.push(p);
+    const n = c.pts.length;
+    if (n === 4) alignApply(c, false);
+    if (n < 6) { hint(ALIGN_ASK[n]); return; }
+    /* a third pair only fixes a plane in 3D; in plan the first two decide */
+    alignFinish(c, false);
+  },
+  enter(c) {
+    if (c.ask) { alignFinish(c, false); return; }
+    const n = c.pts.length;
+    if (n === 2) { alignApply(c, false); alignFinish(c, false); return; }
+    if (n === 4) { c.ask = true; hint('Scale objects based on alignment points? [Yes/No] <N>:'); return; }
+    endCmd();
+  },
+  preview(c, p) {
+    const n = c.pts.length;
+    if (c.ask || !(n === 1 || n === 3)) return null;
+    const f = alignXform(n === 1 ? [c.pts[0], p] : [...c.pts, p], false);
+    ST.tracks = [[c.pts[n - 1], p]];
+    return (c.src || []).map(e => { const q = clone(e); delete q.id; return xf(q, f); });
+  },
+  done(c) {
+    /* abandoned before it was answered: nothing happened */
+    if (!c.finished) while (c.ops && c.ops.length) opUndo(c);
+  },
+});
+/** consecutive pairs of a point run, for drawing a path as it is built */
 function pairs(pts) {
   const out = [];
   for (let i = 1; i < pts.length; i++) out.push([pts[i - 1], pts[i]]);
   return out;
 }
-defc('lengthen', {
-  group: 'modify', hint: 'Type <em>DE</em> delta, <em>T</em> total, <em>P</em> percent — then pick an object end',
-  init: c => { c.mode = 'de'; c.val = null; },
-  text(c, s) {
-    let m = s.match(/^(de|t|p)\s*(.*)$/i);
-    if (m) { c.mode = m[1].toLowerCase(); if (m[2]) { c.val = c.mode === 'p' ? parseFloat(m[2]) : parseLen(m[2]); } hint('Pick the end to change'); return true; }
-    const v = c.mode === 'p' ? parseFloat(s) : parseLen(s);
-    if (!isNaN(v)) { c.val = v; hint('Pick the end to change'); return true; }
-    return false;
-  },
-  point(c, p) {
-    if (c.val == null) return echo('Give a value first');
-    const e = pickAt(p, 10, x => x.t === 'line' || x.t === 'arc'); if (!e) return;
-    const opts = c.mode === 'de' ? { delta: c.val } : c.mode === 't' ? { total: c.val } : { pct: c.val };
-    const n = lengthenTo(e, p, opts);
-    if (!n) return echo('Cannot lengthen that');
-    begin(); mut(e); Object.assign(e, n); commit('Lengthen');
-  },
-});
-defc('fillet', {
-  group: 'modify', hint: 'Type a radius, then pick two objects · <em>P</em> polyline · <em>T</em> trim',
-  init: c => { c.r = DOC.filletR ?? 0; c.a = null; hint('Radius ' + fmt(c.r) + ' — type a new one or pick the first object'); },
-  text(c, s) {
-    const k = String(s).trim().toLowerCase();
-    if (k === 'p') { c.polyMode = true; hint('Pick a polyline to fillet every corner'); return true; }
-    /* TRIMMODE is shared with CHAMFER, as it is in AutoCAD: turn it off and the
-       arc is added while the two objects are left exactly as they were, which
-       is how you fillet something you still need the full length of. */
-    if (k === 't' || k === 'trim') {
-      VS.trimmode = VS.trimmode ? 0 : 1;
-      echo(VS.trimmode ? 'Objects will be trimmed to the fillet'
-                       : 'Objects will be left uncut');
-      return true;
-    }
-    const v = parseLen(s);
-    if (!isNaN(v) && v >= 0) { c.r = DOC.filletR = v; hint('Pick the first object'); return true; }
-    return false;
-  },
-  point(c, p) {
-    if (c.polyMode) {
-      const e = pickAt(p, 10, x => x.t === 'pline');
-      if (!e) return echo('Pick a polyline');
-      begin(); mut(e); e.pts = filletPolyline(e, c.r); commit('Fillet'); c.polyMode = false; return;
-    }
-    const e = pickAt(p, 10, x => x.t === 'line' || x.t === 'arc' || x.t === 'circle');
-    if (!e) return echo('Fillet works on lines, arcs and circles');
-    if (!c.a) { c.a = e; c.ap = p; SEL.clear(); SEL.add(e.id); hint('Pick the second object'); return; }
-    if (e.id === c.a.id) return;
-    const f = filletCurves(c.a, c.ap, e, p, c.r);
-    if (!f) { echo('No fillet of that radius fits'); c.a = null; SEL.clear(); return; }
-    begin();
-    if (VS.trimmode) { pullEnd(c.a, f.P, f.t1); pullEnd(e, f.P, f.t2); }
-    if (c.r > 0 && f.arc) addEnt(Object.assign(f.arc, { layer: c.a.layer, color: c.a.color, lt: c.a.lt }));
-    commit('Fillet');
-    c.a = null; SEL.clear(); hint('Pick the first object');
-  },
-  done() { SEL.clear(); },
-});
-function filletPolyline(e, r) {
-  if (r <= 0) return e.pts;
-  const P = e.pts, n = P.length, out = [];
-  const last = e.closed ? n : n - 1;
-  if (!e.closed) out.push(P[0]);
-  for (let i = e.closed ? 0 : 1; i < (e.closed ? n : n - 1); i++) {
-    const a = P[(i - 1 + n) % n], b = P[i], c = P[(i + 1) % n];
-    const u1 = norm(sub(a, b)), u2 = norm(sub(c, b));
-    const th = Math.acos(clamp(dot(u1, u2), -1, 1));
-    if (th < 1e-4 || Math.abs(th - Math.PI) < 1e-4) { out.push(b); continue; }
-    const tanL = Math.min(r / Math.tan(th / 2), dist(a, b) * .49, dist(b, c) * .49);
-    const t1 = add(b, mul(u1, tanL)), t2 = add(b, mul(u2, tanL));
-    const rr = tanL * Math.tan(th / 2);
-    const bis = norm(add(u1, u2));
-    const cc = add(b, mul(bis, rr / Math.sin(th / 2)));
-    let a0 = ang(cc, t1), a1 = ang(cc, t2);
-    if (wrap(a1 - a0) > Math.PI) { const k = a0; a0 = a1; a1 = k; }
-    const pts = arcPts({ c: cc, r: rr, a0, a1 }, 10);
-    if (dist(pts[0], t1) > dist(pts[pts.length - 1], t1)) pts.reverse();
-    out.push(...pts);
-  }
-  if (!e.closed) out.push(P[n - 1]);
-  return out;
+/** the rectangle of a crossing window, as a ring */
+function boxFence(p0, p1) {
+  return [[p0[0], p0[1]], [p1[0], p0[1]], [p1[0], p1[1]], [p0[0], p1[1]]];
 }
-defc('chamfer', {
-  group: 'modify', hint: 'Distance, then pick two lines · <em>A</em> angle · <em>T</em> trim',
-  init: c => { c.d = DOC.chamD ?? 0; c.d2 = null; c.a = null; c.ang = null;
-               hint('Distance ' + fmt(c.d) + ' — type a new one or pick the first line'); },
-  text(c, s) {
-    const k = String(s).trim().toLowerCase();
-    if (k === 't' || k === 'trim') {
-      VS.trimmode = VS.trimmode ? 0 : 1;
-      echo(VS.trimmode ? 'Lines will be trimmed to the chamfer'
-                       : 'Lines will be left uncut');
-      return true;
-    }
-    /* The Angle method: a distance along the first line and an angle from it,
-       which is how a chamfer is dimensioned on a drawing more often than as
-       two distances. */
-    if (k === 'a') { c.awaitAngle = true; hint('Distance along the first line'); return true; }
-    if (c.awaitAngle) {
-      if (c.angD == null) { const v = parseLen(s); if (isNaN(v) || v < 0) return false;
-        c.angD = v; hint('Angle from the first line, in degrees'); return true; }
-      const t = parseFloat(s);
-      if (isNaN(t) || t <= 0 || t >= 90) { echo('An angle between 0 and 90'); return true; }
-      c.d = DOC.chamD = c.angD;
-      c.d2 = c.angD * Math.tan(rad(t));
-      c.ang = t; c.awaitAngle = false; c.angD = null;
-      echo('Chamfer ' + fmt(c.d) + ' at ' + t + ' degrees');
-      hint('Pick the first line');
-      return true;
-    }
-    const m = s.match(/^([\d.]+[a-z'"]*)[,x]([\d.]+[a-z'"]*)$/i);
-    if (m) { c.d = parseLen(m[1]); c.d2 = parseLen(m[2]); DOC.chamD = c.d; hint('Pick the first line'); return true; }
-    const v = parseLen(s);
-    if (!isNaN(v) && v >= 0) { c.d = DOC.chamD = v; c.d2 = null; hint('Pick the first line'); return true; }
-    return false;
-  },
-  point(c, p) {
-    const e = pickAt(p, 10, x => x.t === 'line');
-    if (!e) return echo('Chamfer works on lines');
-    if (!c.a) { c.a = e; c.ap = p; SEL.clear(); SEL.add(e.id); hint('Pick the second line'); return; }
-    if (e.id === c.a.id) return;
-    const X = xLineLine(c.a.a, c.a.b, e.a, e.b, true);
-    if (!X.length) { c.a = null; SEL.clear(); return echo('Those lines are parallel'); }
-    const P = X[0];
-    const u1 = dirFrom(P, c.a, c.ap), u2 = dirFrom(P, e, p);
-    const t1 = add(P, mul(u1, c.d)), t2 = add(P, mul(u2, c.d2 != null ? c.d2 : c.d));
-    begin();
-    if (VS.trimmode) { pullEnd(c.a, P, t1); pullEnd(e, P, t2); }
-    if (c.d > 0) addEnt({ t: 'line', a: t1, b: t2, layer: c.a.layer, color: c.a.color, lt: c.a.lt });
-    commit('Chamfer'); c.a = null; SEL.clear(); hint('Pick the first line');
-  },
-  done() { SEL.clear(); },
-});
 defc('erase', {
   needSel: true, group: 'modify',
   init(c) { begin(); selEnts().forEach(e => eraseEnt(e.id)); commit('Erase'); endCmd(); },
 });
-defc('stretch', {
-  needSel: true, group: 'modify',
-  selHint: 'Drag a <em>crossing</em> window (right→left) over the parts to stretch, then <em>Enter</em>',
-  hint: 'Base point', init: c => { c.pts = []; c.box = ST.lastBand || null; },
-  point(c, p) {
-    c.pts.push(p);
-    if (c.pts.length === 2) {
-      const d = sub(c.pts[1], c.pts[0]);
-      begin(); stretchSel(c.box, d); commit('Stretch'); endCmd();
-    } else hint('Second point or type <em>@dx,dy</em>');
-  },
-  preview(c, p) {
-    if (c.pts.length !== 1) return null;
-    const d = sub(p, c.pts[0]);
-    const out = [];
-    for (const e of selEnts()) { const n = clone(e); stretchOne(n, c.box, d); out.push(n); }
-    return out;
-  },
-});
-function inBox(p, b) { return b ? (p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]) : true; }
-function stretchOne(e, box, d) {
-  const gs = gripsOf(e);
-  const move = new Set();
-  gs.forEach((g, i) => { if (inBox(g.p, box)) move.add(g.k); });
-  if (!box || move.size === gs.length) { xf(e, T.move(d)); return; }
-  if (!move.size) return;
-  const mv = p => add(p, d);
-  if (e.t === 'line') { if (move.has('a')) e.a = mv(e.a); if (move.has('b')) e.b = mv(e.b); }
-  else if (e.t === 'wall') { if (move.has('a')) e.a = mv(e.a); if (move.has('b')) e.b = mv(e.b); }
-  else if (e.t === 'stair') { if (move.has('a')) e.a = mv(e.a); if (move.has('b')) e.b = mv(e.b); }
-  else if (e.t === 'pline' || e.t === 'spline' || e.t === 'room') {
-    const P = e.pts;
-    for (let i = 0; i < P.length; i++) if (move.has('p' + i)) P[i] = mv(P[i]);
-  }
-  else xf(e, T.move(d));
-}
-function stretchSel(box, d) { selEnts().forEach(e => { mut(e); stretchOne(e, box, d); }); }
-
-defc('align', {
-  needSel: true, group: 'modify', hint: 'First source point', init: c => c.pts = [],
-  point(c, p) {
-    c.pts.push(p);
-    const n = c.pts.length;
-    if (n === 1) { c.src = selEnts().map(clone); hint('First destination point'); }
-    else if (n === 2) hint('Second source point');
-    else if (n === 3) hint('Second destination point · <em>Enter</em> to skip scaling');
-    else if (n === 4) { begin(); doAlign(c, true); commit('Align'); endCmd(); }
-  },
-  enter(c) {
-    if (c.pts.length === 2) { begin(); selEnts().forEach(e => xf(e, T.move(sub(c.pts[1], c.pts[0])))); commit('Align'); }
-    else if (c.pts.length === 4) { begin(); doAlign(c, false); commit('Align'); }
-    endCmd();
-  },
-  preview(c, p) {
-    if (c.pts.length === 3) { const t = { pts: [...c.pts, p] }; return alignPreview(c, t.pts); }
-    if (c.pts.length === 1) return (c.src || []).map(e => xf(clone(e), T.move(sub(p, c.pts[0]))));
-    return null;
-  },
-});
-function alignXform(pts, doScale) {
-  const [s1, d1, s2, d2] = pts;
-  const a = ang(s1, s2), b = ang(d1, d2);
-  const ls = dist(s1, s2), ld = dist(d1, d2);
-  const k = doScale && ls > 1e-9 ? ld / ls : 1;
-  return p => {
-    let q = sub(p, s1);
-    q = [q[0] * k, q[1] * k];
-    const t = b - a, cs = Math.cos(t), sn = Math.sin(t);
-    return [d1[0] + q[0] * cs - q[1] * sn, d1[1] + q[0] * sn + q[1] * cs];
-  };
-}
-function doAlign(c, doScale) { const f = alignXform(c.pts, doScale); selEnts().forEach(e => xf(e, f)); }
-function alignPreview(c, pts) { const f = alignXform(pts, true); return (c.src || []).map(e => xf(clone(e), f)); }
-
 defc('explode', {
   needSel: true, group: 'modify',
   init(c) {
     begin(); let n = 0;
     for (const e of selEnts()) {
       const meta = { layer: e.layer, color: e.color, lt: e.lt, lw: e.lw };
-      if (e.t === 'pline' || e.t === 'spline') {
+      if (e.t === 'pline') {
+        /* each span becomes what it is: a line, or an ARC for a curved one */
+        const C = curveOf(e);
+        for (const s of (C ? C.segs : [])) {
+          if (s.k === 'l') addEnt(Object.assign({ t: 'line', a: s.a.slice(), b: s.b.slice() }, meta));
+          else addEnt(Object.assign({ t: 'arc', c: s.c.slice(), r: s.r,
+            a0: wrap(s.sw > 0 ? s.a0 : s.a0 + s.sw), a1: wrap(s.sw > 0 ? s.a0 + s.sw : s.a0) }, meta));
+        }
+        delEnt(e.id); n++;
+      } else if (e.t === 'spline') {
         const P = e.closed ? [...e.pts, e.pts[0]] : e.pts;
         for (let i = 1; i < P.length; i++) addEnt(Object.assign({ t: 'line', a: P[i - 1], b: P[i] }, meta));
         delEnt(e.id); n++;
@@ -631,103 +2101,6 @@ function flattenToPrimitives(e) {
   }
   return out;
 }
-/* ---------------- joining arcs ----------------
-   Two arcs off the same centre and radius whose ends meet are one arc. JOIN
-   handled lines and polylines and silently left arcs alone, so the one case
-   where joining is unambiguous — the geometry says outright that they belong
-   together — was the case it could not do. */
-function arcsJoinable(a, b, tol) {
-  return Math.abs(a.r - b.r) < tol && dist(a.c, b.c) < tol;
-}
-/** merge a set of co-radial arcs into as few arcs as possible; a run that
-    closes on itself comes back as a circle, which is what it is */
-function joinArcs(arcs, tol) {
-  const out = [];
-  const pool = arcs.slice();
-  while (pool.length) {
-    let cur = pool.shift();
-    let a0 = cur.a0, a1 = cur.a1, moved = true;
-    while (moved && pool.length) {
-      moved = false;
-      for (let i = 0; i < pool.length; i++) {
-        const o = pool[i];
-        if (!arcsJoinable(cur, o, tol)) continue;
-        const aTol = tol / Math.max(cur.r, 1e-9);
-        if (Math.abs(wrap(o.a0 - a1)) < aTol) { a1 = a1 + wrap(o.a1 - o.a0); }
-        else if (Math.abs(wrap(a0 - o.a1)) < aTol) { a0 = a0 - wrap(o.a1 - o.a0); }
-        else continue;
-        pool.splice(i, 1); moved = true; break;
-      }
-    }
-    const span = a1 - a0;
-    out.push(span >= Math.PI * 2 - 1e-6
-      ? { t: 'circle', c: cur.c.slice(), r: cur.r }
-      : { t: 'arc', c: cur.c.slice(), r: cur.r, a0, a1 });
-  }
-  return out;
-}
-defc('join', {
-  needSel: true, group: 'modify',
-  init(c) {
-    /* arcs first: they join by geometry, not by chaining endpoints */
-    const arcs = selEnts().filter(e => e.t === 'arc');
-    if (arcs.length >= 2 && selEnts().every(e => e.t === 'arc')) {
-      const tol = Math.max(px(6), 1e-6);
-      const merged = joinArcs(arcs, tol);
-      if (merged.length < arcs.length) {
-        begin();
-        const meta = { layer: arcs[0].layer, color: arcs[0].color, lt: arcs[0].lt, lw: arcs[0].lw };
-        arcs.forEach(e => delEnt(e.id));
-        SEL.clear();
-        for (const m of merged) { const n = addEnt(Object.assign(m, meta)); SEL.add(n.id); }
-        commit('Join');
-        echo(arcs.length + ' arcs joined into ' + merged.length);
-        syncUI(); return endCmd();
-      }
-      echo('Those arcs do not meet, or are not off the same centre');
-      return endCmd();
-    }
-    const es = selEnts().filter(e => e.t === 'line' || e.t === 'pline');
-    if (es.length < 2) { echo('Select two or more lines, polylines or arcs'); return endCmd(); }
-    const chains = es.map(e => e.t === 'line' ? [e.a, e.b] : (e.closed ? [...e.pts, e.pts[0]] : e.pts.slice()));
-    const tol = Math.max(px(6), 1e-6);
-    const merged = [];
-    while (chains.length) {
-      let cur = chains.shift(), moved = true;
-      while (moved && chains.length) {
-        moved = false;
-        for (let i = 0; i < chains.length; i++) {
-          const ch = chains[i];
-          if (dist(cur[cur.length - 1], ch[0]) < tol) { cur = cur.concat(ch.slice(1)); }
-          else if (dist(cur[cur.length - 1], ch[ch.length - 1]) < tol) { cur = cur.concat(ch.slice().reverse().slice(1)); }
-          else if (dist(cur[0], ch[ch.length - 1]) < tol) { cur = ch.slice(0, -1).concat(cur); }
-          else if (dist(cur[0], ch[0]) < tol) { cur = ch.slice().reverse().slice(0, -1).concat(cur); }
-          else continue;
-          chains.splice(i, 1); moved = true; break;
-        }
-      }
-      merged.push(cur);
-    }
-    begin();
-    const meta = { layer: es[0].layer, color: es[0].color, lt: es[0].lt, lw: es[0].lw };
-    es.forEach(e => delEnt(e.id));
-    SEL.clear();
-    for (const ch of merged) {
-      const closed = ch.length > 2 && dist(ch[0], ch[ch.length - 1]) < tol;
-      /* Collinear pieces join back into a LINE, which is what AutoCAD does and
-         what anyone joining two halves of the same line expects. Coming back
-         as a three-point polyline is technically the same shape and behaves
-         differently everywhere afterwards — offset, fillet, grips and the DXF
-         it writes. */
-      const straight = !closed && ch.length > 2 && collinearRun(ch, tol);
-      const n = straight
-        ? addEnt(Object.assign({ t: 'line', a: ch[0].slice(), b: ch[ch.length - 1].slice() }, meta))
-        : addEnt(Object.assign({ t: 'pline', pts: closed ? ch.slice(0, -1) : ch, closed }, meta));
-      SEL.add(n.id);
-    }
-    commit('Joined into ' + merged.length); endCmd();
-  },
-});
 defc('pedit', {
   group: 'modify', hint: 'Pick a polyline · then <em>C</em> close, <em>O</em> open, <em>S</em> smooth, <em>D</em> decurve',
   init: c => { c.e = null; },
@@ -749,35 +2122,10 @@ defc('pedit', {
     if (k === 'c') c.e.closed = true;
     else if (k === 'o') c.e.closed = false;
     else if (k === 's') { c.e.fit = c.e.fit || c.e.pts.slice(); c.e.t = 'spline'; c.e.pts = fitSpline(c.e.fit, c.e.closed); }
-    else if (k === 'd') { c.e.t = 'pline'; if (c.e.fit) c.e.pts = c.e.fit; }
+    /* Decurve straightens every segment, the bulges included, as AutoCAD's does */
+    else if (k === 'd') { c.e.t = 'pline'; if (c.e.fit) c.e.pts = c.e.fit; delete c.e.bulges; }
     else { rollback(); return false; }
     commit('Polyline edit'); draw(); return true;
-  },
-  done() { SEL.clear(); },
-});
-defc('break', {
-  group: 'modify', hint: 'Pick the object, then two break points · <em>F</em> break at one point',
-  init: c => { c.e = null; c.pts = []; },
-  text(c, s) { if (/^f$/i.test(s)) { c.single = true; echo('Break at a single point'); return true; } return false; },
-  point(c, p) {
-    if (!c.e) {
-      const e = pickAt(p, 10, x => !GEOM[x.t]); if (!e) return;
-      c.e = e; SEL.clear(); SEL.add(e.id); hint('First break point'); return;
-    }
-    c.pts.push(p);
-    if (c.single && c.pts.length === 1) c.pts.push(p);
-    if (c.pts.length === 2) {
-      let t0 = paramOf(c.e, c.pts[0]), t1 = paramOf(c.e, c.pts[1]);
-      if (t0 > t1) { const s = t0; t0 = t1; t1 = s; }
-      const e = c.e, meta = { layer: e.layer, color: e.color, lt: e.lt, lw: e.lw };
-      begin();
-      if (e.t === 'circle' && Math.abs(t1 - t0) > 1e-6) addEnt(Object.assign(subEnt(e, t1, t0 + 1), meta));
-      else {
-        if (t0 > 1e-4) addEnt(Object.assign(subEnt(e, 0, t0), meta));
-        if (t1 < 1 - 1e-4) addEnt(Object.assign(subEnt(e, t1, 1), meta));
-      }
-      delEnt(e.id); commit('Break'); endCmd();
-    } else hint('Second break point');
   },
   done() { SEL.clear(); },
 });
