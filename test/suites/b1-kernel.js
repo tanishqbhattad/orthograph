@@ -171,6 +171,34 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r, 1);
   });
 
+  group('B1 kernel — a curved polyline measures as what it is');
+
+  /* Round-1 critic: line + semicircle + line showed Length 5000 in the
+     panel — the chords — where it is 5570.8. The shared measures sampled the
+     arcs; a polyline's length and area have exact forms, so use them. */
+  t('length counts its arcs exactly', () => {
+    const r = R(`${SETUP}
+      const e = { t:'pline', pts:[[0,0],[2000,0],[2000,1000],[0,1000]], bulges:[0,1,0,0], id: 1 };
+      return entLength(e);`);
+    close(r, 2000 + 500 * Math.PI + 2000, 1e-9, 'two lines and half a circle of radius 500');
+  });
+
+  t('area adds or takes away each arc segment exactly', () => {
+    const r = R(`${SETUP}
+      const b = Math.tan(Math.PI / 8);
+      const round = { t:'pline', closed:true, id: 1,
+        pts:[[300,0],[3700,0],[4000,300],[4000,2700],[3700,3000],[300,3000],[0,2700],[0,300]], bulges:[0,b,0,b,0,b,0,b] };
+      /* a notch: the same arcs bowed inward */
+      const inward = Object.assign({}, round, { bulges: [0,-b,0,-b,0,-b,0,-b] });
+      return { out: entArea(round), inn: entArea(inward) };`);
+    const R2 = 300 * 300;
+    const octagon = 4000 * 3000 - 4 * R2 / 2;              /* the vertices alone */
+    const seg = R2 / 2 * (Math.PI / 2 - 1);                /* one quarter-circle segment */
+    close(r.out, 4000 * 3000 - 4 * (R2 - Math.PI * R2 / 4), 1e-6, 'a rounded rectangle');
+    close(r.out, octagon + 4 * seg, 1e-6, 'which is the octagon plus four segments');
+    close(r.inn, octagon - 4 * seg, 1e-6, 'and bowed inward, the octagon less them');
+  });
+
   group('B1 kernel — OFFSET the way AutoCAD makes it');
 
   t('an arc segment of a polyline offsets to an arc about the same centre', () => {

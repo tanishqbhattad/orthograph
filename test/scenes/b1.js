@@ -247,6 +247,22 @@ module.exports = ({ scene, ok, eq }) => {
     eq('two lines after the command, one after U, two again after REDO', [kept, undone, redone], [2, 1, 2]);
   });
 
+  scene('the Properties panel measures a curved polyline round its arcs', async (page) => {
+    await page.evaluate(() => {
+      OG.reset(); DOC.units = 'mm';
+      begin(); addEnt({ t: 'pline', pts: [[0, 0], [2000, 0], [2000, 1000], [0, 1000]], bulges: [0, 1, 0, 0] }); commit('p');
+      OG.stage(1200, 500, 0.15);
+    });
+    await page.evaluate(() => OG.settle());
+    const p = await at(page, 1000, 0);
+    await page.mouse.click(p.x, p.y);
+    await page.evaluate(() => OG.settle());
+    const txt = await page.evaluate(() => document.getElementById('props').innerText);
+    const m = txt.match(/Length\s+([\d.,]+)/);
+    ok('a Length is shown', !!m, txt.slice(0, 300));
+    eq('and it is the length round the half circle, not across it', m && m[1].replace(/,/g, ''), (4000 + 500 * Math.PI).toFixed(1));
+  });
+
   scene('TRIM: hovering shows the piece a click would take, with a pick box and no snap', async (page) => {
     await page.evaluate(grid);
     await command(page, 'TR');

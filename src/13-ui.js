@@ -1113,7 +1113,7 @@ const QUICK = {
     addRow(w, 'Radius Y', e.ry, set(v => e.ry = Math.max(v, 1e-9)));
   },
   pline(w, e, set, upd) {
-    ro(w, 'Length', fmt(polyLen(e.pts, e.closed)));
+    ro(w, 'Length', fmt(entLength(e)));                /* its arcs as arcs, not chords */
     btnRow(w, 'Closed', e.closed ? 'yes' : 'no', () => { begin(); mut(e); e.closed = !e.closed; commit(); upd(); });
   },
   text(w, e, set, upd) {
@@ -1222,8 +1222,8 @@ const PROPS = {
   pline(w, e, set, upd) {
     ro(w, 'Vertices', e.pts.length);
     btnRow(w, 'Closed', e.closed ? 'yes' : 'no', () => { begin(); mut(e); e.closed = !e.closed; commit(); upd(); });
-    ro(w, 'Length', fmt(polyLen(e.pts, e.closed)));
-    if (e.closed) ro(w, 'Area', fmtArea(polyArea(e.pts)));
+    ro(w, 'Length', fmt(entLength(e)));                /* its arcs as arcs, not chords */
+    if (e.closed) ro(w, 'Area', fmtArea(entArea(e)));
   },
   text(w, e, set, upd) {
     const r = el('div', 'row', '<label>Text</label>');

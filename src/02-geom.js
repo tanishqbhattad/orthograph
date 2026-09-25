@@ -94,6 +94,41 @@ function plineSpans(e) {
   if (run.length > 1) out.push({ pts: run });
   return out;
 }
+/** A polyline's length, its arcs measured as arcs: each span is its chord d
+    or, curved through theta = 4 atan|b|, the arc r*theta with
+    r = d / (2 sin(theta/2)). Sampling the arcs instead came up short. */
+function plineLen(e) {
+  const P = e.pts || [], n = P.length;
+  if (n < 2) return 0;
+  const m = e.closed && n > 2 ? n : n - 1;
+  let L = 0;
+  for (let i = 0; i < m; i++) {
+    const d = dist(P[i], P[(i + 1) % n]), b = bulgeAt(e, i);
+    if (Math.abs(b) < BULGE_MIN) { L += d; continue; }
+    const th = 4 * Math.atan(Math.abs(b));
+    L += d * th / (2 * Math.sin(th / 2));
+  }
+  return L;
+}
+/** A closed polyline's area: the polygon of its vertices, plus each arc's
+    circular segment where it bows out and less it where it bows in. A CCW arc
+    bows to the right of its chord, which is outward on a CCW outline, so the
+    signed sum needs no case analysis. */
+function plineArea(e) {
+  const P = e.pts || [], n = P.length;
+  if (n < 2) return 0;
+  let A = 0;
+  for (let i = 0; i < n; i++) { const p = P[i], q = P[(i + 1) % n]; A += p[0] * q[1] - q[0] * p[1]; }
+  A /= 2;
+  for (let i = 0; i < n; i++) {
+    const b = bulgeAt(e, i);
+    if (Math.abs(b) < BULGE_MIN) continue;
+    const d = dist(P[i], P[(i + 1) % n]);
+    const th = 4 * Math.atan(Math.abs(b)), r = d / (2 * Math.sin(th / 2));
+    A += Math.sign(b) * r * r / 2 * (th - Math.sin(th));
+  }
+  return Math.abs(A);
+}
 /** every point along a polyline, arcs tessellated — for length, area, hit tests */
 function plinePts(e, tol) {
   if (!hasBulge(e)) return e.pts || [];
@@ -854,7 +889,8 @@ function entLength(e) {
   if (e.t === 'circle') return TAU * e.r;
   if (e.t === 'arc') return e.r * arcSweep(e);
   if (e.t === 'line') return dist(e.a, e.b);
-  if (e.t === 'pline' || e.t === 'spline') return polyLen(plinePts(e, 96), e.closed);
+  if (e.t === 'pline') return plineLen(e);
+  if (e.t === 'spline') return polyLen(plinePts(e, 96), e.closed);
   /* A parametric object knows its own length. Without this the fallback
      measures the way round whatever it draws as, which for a compound wall is
      the perimeter of every layer line in it — a 5m cavity wall came back as
@@ -866,7 +902,8 @@ function entLength(e) {
 function entArea(e) {
   if (e.t === 'circle') return Math.PI * e.r * e.r;
   if (e.t === 'ellipse') return Math.PI * e.rx * e.ry;
-  if ((e.t === 'pline' || e.t === 'spline') && e.closed) return polyArea(plinePts(e, 96));
+  if (e.t === 'pline' && e.closed) return plineArea(e);
+  if (e.t === 'spline' && e.closed) return polyArea(plinePts(e, 96));
   if (GEOM[e.t] && GEOM[e.t].area) return GEOM[e.t].area(e);
   return 0;
 }
