@@ -161,6 +161,49 @@ module.exports = ({ scene, ok, eq }) => {
     eq('two pieces either side of the gap', r, [[0, 1000], [2500, 4000]]);
   });
 
+  /* Round-1 critic: FILLET Polyline stored four true arcs and the screen drew
+     four chamfers. The solid-line path stroked a polyline through its vertices
+     and never looked at its bulges. Sample the canvas ON the arc and ON the
+     chord it used to draw. */
+  scene('a filleted polyline corner is DRAWN as its arc, not as the chord', async (page) => {
+    await page.evaluate(() => { OG.reset(); OG.stage(2000, 1500, 0.15); });
+    await command(page, 'RECTANG');
+    await page.keyboard.type('0,0'); await page.keyboard.press('Enter');
+    await page.keyboard.type('4000,3000'); await page.keyboard.press('Enter');
+    await page.keyboard.press('Escape');                 /* RECTANG waits for another */
+    await command(page, 'FILLET');
+    await page.keyboard.type('R'); await page.keyboard.press('Enter');
+    await page.keyboard.type('300'); await page.keyboard.press('Enter');
+    await page.keyboard.type('P'); await page.keyboard.press('Enter');
+    await page.evaluate(() => OG.settle());
+    const e = await at(page, 2000, 0);
+    await page.mouse.click(e.x, e.y);
+    await page.evaluate(() => { cancelCmd(); SEL.clear(); OG.stage(3800, 200, 1.0); });
+    await page.evaluate(() => OG.settle());
+    const r = await page.evaluate(() => {
+      /* the darkest pixel within two of a world point: a hairline is
+         antialiased, so one exact pixel can miss it */
+      const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+      const ink = (x, y) => {
+        const s = w2s([x, y]), kx = cv.width / V.w, ky = cv.height / V.h;
+        const d = ctx.getImageData(Math.round(s[0] * kx) - 2, Math.round(s[1] * ky) - 2, 5, 5).data;
+        let lo = 255;
+        for (let i = 0; i < d.length; i += 4) lo = Math.min(lo, (d[i] + d[i + 1] + d[i + 2]) / 3);
+        return Math.round(lo);
+      };
+      const k = Math.SQRT1_2;
+      return {
+        arc: ink(3700 + 300 * k, 300 - 300 * k),     /* on the true arc, mid-sweep   */
+        chord: ink(3850, 150),                       /* on the chord's midpoint      */
+        paper: ink(3600, 150),                       /* inside, clear of both        */
+        bulges: [...DOC.ents.values()][0].bulges.filter(Boolean).length,
+      };
+    });
+    eq('four arcs are stored', r.bulges, 4);
+    ok('ink on the true arc', r.arc < r.paper - 60, JSON.stringify(r));
+    ok('and none on the chord it used to draw', r.chord > r.paper - 10, JSON.stringify(r));
+  });
+
   scene('TRIM: hovering shows the piece a click would take, with a pick box and no snap', async (page) => {
     await page.evaluate(grid);
     await command(page, 'TR');

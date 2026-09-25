@@ -7048,7 +7048,7 @@ function strokeEntFitted(e, col, lw, lt) {
       if (!Array.isArray(e.pts) || e.pts.length < 2) return false;
       /* a polyline with curved spans is drawn from its flattened outline, so
          the pattern follows the curve rather than the chords */
-      strokeRunFitted(typeof hasBulge === 'function' && hasBulge(e) ? plinePts(e, SHAPE_TOL) : e.pts,
+      strokeRunFitted(typeof hasBulge === 'function' && hasBulge(e) ? plinePts(e, bulgeTol(e)) : e.pts,
                       !!e.closed, col, lw, lt);
       return true;
     case 'circle': strokeArcFitted({ c: e.c, r: e.r, a0: 0, a1: TAU }, col, lw, lt); return true;
@@ -7056,11 +7056,28 @@ function strokeEntFitted(e, col, lw, lt) {
     default: return false;
   }
 }
+/* How finely a polyline's arcs are drawn: enough that the largest of them is
+   never more than a quarter of a pixel off its true curve at this zoom. */
+function bulgeTol(e) {
+  const P = e.pts || [], n = P.length, m = e.closed ? n : n - 1;
+  let R = 0;
+  for (let i = 0; i < m; i++) {
+    const b = bulgeAt(e, i);
+    if (!b) continue;
+    const A = bulgeArc(P[i], P[(i + 1) % n], b);
+    if (A && A.r > R) R = A.r;
+  }
+  return clamp(Math.ceil(1.05 * Math.sqrt(2 * R * V.z)), SHAPE_TOL, 400);
+}
 function pathEnt(e) {
   ctx.beginPath();
   switch (e.t) {
     case 'line': pathPts([e.a, e.b]); break;
-    case 'pline': case 'spline': pathPts(e.pts, e.closed); break;
+    /* A polyline's arcs are its bulges. Stroking straight through its
+       vertices drew every one of them as a chord: a filleted outline came out
+       chamfered while the file, the picking and the previews all had arcs. */
+    case 'pline': pathPts(typeof hasBulge === 'function' && hasBulge(e) ? plinePts(e, bulgeTol(e)) : e.pts, e.closed); break;
+    case 'spline': pathPts(e.pts, e.closed); break;
     case 'circle': { const c = w2s(e.c); arcPath(c[0], c[1], Math.abs(e.r * V.z), 0, TAU); break; }
     case 'arc': { const c = w2s(e.c); arcPath(c[0], c[1], Math.abs(e.r * V.z), -(e.a1 + V.rot), -(e.a0 + V.rot)); break; }
     case 'ellipse': {
