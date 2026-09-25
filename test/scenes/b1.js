@@ -224,6 +224,29 @@ module.exports = ({ scene, ok, eq }) => {
     eq('the corner is a 500 arc from 2500,0 to 3000,500', r, { n: 4, arcs: 1, T1: [2500, 0], T2: [3000, 500] });
   });
 
+  scene('REDO after a command gives back what it left, not what its own U took', async (page) => {
+    await page.evaluate(() => {
+      OG.reset(); MODSET.offDist = -1;
+      begin(); addEnt({ t: 'line', a: [0, 0], b: [5000, 0] }); commit('l');
+      OG.stage(2500, 0, 0.12);
+    });
+    await command(page, 'O');
+    await page.keyboard.type('200'); await page.keyboard.press('Enter');
+    await page.evaluate(() => OG.settle());
+    const on = await at(page, 2500, 0), up = await at(page, 2500, 600), dn = await at(page, 2500, -600);
+    await page.mouse.click(on.x, on.y); await page.mouse.click(up.x, up.y);
+    await page.mouse.click(on.x, on.y); await page.mouse.click(dn.x, dn.y);
+    await page.keyboard.type('U'); await page.keyboard.press('Enter');     /* OFFSET's own Undo */
+    await page.keyboard.press('Enter');                                     /* <Exit> */
+    const n = () => page.evaluate(() => DOC.ents.size);
+    const kept = await n();
+    await command(page, 'U');
+    const undone = await n();
+    await command(page, 'REDO');
+    const redone = await n();
+    eq('two lines after the command, one after U, two again after REDO', [kept, undone, redone], [2, 1, 2]);
+  });
+
   scene('TRIM: hovering shows the piece a click would take, with a pick box and no snap', async (page) => {
     await page.evaluate(grid);
     await command(page, 'TR');

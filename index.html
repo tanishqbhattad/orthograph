@@ -13879,8 +13879,12 @@ function opRun(c, label, fn) {
 function opUndo(c) {
   if (!c.ops || !c.ops.length) { cliPrint('Command has been completely undone.'); return false; }
   const seq = c.ops.pop();
-  let did = false;
-  while (HIST.past.length && HIST.past[HIST.past.length - 1].seq > seq) { undoOne(HIST.past, HIST.future, false); did = true; }
+  let did = 0;
+  while (HIST.past.length && HIST.past[HIST.past.length - 1].seq > seq) { undoOne(HIST.past, HIST.future, false); did++; }
+  /* What the command's own U takes back is gone, as it is in AutoCAD: it must
+     not wait on the redo stack for a REDO of the whole command to bring it
+     back. (undoOne already took its weight off the journal.) */
+  if (did) HIST.future.splice(HIST.future.length - did, did);
   /* nothing of this command is left to take back (a new drawing since, say):
      leave the selection alone, it belongs to whatever comes next */
   if (did) { SEL.clear(); syncUI(); }

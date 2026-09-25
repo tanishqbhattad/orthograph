@@ -69,6 +69,33 @@ module.exports = ({ group, t, ok, eq, close, R }) => {
     eq(r.up, true);
   });
 
+  /* Round-1 critic: what a command's own U took back came back with REDO. */
+  t('what U inside the command took back, REDO does not bring back', () => {
+    const r = R(`${SETUP}
+      begin(); addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'}); commit('x');
+      startCmd('offset'); dispatch('200');
+      cmdPoint([2500, 0]); cmdPoint([2500, 50]);
+      cmdPoint([2500, 0]); cmdPoint([2500, -50]);
+      dispatch('U'); cmdEnter();
+      const kept = ${ys};
+      undo(); const undone = ${ys};
+      redo(); const redone = ${ys};
+      /* and the same in TRIM */
+      resetDoc(); cancelCmd();
+      begin();
+      addEnt({t:'line', a:[0,-500], b:[0,2500]}); addEnt({t:'line', a:[1000,-500], b:[1000,2500]});
+      addEnt({t:'line', a:[-500,2000], b:[1500,2000]});
+      commit('y');
+      startCmd('trim'); cmdPoint([0, 2300]); cmdPoint([1000, 2300]); dispatch('U'); cmdEnter();
+      undo(); redo();
+      const tops = [...DOC.ents.values()].filter(e => Math.abs(e.a[0]-e.b[0]) < 1e-9).map(e => Math.max(e.a[1], e.b[1])).sort((a,b)=>a-b);
+      return { kept, undone, redone, tops };`);
+    eq(r.kept.join(','), '0,200');
+    eq(r.undone.join(','), '0');
+    eq(r.redone.join(','), '0,200', 'REDO gives back what the command left, not what its U took');
+    eq(r.tops.join(','), '2000,2500');
+  });
+
   t('Multiple steps out from the last one; Enter goes to the next object', () => {
     const r = R(`${SETUP}
       begin(); addEnt({t:'line', a:[0,0], b:[5000,0], layer:'0'}); commit('x');
