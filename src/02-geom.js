@@ -17,8 +17,11 @@ function ellPt(e, a) {
 }
 /** tessellate an arc record into points */
 function arcPts(a, tol) {
-  const sw = wrap(a.a1 - a.a0) || TAU;
-  const n = Math.max(4, Math.ceil((tol || 24) * sw / TAU * 3));
+  /* A bulge arc carries its direction (ccw: false for a negative bulge) and
+     runs from a0 to a1 that way. Sweeping anticlockwise regardless drew a
+     clockwise quarter-circle as the other three quarters of the circle. */
+  const sw = a.ccw === false ? -(wrap(a.a0 - a.a1) || TAU) : (wrap(a.a1 - a.a0) || TAU);
+  const n = Math.max(4, Math.ceil((tol || 24) * Math.abs(sw) / TAU * 3));
   const o = [];
   for (let i = 0; i <= n; i++) { const t = a.a0 + sw * i / n; o.push([a.c[0] + a.r * Math.cos(t), a.c[1] + a.r * Math.sin(t)]); }
   return o;
