@@ -1566,6 +1566,14 @@ function snapPoint(sx, sy, ref, now) {
      stays total and stable; a "within N px, compare priority instead"
      comparator is non-transitive and sorts inconsistently. Tier first: a point
      inside the aperture always beats one the aperture merely points along. */
+  /* An object snap the aperture is really on beats a point that is merely on
+     an alignment path. Tracking acquired on an endpoint runs a path through
+     it, and 4 px back along the line that path passes under the cursor at
+     d = 0 — it outscored the endpoint, the tooltip said Endpoint, and the line
+     ended 10 units short. AutoCAD offers alignment only where no real snap
+     is under the aperture, so tracking drops a tier whenever one is. */
+  const realHere = cands.some(c => c.k !== 'track' && c.k !== 'trackx' && c.pri > SNAP_PRI.track && c.d <= r);
+  if (realHere) for (const c of cands) if (c.k === 'track' || c.k === 'trackx') c.tier = (c.tier || 0) + 1;
   const bias = px(SNAP_BIAS_PX) / SNAP_PRI_MAX;
   for (const c of cands) c.score = c.d - c.pri * bias;
   cands.sort((a, b) => a.tier - b.tier || a.score - b.score || b.pri - a.pri);
