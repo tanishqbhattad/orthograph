@@ -659,6 +659,18 @@ function dynApply(p) {
   return [ref[0] + Math.cos(A) * L, ref[1] + Math.sin(A) * L];
 }
 function dynCommit() {
+  /* A coordinate typed whole — 500,900  @500,0  500<90  #0,0 — is a point, not
+     a length. The first field took it as a length: the comma of 500,900 was
+     read as a decimal point (a 500.9 segment) and anything with @, < or #
+     was refused, so the command sat there. parseCoord already reads them the
+     way AutoCAD's dynamic input does: relative to the last point by default,
+     # for absolute, @ for relative. */
+  const t1 = $('#dF1'), typed = t1 ? t1.value.trim() : '';
+  if (/[,<]/.test(typed) || /^[@#]/.test(typed)) {
+    const q = parseCoord(typed, refPoint(), ST.cur, true);
+    if (q && isFinite(q[0]) && isFinite(q[1])) { dynRelease(); cmdPoint(q); cv.focus(); }
+    return;
+  }
   const p = dynApply(ST.cur);
   if (!p || !isFinite(p[0]) || !isFinite(p[1])) return;
   const ref = refPoint();
